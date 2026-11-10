@@ -1,6 +1,6 @@
 """비용 분해, 미래 가치, 위험 신호 지표. 원본 CSV만 읽고 표준 라이브러리만 쓴다.
 
-통계 비교는 한쪽 95%(z = 1.645) 비율 검정. 1.25배·HHI 1800 기준은 원본에 없는 차용 기준이라 badge='가정'.
+통계 비교는 한쪽 95% 비율 검정(임계 z는 정책 split.stop_z). 반품 배수·HHI 기준은 정책 설정에 있고 원본에 없는 차용 기준이라 badge='가정'.
 공헌(마케팅 전, 주문별) = gmv - 환불 - 원가 - 채널수수료 - 배송비 - 반품건수 x 반품물류비.
 """
 import math
@@ -17,14 +17,11 @@ from app.calc.campaign import (
     campaign_real_roas,
     influencer_ranking,
 )
-from app.calc.cash import breach_windows, simulate_cash
-from app.config import DATA_ROOT
-from app.data.loader import read_table
+from app import policy
+from app.calc.cash import breach_windows, forecast_window, simulate_cash
+from app.data.loader import payment_term_notices, read_raw_text, read_table
 
 _MKT = "02_masil/marketing/"
-Z95 = 1.645
-HHI_LIMIT = 1800
-RETURN_RATIO_RED = 1.25
 Level = Literal["red", "yellow", "green", "unmeasurable"]
 
 
@@ -121,10 +118,11 @@ def future_value_signals(influencer_id: str) -> list[Signal]:
     rate = k / n if n else 0.0
     bench = _benchmark("repurchase_rate_pct") / 100
     z = (rate - bench) / math.sqrt(bench * (1 - bench) / n) if n else 0.0
-    level: Level = "red" if z < -Z95 else ("yellow" if rate < bench else "green")
+    z_crit = policy.get("split.stop_z")
+    level: Level = "red" if z < -z_crit else ("yellow" if rate < bench else "green")
     repurchase = Signal(
         "repurchase_rate", "90일 재구매율", rate, f"업계 {bench:.0%}", level,
-        f"첫 주문 귀속 고객 {n}명 중 {k}명 재구매, z={z:.2f}, 한쪽 95% 검정(z<-1.645면 유의하게 낮음)", "계산",
+        f"첫 주문 귀속 고객 {n}명 중 {k}명 재구매, z={z:.2f}, 한쪽 95% 검정(z<-{z_crit}면 유의하게 낮음)", "계산",
     )
 
     contrib = _order_contributions()
@@ -144,12 +142,11 @@ def future_value_signals(influencer_id: str) -> list[Signal]:
 
 
 def _payment_terms() -> dict[str, int]:
-    """채널 마스터 결제조건. LC-0001 채널은 통보문의 연장 일수로 덮어쓴다(통보가 마스터보다 최신)."""
+    """채널 마스터 결제조건. 통보문 발신 파트너의 채널은 통보문의 변경 일수로 덮어쓴다(통보가 마스터보다 최신)."""
+    notices = payment_term_notices()
     terms = {r["channel_id"]: r for r in read_table("02_masil/master/m_channel_ms.csv")}
-    text = (DATA_ROOT / "02_masil/financials/lc0001_payment_term_notice.md").read_text(encoding="utf-8").replace("*", "")
-    new_days = int(re.search(r"(\d+)일에서\s*(\d+)일로", text).group(2))
     return {
-        cid: (new_days if r["partner_code"] == "LC-0001" else r["payment_terms_days"])
+        cid: (notices[r["partner_code"]].new_days if r["partner_code"] in notices else r["payment_terms_days"])
         for cid, r in terms.items()
     }
 
@@ -170,6 +167,9 @@ def risk_signals(plan_id: str) -> list[Signal]:
     mine = [o for o in orders if o["campaign_id"] is not None and owner[o["campaign_id"]] == inf]
     others = [o for o in orders if o["campaign_id"] is not None and owner[o["campaign_id"]] != inf]
     ranking = influencer_ranking()
+    z_crit = policy.get("split.stop_z")
+    hhi_limit = policy.get("signals.hhi_limit")
+    ratio_red = policy.get("signals.return_ratio_red")
     signals: list[Signal] = []
 
     # 1) 예상 실적 괴리
@@ -189,7 +189,7 @@ def risk_signals(plan_id: str) -> list[Signal]:
     z = _z_greater(k1, len(mine), k2, len(others))
     signals.append(Signal(
         "coupon_stacking", "쿠폰 중복 비중", p1, f"나머지 인플루언서 {p2:.3f}",
-        "red" if z > Z95 else "green",
+        "red" if z > z_crit else "green",
         f"중복 적용 주문 {k1}/{len(mine)} vs {k2}/{len(others)}, 두 비율 z={z:.2f}, 한쪽 95%(쿠폰 행 없는 주문은 비중복)", "계산",
     ))
 
@@ -199,7 +199,9 @@ def risk_signals(plan_id: str) -> list[Signal]:
     total = sum(o["gmv_krw"] for o in mine)
     slow = sum(o["gmv_krw"] for o in mine if terms[o["channel_id"]] > dso)
     share = slow / total if total else 0.0
-    breaches = breach_windows(simulate_cash(date(2026, 7, 1), date(2026, 10, 31)))
+    win = forecast_window()
+    breaches = breach_windows(simulate_cash(win.start, win.end))
+    notices = payment_term_notices()
     if share > 0 and breaches:
         lvl: Level = "red"
     elif share > 0:
@@ -209,7 +211,8 @@ def risk_signals(plan_id: str) -> list[Signal]:
     signals.append(Signal(
         "slow_payment_channel", "결제 지연 채널 매출 비중", share, f"업계 DSO {dso:g}일 초과",
         lvl,
-        "결제조건이 업계 DSO보다 긴 채널의 GMV 비중. CH-03(LC-0001)은 통보문에 따라 90일 적용. "
+        "결제조건이 업계 DSO보다 긴 채널의 GMV 비중. 통보문 적용: "
+        + ", ".join(f"파트너 {n.partner_code} {n.new_days}일" for n in notices.values()) + ". "
         f"현금 하회 구간 {len(breaches)}개", "계산",
     ))
 
@@ -222,9 +225,9 @@ def risk_signals(plan_id: str) -> list[Signal]:
     hhi = sum(s * s for s in shares.values())
     is_top = shares.get(inf, 0) == max(shares.values())
     signals.append(Signal(
-        "spend_concentration", "광고비 쏠림(HHI)", hhi, f"기준 {HHI_LIMIT} 초과이고 광고비 1위면 위험",
-        "red" if hhi > HHI_LIMIT and is_top else "green",
-        f"인플루언서별 광고비 비중 제곱합. 이 인플루언서 비중 {shares.get(inf, 0):.1f}%. 1800 기준은 차용한 가정", "가정",
+        "spend_concentration", "광고비 쏠림(HHI)", hhi, f"기준 {hhi_limit} 초과이고 광고비 1위면 위험",
+        "red" if hhi > hhi_limit and is_top else "green",
+        f"인플루언서별 광고비 비중 제곱합. 이 인플루언서 비중 {shares.get(inf, 0):.1f}%. {hhi_limit} 기준은 차용한 가정", "가정",
     ))
 
     # 5) 채널 반품 vs 기준선
@@ -232,16 +235,16 @@ def risk_signals(plan_id: str) -> list[Signal]:
     gmv = sum(o["gmv_krw"] for o in camp_orders.values())
     refund = sum(r["refund_amount_krw"] for r in read_table(_MKT + "mkt_returns_ms.csv") if r["order_id"] in camp_orders)
     rate = refund / gmv if gmv else 0.0
-    bench = next(
-        r["return_rate_pct"] for r in read_table("05_external/benchmark/ext_channel_benchmark.csv")
-        if r["channel_type"] == camp["sales_channel"]
-    ) / 100
-    # 기준선이 소수 첫째 자리(%) 정밀도라 실제 반품률도 0.1%p로 맞춰 비교한다(13.03% vs 13.0%는 같은 수준)
-    rr = round(rate * 100, 1) / (bench * 100)
+    raw = read_raw_text("05_external/benchmark/ext_channel_benchmark.csv", "channel_type", camp["sales_channel"], "return_rate_pct")
+    digits = len(raw.partition(".")[2])  # 기준선 원문의 소수 자릿수
+    bench = float(raw) / 100
+    # 기준선 표기 정밀도에 맞춰 실제 반품률도 같은 자릿수로 반올림해 비교한다
+    rr = round(rate * 100, digits) / (bench * 100)
+    unit = f"{10 ** -digits:g}%p"
     signals.append(Signal(
-        "channel_return_vs_benchmark", "채널 반품률 / 기준선", rr, f"{camp['sales_channel']} 기준 {bench:.1%}, 실제 {rate:.1%}",
-        "red" if rr >= RETURN_RATIO_RED else ("yellow" if rr > 1 else "green"),
-        "기안 캠페인 주문의 금액 반품률 ÷ 같은 채널 유형 기준선. 반품률은 0.1%p 반올림 후 비교. 1.25배 이상 위험은 차용한 가정", "가정",
+        "channel_return_vs_benchmark", "채널 반품률 / 기준선", rr, f"{camp['sales_channel']} 기준 {bench:.{digits}%}, 실제 {rate:.{digits}%}",
+        "red" if rr >= ratio_red else ("yellow" if rr > 1 else "green"),
+        f"기안 캠페인 주문의 금액 반품률 ÷ 같은 채널 유형 기준선. 반품률은 {unit} 반올림 후 비교. {ratio_red:g}배 이상 위험은 차용한 가정", "가정",
     ))
 
     # 6) 회차 추세
