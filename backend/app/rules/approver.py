@@ -1,4 +1,5 @@
 """승인권자 판정(설계 4.1). 순수 함수, 원본 데이터를 읽지 않는다."""
+# hardcode-allow: 100_000_000 10_000 (억·만 단위 표기 변환, 정책 값 아님)
 from datetime import date
 
 from app import policy
