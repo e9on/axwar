@@ -261,3 +261,23 @@ def risk_signals(plan_id: str) -> list[Signal]:
         "표본에서 고객이 인플루언서별로 완전히 나뉘어 측정할 수 없음", "계산",
     ))
     return signals
+
+
+ATTRIBUTION_NOTE = "마지막 클릭 후 7일 기준으로 캠페인에 귀속 — 클릭 없이 나중에 산 구매와 광고 없이도 샀을 구매는 반영되지 않음"
+
+
+def breakeven_hidden_sales(influencer_id: str) -> Signal:
+    """본전이 되려면 기록된 매출 대비 몇 배의 기록 밖 판매가 더 필요한지.
+    (-최종 공헌) ÷ (공헌률 = 마케팅 전 공헌 ÷ GMV) ÷ GMV. 최종 공헌이 0 이상이면 0."""
+    b = cost_breakdown(influencer_id)
+    if b.final >= 0 or b.gmv == 0 or b.pre_marketing <= 0:
+        value = 0.0
+    else:
+        value = (-b.final) / (b.pre_marketing / b.gmv) / b.gmv
+    return Signal(
+        "breakeven_hidden_sales", "본전에 필요한 기록 밖 판매", value, "0이면 이미 본전 이상",
+        "yellow" if value > 0 else "green",
+        f"(-최종 공헌 {b.final:,}원) ÷ (마케팅 전 공헌률 {b.pre_marketing:,}÷{b.gmv:,}) ÷ 기록 GMV. "
+        f"본전이 되려면 기록된 매출의 {value:.1%}만큼 기록 밖 판매가 더 필요. {ATTRIBUTION_NOTE}",
+        "계산",
+    )

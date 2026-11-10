@@ -1,4 +1,4 @@
-from app.calc.signals import cost_breakdown, future_value_signals, risk_signals
+from app.calc.signals import ATTRIBUTION_NOTE, breakeven_hidden_sales, cost_breakdown, future_value_signals, risk_signals
 from app.calc.volume import _plans
 
 
@@ -76,3 +76,22 @@ def test_잠식은_측정불가():
     s = _by_key(risk_signals("PLAN-001"))["cannibalization"]
     assert s.level == "unmeasurable"
     assert "표본" in s.basis
+
+
+def test_혜인_본전에_필요한_기록밖_판매():
+    s = breakeven_hidden_sales("INF-001")
+    assert s.key == "breakeven_hidden_sales"
+    assert round(s.value, 3) == 0.247
+    assert s.level == "yellow"
+    assert s.badge == "계산"
+
+
+def test_이미_흑자면_0():
+    s = breakeven_hidden_sales("INF-002")
+    assert s.value == 0.0
+    assert s.level == "green"
+
+
+def test_측정한계_문구():
+    assert "7일" in ATTRIBUTION_NOTE
+    assert "클릭" in ATTRIBUTION_NOTE
