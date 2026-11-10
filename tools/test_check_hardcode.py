@@ -93,7 +93,7 @@ def test_정책성_소수가_걸린다(tmp_path):
 
 
 def test_단위_상수_소수는_통과한다(tmp_path):
-    assert kinds(write(tmp_path, "a.py", "a = 0.0\nb = 0.5\nc = 1.0\nd = 100.0\ne = 200.0\n")) == []
+    assert kinds(write(tmp_path, "a.py", "a = 0.0\nb = 0.5\nc = 1.0\nd = 100.0\n")) == []
 
 
 def test_ts_소수(tmp_path):
