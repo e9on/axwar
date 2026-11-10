@@ -78,3 +78,29 @@ def test_갱신_미확정이면_만료_뒤_2차_차단():
 def test_모두_괜찮으면_열린다():
     g = gate()
     assert g.open and not g.auto_stopped and g.reasons == () and g.actions == ()
+
+
+def test_1차_주문_0건이면_반품_판정_불가로_잠긴다():
+    g = gate(phase1_orders=0)
+    assert not g.open and not g.auto_stopped
+    assert any("0건" in r for r in g.reasons)
+
+
+def test_임계값은_주문수_0이하면_오류():
+    import pytest
+
+    with pytest.raises(ValueError, match="1차 주문 수는 1 이상이어야 함"):
+        return_stop_threshold(0.04, 0)
+
+
+def test_2차_수량이_0이면_날짜도_없다():
+    p = make_split(1000, 1800, 7376, date(2026, 7, 27), date(2026, 8, 18), W, date(2026, 8, 31))
+    assert p.phase2_qty == 0 and p.phase2_date is None and p.hits == ()
+
+
+def test_관찰일수를_인자로_바꿀_수_있다():
+    assert gate(days_since_phase1=14, observe_days=14).open
+
+
+def test_만료_규칙_id는_snake_case():
+    assert _split(end=date(2026, 8, 20)).hits[0].rule_id == "split_expiry"

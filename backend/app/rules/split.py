@@ -40,11 +40,11 @@ def make_split(
     candidates = [restock_date + timedelta(days=1), phase1_date + timedelta(days=observe_days)]
     if windows:
         candidates.append(max(w.end for w in windows) + timedelta(days=1))
-    p2_date: date | None = max(candidates)
+    p2_date: date | None = max(candidates) if phase2 > 0 else None
     hits: list[RuleHit] = []
-    if phase2 > 0 and p2_date > contract_end:
+    if p2_date is not None and p2_date > contract_end:
         hits.append(RuleHit(
-            "SPLIT-EXPIRY",
+            "split_expiry",
             f"2차 집행일 {p2_date}이 계약 만료({contract_end}) 뒤라 날짜를 정할 수 없다",
             "계약 만료일", "계산",
         ))
@@ -53,6 +53,8 @@ def make_split(
 
 
 def return_stop_threshold(baseline: float, n_orders: int, z: float = config.STOP_Z) -> float:
+    if n_orders <= 0:
+        raise ValueError("1차 주문 수는 1 이상이어야 함")
     return baseline + z * math.sqrt(baseline * (1 - baseline) / n_orders)
 
 
@@ -68,13 +70,18 @@ def phase2_gate(
     renewal_confirmed: bool,
     phase2_date: date,
     contract_end: date,
+    observe_days: int | None = None,
 ) -> GateResult:
     reasons: list[str] = []
     actions: list[str] = []
     auto_stopped = False
 
-    if days_since_phase1 < config.RETURN_OBSERVE_DAYS:
-        reasons.append(f"관찰 {config.RETURN_OBSERVE_DAYS}일 미만({days_since_phase1}일)")
+    if observe_days is None:
+        observe_days = config.RETURN_OBSERVE_DAYS
+    if days_since_phase1 < observe_days:
+        reasons.append(f"관찰 {observe_days}일 미만({days_since_phase1}일)")
+    if phase1_orders <= 0:
+        reasons.append("1차 주문 0건: 반품 판정 불가")
 
     for label, count, base in (
         ("단순변심", change_of_mind_returns, baseline_change_of_mind),
