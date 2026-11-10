@@ -10,3 +10,8 @@ DATA_ROOT: Path = Path(
 
 # 기한 전 조기경고 시작 일수. 가정(원본에 없음): 기한 5일 전부터 미승인이면 조기경고.
 EARLY_WARNING_DAYS = 5
+
+# 2차 집행 전 1차 반품 관찰 기간(일).
+RETURN_OBSERVE_DAYS = 28
+# 자동 보류 기준의 z 값(한쪽 95%).
+STOP_Z = 1.645

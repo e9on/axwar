@@ -109,3 +109,21 @@ def return_rate(influencer_id: str | None, reason: str | None = None, exclude: s
         if r["order_id"] in orders and (reason is None or r["reason"] == reason)
     )
     return refund / gmv if gmv else 0.0
+
+
+def return_count_rate(influencer_id: str, reason: str) -> float:
+    """건수 기준 반품률 = 해당 사유 반품 행 수 / 그 인플루언서 캠페인 주문 수(기준선용)."""
+    owner = _campaign_influencer()
+    order_ids = {
+        o["order_id"]
+        for o in read_table(_MKT + "mkt_orders_ms.csv")
+        if o["campaign_id"] is not None and owner[o["campaign_id"]] == influencer_id
+    }
+    count = sum(
+        1
+        for oid, rets in _returns_by_order().items()
+        if oid in order_ids
+        for r in rets
+        if r["reason"] == reason
+    )
+    return count / len(order_ids) if order_ids else 0.0
