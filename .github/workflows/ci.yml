@@ -22,6 +22,8 @@ jobs:
       - name: 도구 테스트 (tools/)
         working-directory: tools
         run: uv run --no-project --python 3.11 --with markdown --with pytest python -m pytest -q -p no:cacheprovider
+      - name: 하드코딩 검사
+        run: python tools/check_hardcode.py
       - name: pytest
         if: hashFiles('backend/pyproject.toml') != ''
         working-directory: backend
