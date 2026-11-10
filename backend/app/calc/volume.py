@@ -3,7 +3,7 @@
 주 = 주문일이 속한 주의 월요일. hist_units = Σ(캠페인 표본 주문 수 / 그 주·SKU 전체
 표본 주문 수 × 실제 sold_qty). multiplier = 기안 expected_gmv / 캠페인 표본 GMV.
 일별 비중 = (주문일 - 캠페인 시작일) 일수별 주문 수 / 총 주문 수. 최대 비중 일수를
-settlement_date에 맞춘다.
+settlement_date에 맞춘다. 최대 비중이 동률이면 가장 작은 일수를 최대일로 한다.
 """
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -104,7 +104,7 @@ def _daily_loads() -> dict[str, dict[date, float]]:
     for p in _plans():
         v = _volume(p, campaigns, by_camp, total, sold)
         shares = _day_shares(p, by_camp[p["campaign_id"]], campaigns[p["campaign_id"]])
-        peak_day = max(shares, key=lambda dd: shares[dd])
+        peak_day = max(shares, key=lambda dd: (shares[dd], -dd))  # 동률이면 가장 이른 일수
         out[p["plan_id"]] = {
             p["settlement_date"] + timedelta(days=dd - peak_day): v.plan_units * s for dd, s in shares.items()
         }
