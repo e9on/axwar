@@ -3,7 +3,7 @@
 주 = 주문일이 속한 주의 월요일. hist_units = Σ(캠페인 표본 주문 수 / 그 주·SKU 전체
 표본 주문 수 × 실제 sold_qty). multiplier = 기안 expected_gmv / 캠페인 표본 GMV.
 일별 비중 = (주문일 - 캠페인 시작일) 일수별 주문 수 / 총 주문 수. 최대 비중 일수를
-settlement_date에 맞춘다. 최대 비중이 동률이면 가장 작은 일수를 최대일로 한다.
+settlement_date에 맞춘다(라이브만. 확대 물량은 집행일 이후에만 놓는다; 그외 채널은 집행일 + 일수). 최대 비중이 동률이면 가장 작은 일수를 최대일로 한다.
 """
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -19,6 +19,7 @@ class PlanVolume:
     plan_id: str
     campaign_id: str
     product_line: str
+    sales_channel: str
     multiplier: float
     hist_units: float
     plan_units: float
@@ -73,6 +74,7 @@ def _volume(plan: dict, campaigns, by_camp, total, sold) -> PlanVolume:
         plan_id=plan["plan_id"],
         campaign_id=cid,
         product_line=camp["product_line"],
+        sales_channel=camp["sales_channel"],
         multiplier=multiplier,
         hist_units=hist,
         plan_units=hist * multiplier,
@@ -96,6 +98,15 @@ def plan_volume(plan_id: str) -> PlanVolume:
     raise KeyError(plan_id)
 
 
+def _offset(dd: int, peak_day: int, channel: str) -> int:
+    """집행일 기준 날짜 오프셋. 라이브는 과거 최대일을 집행일에 두고 나머지는 원래 순서로 뒤에 붙인다."""
+    if channel != "라이브":
+        return dd
+    if dd == peak_day:
+        return 0
+    return dd + 1 if dd < peak_day else dd
+
+
 def _daily_loads() -> dict[str, dict[date, float]]:
     campaigns = _campaigns()
     by_camp, total = _orders_by_campaign()
@@ -106,7 +117,8 @@ def _daily_loads() -> dict[str, dict[date, float]]:
         shares = _day_shares(p, by_camp[p["campaign_id"]], campaigns[p["campaign_id"]])
         peak_day = max(shares, key=lambda dd: (shares[dd], -dd))  # 동률이면 가장 이른 일수
         out[p["plan_id"]] = {
-            p["settlement_date"] + timedelta(days=dd - peak_day): v.plan_units * s for dd, s in shares.items()
+            p["settlement_date"] + timedelta(days=_offset(dd, peak_day, v.sales_channel)): v.plan_units * s
+            for dd, s in shares.items()
         }
     return out
 
