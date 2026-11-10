@@ -90,18 +90,20 @@ def allocate_day(
     res_line: dict[str, int] = {}
     for p, q in reserved.items():
         res_line[line_of[p]] = res_line.get(line_of[p], 0) + q
-    res_total = sum(reserved.values())
-    if cap_left is None or res_total == 0:
+    # 물류는 수요 없는 날 미리 잠그지 않는다: 분모는 그날 예약 경로 기안들의 want 합계
+    wants = {p: min(demand.get(p, 0), q) for p, q in reserved.items()}
+    want_total = sum(wants.values())
+    if cap_left is None or want_total == 0:
         rcap = Fraction(1)
     else:
-        rcap = min(Fraction(1), Fraction(cap_left, res_total))
+        rcap = min(Fraction(1), Fraction(cap_left, want_total))
     for p, q in reserved.items():
         ln = line_of[p]
         rstock = (
             min(Fraction(1), Fraction(stock[ln], res_line[ln])) if res_line[ln] else Fraction(1)
         )
-        want = min(demand.get(p, 0), q)
-        n = min(want, floor(q * min(rcap, rstock)))
+        want = wants[p]
+        n = min(want, floor(want * rcap), floor(q * rstock))
         shipped[p] = n
         shortfall[p] = want - n
         sold_out[p] = max(0, demand.get(p, 0) - q)  # 상한 초과분은 이월하지 않는다

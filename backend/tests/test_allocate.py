@@ -182,3 +182,16 @@ def test_판정_불가_입력은_오류():
     # 원하는 양 합계 0이어도 0 나눗셈 없이 비율 1.0
     r = allocate_day(D1, {"A": 0}, {"A": "L"}, {"L": 10}, 10)
     assert r.capacity_ratio == 1.0 and r.shipped["A"] == 0
+
+
+def test_수요_없는_공지_잔여는_물류를_깎지_않는다():
+    line = {"A": "L", "B": "L"}
+    r = allocate_day(D1, {"B": 1000}, line, {"L": BIG}, 1000, {"A": 5000, "B": 1000})
+    assert r.shipped == {"A": 0, "B": 1000}
+    assert r.reservation_shortfall == {"A": 0, "B": 0}
+
+
+def test_공지_둘_다_수요_있고_물류_부족이면_want_비율():
+    line = {"A": "L", "B": "L"}
+    r = allocate_day(D1, {"A": 3000, "B": 1000}, line, {"L": BIG}, 2000, {"A": 5000, "B": 1000})
+    assert r.shipped == {"A": 1500, "B": 500}
