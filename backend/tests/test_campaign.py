@@ -35,3 +35,10 @@ def test_혜인_단순변심_반품률():
 
 def test_CMP0003_실질ROAS():
     assert round(campaign_real_roas("CMP-0003"), 3) == -0.248
+
+
+def test_혜인_건수기준_반품률():
+    from app.calc.campaign import return_count_rate
+
+    assert round(return_count_rate("INF-001", "단순변심"), 4) == 0.0438
+    assert round(return_count_rate("INF-001", "색상불만"), 4) == 0.0377

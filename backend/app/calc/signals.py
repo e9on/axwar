@@ -123,7 +123,7 @@ def future_value_signals(influencer_id: str) -> list[Signal]:
     z = (rate - bench) / math.sqrt(bench * (1 - bench) / n) if n else 0.0
     level: Level = "red" if z < -Z95 else ("yellow" if rate < bench else "green")
     repurchase = Signal(
-        "repurchase_90d", "90일 재구매율", rate, f"업계 {bench:.0%}", level,
+        "repurchase_rate", "90일 재구매율", rate, f"업계 {bench:.0%}", level,
         f"첫 주문 귀속 고객 {n}명 중 {k}명 재구매, z={z:.2f}, 한쪽 95% 검정(z<-1.645면 유의하게 낮음)", "계산",
     )
 
