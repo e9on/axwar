@@ -18,6 +18,9 @@ _SCHEMA: dict[str, type] = {
     "split.stop_z": float,
     "allocate.capacity_fallback_ratio": float,
     "cash.horizon_days": int,
+    "signals.return_ratio_red": float,
+    "signals.hhi_limit": int,
+    "volume.low_confidence_share": float,
 }
 
 _cache: dict[str, tuple] | None = None

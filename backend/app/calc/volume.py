@@ -9,6 +9,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, timedelta
 
+from app import policy
 from app.data.loader import read_table
 
 _MKT = "02_masil/marketing/"
@@ -80,7 +81,7 @@ def _volume(plan: dict, campaigns, by_camp, total, sold) -> PlanVolume:
         plan_units=hist * multiplier,
         peak_share=max(shares.values()),
         sample_share=sample_share,
-        low_confidence=sample_share >= 0.9,
+        low_confidence=sample_share >= policy.get("volume.low_confidence_share"),
     )
 
 
