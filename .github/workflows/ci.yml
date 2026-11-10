@@ -19,7 +19,7 @@ jobs:
         run: python -m py_compile eval/*.py
       - name: uv 설치
         if: hashFiles('backend/pyproject.toml') != ''
-        uses: astral-sh/setup-uv@v10
+        uses: astral-sh/setup-uv@v10.3.3
       - name: pytest
         if: hashFiles('backend/pyproject.toml') != ''
         working-directory: backend
