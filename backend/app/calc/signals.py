@@ -1,0 +1,263 @@
+"""비용 분해, 미래 가치, 위험 신호 지표. 원본 CSV만 읽고 표준 라이브러리만 쓴다.
+
+통계 비교는 한쪽 95%(z = 1.645) 비율 검정. 1.25배·HHI 1800 기준은 원본에 없는 차용 기준이라 badge='가정'.
+공헌(마케팅 전, 주문별) = gmv - 환불 - 원가 - 채널수수료 - 배송비 - 반품건수 x 반품물류비.
+"""
+import math
+import re
+from collections import defaultdict
+from dataclasses import dataclass
+from datetime import date
+from typing import Literal
+
+from app.calc.campaign import (
+    _campaign_influencer,
+    _campaign_stats,
+    _returns_by_order,
+    campaign_real_roas,
+    influencer_ranking,
+)
+from app.calc.cash import breach_windows, simulate_cash
+from app.config import DATA_ROOT
+from app.data.loader import read_table
+
+_MKT = "02_masil/marketing/"
+Z95 = 1.645
+HHI_LIMIT = 1800
+RETURN_RATIO_RED = 1.25
+Level = Literal["red", "yellow", "green", "unmeasurable"]
+
+
+@dataclass(frozen=True)
+class CostBreakdown:
+    influencer_id: str
+    gmv: int
+    pre_marketing: int
+    influencer_fee: int
+    other_media: int
+    after_fee: int
+    final: int
+
+
+@dataclass(frozen=True)
+class Signal:
+    key: str
+    label: str
+    value: float | None
+    compare: str
+    level: Level
+    basis: str
+    badge: Literal["계산", "가정"]
+
+
+def _campaigns() -> dict[str, dict]:
+    return {r["campaign_id"]: r for r in read_table("02_masil/master/m_campaign_ms.csv")}
+
+
+def _benchmark(metric: str) -> float:
+    return next(r["value"] for r in read_table("05_external/benchmark/ext_industry_benchmark.csv") if r["metric"] == metric)
+
+
+def _order_contributions() -> dict[str, float]:
+    costs = {(r["sku_id"], r["channel_id"]): r for r in read_table(_MKT + "mkt_cost_master_ms.csv")}
+    returns = _returns_by_order()
+    out: dict[str, float] = {}
+    for o in read_table(_MKT + "mkt_orders_ms.csv"):
+        c = costs[(o["sku_id"], o["channel_id"])]
+        rets = returns.get(o["order_id"], [])
+        out[o["order_id"]] = (
+            o["gmv_krw"]
+            - sum(r["refund_amount_krw"] for r in rets)
+            - c["product_cost_krw"]
+            - o["gmv_krw"] * c["channel_fee_pct"] / 100
+            - c["shipping_cost_krw"]
+            - len(rets) * c["return_logistics_cost_krw"]
+        )
+    return out
+
+
+def cost_breakdown(influencer_id: str) -> CostBreakdown:
+    owner = _campaign_influencer()
+    stats = _campaign_stats()
+    mine = [cid for cid, inf in owner.items() if inf == influencer_id and cid in stats]
+    gmv = sum(stats[c]["gmv"] for c in mine)
+    pre = sum(
+        stats[c]["gmv"] - stats[c]["refund"] - stats[c]["cogs"] - stats[c]["chfee"] - stats[c]["ship"] - stats[c]["retlog"]
+        for c in mine
+    )
+    fee = other = 0
+    for r in read_table(_MKT + "mkt_ad_spend_ms.csv"):
+        if owner[r["campaign_id"]] != influencer_id:
+            continue
+        if r["media"] == "인플루언서":
+            fee += r["ad_cost_krw"]
+        else:
+            other += r["ad_cost_krw"]
+    pre_i = round(pre)
+    return CostBreakdown(influencer_id, round(gmv), pre_i, fee, other, pre_i - fee, pre_i - fee - other)
+
+
+def _first_buyers(influencer_id: str) -> tuple[set[str], dict[str, date]]:
+    """첫 주문이 이 인플루언서 캠페인인 고객 집합과 고객별 첫 주문일."""
+    owner = _campaign_influencer()
+    first: dict[str, dict] = {}
+    for o in read_table(_MKT + "mkt_orders_ms.csv"):
+        cur = first.get(o["customer_ref"])
+        if cur is None or (o["order_date"], o["order_id"]) < (cur["order_date"], cur["order_id"]):
+            first[o["customer_ref"]] = o
+    mine = {
+        c
+        for c, o in first.items()
+        if o["campaign_id"] is not None and owner[o["campaign_id"]] == influencer_id
+    }
+    return mine, {c: first[c]["order_date"] for c in mine}
+
+
+def future_value_signals(influencer_id: str) -> list[Signal]:
+    customers, first_date = _first_buyers(influencer_id)
+    flags = {r["customer_ref"]: r["reorder_within_90d"] for r in read_table(_MKT + "mkt_repurchase_ms.csv")}
+    n = len(customers)
+    k = sum(1 for c in customers if flags.get(c))
+    rate = k / n if n else 0.0
+    bench = _benchmark("repurchase_rate_pct") / 100
+    z = (rate - bench) / math.sqrt(bench * (1 - bench) / n) if n else 0.0
+    level: Level = "red" if z < -Z95 else ("yellow" if rate < bench else "green")
+    repurchase = Signal(
+        "repurchase_90d", "90일 재구매율", rate, f"업계 {bench:.0%}", level,
+        f"첫 주문 귀속 고객 {n}명 중 {k}명 재구매, z={z:.2f}, 한쪽 95% 검정(z<-1.645면 유의하게 낮음)", "계산",
+    )
+
+    contrib = _order_contributions()
+    post = sum(
+        contrib[o["order_id"]]
+        for o in read_table(_MKT + "mkt_orders_ms.csv")
+        if o["customer_ref"] in customers and o["order_date"] > first_date[o["customer_ref"]]
+    )
+    final = cost_breakdown(influencer_id).final
+    post_sig = Signal(
+        "post_contribution", "첫 구매 이후 주문 공헌", post, f"최종 공헌 {final:,}원",
+        "red" if final < 0 else "green",
+        "이 인플루언서로 첫 구매한 고객의 첫 주문 이후 주문 공헌 합(마케팅 전). 최종 공헌에 이미 포함되어 있어 "
+        "재구매를 더해도 최종 공헌이 음수면 위험 신호", "계산",
+    )
+    return [repurchase, post_sig]
+
+
+def _payment_terms() -> dict[str, int]:
+    """채널 마스터 결제조건. LC-0001 채널은 통보문의 연장 일수로 덮어쓴다(통보가 마스터보다 최신)."""
+    terms = {r["channel_id"]: r for r in read_table("02_masil/master/m_channel_ms.csv")}
+    text = (DATA_ROOT / "02_masil/financials/lc0001_payment_term_notice.md").read_text(encoding="utf-8").replace("*", "")
+    new_days = int(re.search(r"(\d+)일에서\s*(\d+)일로", text).group(2))
+    return {
+        cid: (new_days if r["partner_code"] == "LC-0001" else r["payment_terms_days"])
+        for cid, r in terms.items()
+    }
+
+
+def _z_greater(k1: int, n1: int, k2: int, n2: int) -> float:
+    p = (k1 + k2) / (n1 + n2)
+    se = math.sqrt(p * (1 - p) * (1 / n1 + 1 / n2))
+    return (k1 / n1 - k2 / n2) / se if se else 0.0
+
+
+def risk_signals(plan_id: str) -> list[Signal]:
+    plan = next(p for p in read_table(_MKT + "mkt_budget_plan_ms.csv") if p["plan_id"] == plan_id)
+    camps = _campaigns()
+    camp = camps[plan["campaign_id"]]
+    inf = camp["influencer_id"]
+    owner = _campaign_influencer()
+    orders = read_table(_MKT + "mkt_orders_ms.csv")
+    mine = [o for o in orders if o["campaign_id"] is not None and owner[o["campaign_id"]] == inf]
+    others = [o for o in orders if o["campaign_id"] is not None and owner[o["campaign_id"]] != inf]
+    ranking = influencer_ranking()
+    signals: list[Signal] = []
+
+    # 1) 예상 실적 괴리
+    ratio = plan["expected_gmv_krw"] / plan["requested_budget_krw"]
+    top_nominal = max(r.nominal_roas for r in ranking)
+    signals.append(Signal(
+        "forecast_gap", "예상 ROAS 괴리", ratio, f"인플루언서 명목 ROAS 최대 {top_nominal:.2f}",
+        "red" if ratio > top_nominal else "green",
+        "기안 예상 GMV ÷ 요청 예산이 표본 인플루언서별 명목 ROAS(GMV÷광고비) 최대값보다 크면 과대 예상", "계산",
+    ))
+
+    # 2) 쿠폰 중복
+    stacked = {r["order_id"] for r in read_table(_MKT + "mkt_coupons_ms.csv") if r["stacked_flag"]}
+    k1 = sum(1 for o in mine if o["order_id"] in stacked)
+    k2 = sum(1 for o in others if o["order_id"] in stacked)
+    p1, p2 = k1 / len(mine), k2 / len(others)
+    z = _z_greater(k1, len(mine), k2, len(others))
+    signals.append(Signal(
+        "coupon_stacking", "쿠폰 중복 비중", p1, f"나머지 인플루언서 {p2:.3f}",
+        "red" if z > Z95 else "green",
+        f"중복 적용 주문 {k1}/{len(mine)} vs {k2}/{len(others)}, 두 비율 z={z:.2f}, 한쪽 95%(쿠폰 행 없는 주문은 비중복)", "계산",
+    ))
+
+    # 3) 결제 지연 채널
+    dso = _benchmark("DSO_days")
+    terms = _payment_terms()
+    total = sum(o["gmv_krw"] for o in mine)
+    slow = sum(o["gmv_krw"] for o in mine if terms[o["channel_id"]] > dso)
+    share = slow / total if total else 0.0
+    breaches = breach_windows(simulate_cash(date(2026, 7, 1), date(2026, 10, 31)))
+    if share > 0 and breaches:
+        lvl: Level = "red"
+    elif share > 0:
+        lvl = "yellow"
+    else:
+        lvl = "green"
+    signals.append(Signal(
+        "slow_payment_channel", "결제 지연 채널 매출 비중", share, f"업계 DSO {dso:g}일 초과",
+        lvl,
+        "결제조건이 업계 DSO보다 긴 채널의 GMV 비중. CH-03(LC-0001)은 통보문에 따라 90일 적용. "
+        f"현금 하회 구간 {len(breaches)}개", "계산",
+    ))
+
+    # 4) 광고비 쏠림
+    spend: dict[str, float] = defaultdict(float)
+    for r in read_table(_MKT + "mkt_ad_spend_ms.csv"):
+        spend[owner[r["campaign_id"]]] += r["ad_cost_krw"]
+    tot = sum(spend.values())
+    shares = {i: 100 * v / tot for i, v in spend.items()}
+    hhi = sum(s * s for s in shares.values())
+    is_top = shares.get(inf, 0) == max(shares.values())
+    signals.append(Signal(
+        "spend_concentration", "광고비 쏠림(HHI)", hhi, f"기준 {HHI_LIMIT} 초과이고 광고비 1위면 위험",
+        "red" if hhi > HHI_LIMIT and is_top else "green",
+        f"인플루언서별 광고비 비중 제곱합. 이 인플루언서 비중 {shares.get(inf, 0):.1f}%. 1800 기준은 차용한 가정", "가정",
+    ))
+
+    # 5) 채널 반품 vs 기준선
+    camp_orders = {o["order_id"]: o for o in orders if o["campaign_id"] == camp["campaign_id"]}
+    gmv = sum(o["gmv_krw"] for o in camp_orders.values())
+    refund = sum(r["refund_amount_krw"] for r in read_table(_MKT + "mkt_returns_ms.csv") if r["order_id"] in camp_orders)
+    rate = refund / gmv if gmv else 0.0
+    bench = next(
+        r["return_rate_pct"] for r in read_table("05_external/benchmark/ext_channel_benchmark.csv")
+        if r["channel_type"] == camp["sales_channel"]
+    ) / 100
+    # 기준선이 소수 첫째 자리(%) 정밀도라 실제 반품률도 0.1%p로 맞춰 비교한다(13.03% vs 13.0%는 같은 수준)
+    rr = round(rate * 100, 1) / (bench * 100)
+    signals.append(Signal(
+        "channel_return_vs_benchmark", "채널 반품률 / 기준선", rr, f"{camp['sales_channel']} 기준 {bench:.1%}, 실제 {rate:.1%}",
+        "red" if rr >= RETURN_RATIO_RED else ("yellow" if rr > 1 else "green"),
+        "기안 캠페인 주문의 금액 반품률 ÷ 같은 채널 유형 기준선. 반품률은 0.1%p 반올림 후 비교. 1.25배 이상 위험은 차용한 가정", "가정",
+    ))
+
+    # 6) 회차 추세
+    seq = sorted((c for c in camps.values() if c["influencer_id"] == inf), key=lambda c: c["start_date"])
+    roas = [campaign_real_roas(c["campaign_id"]) for c in seq]
+    roas = [r for r in roas if r is not None]
+    trend_val = roas[-1] - roas[0] if len(roas) >= 2 else None
+    signals.append(Signal(
+        "trend", "회차별 실질 ROAS 추세", trend_val, "마지막 ≤ 첫 번째면 개선 없음",
+        "yellow" if trend_val is not None and trend_val <= 0 else "green",
+        "시작일 순 실질 ROAS: " + ", ".join(f"{r:.3f}" for r in roas), "계산",
+    ))
+
+    # 7) 잠식
+    signals.append(Signal(
+        "cannibalization", "다른 채널 잠식", None, "측정 불가", "unmeasurable",
+        "표본에서 고객이 인플루언서별로 완전히 나뉘어 측정할 수 없음", "계산",
+    ))
+    return signals
