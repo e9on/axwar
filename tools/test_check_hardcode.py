@@ -4,6 +4,8 @@
 """
 from pathlib import Path
 
+import pytest
+
 from check_hardcode import check_file, main
 
 
@@ -150,3 +152,90 @@ def test_하위_폴더도_검사한다(tmp_path):
     d.mkdir(parents=True)
     (d / "m.ts").write_text("const a = 0.85;\n", encoding="utf-8")
     assert main(["--paths", str(tmp_path / "app")]) == 1
+
+
+
+# --- 수정 1회차: 우회 차단 ---
+def test_소수_허용은_네_값뿐(tmp_path):
+    assert kinds(write(tmp_path, "a.py", "a = 2.0\nb = 10.0\nc = 1.5\n")) == ["정책성 소수 리터럴"] * 3
+
+
+def test_소수_허용_주석은_순수_주석_줄에서만(tmp_path):
+    src = "# hardcode-allow: 0.6 1.05 (화면 투명도·확대 — 스타일)\na = 0.6\nb = 1.05\nc = 0.7\n"
+    assert [(v.kind, v.line) for v in check_file(write(tmp_path, "a.py", src))] == [("정책성 소수 리터럴", 4)]
+    assert kinds(write(tmp_path, "b.py", "x = 1  # hardcode-allow: 0.6\ny = 0.6\n")) == ["정책성 소수 리터럴"]
+    assert kinds(write(tmp_path, "c.py", 's = "# hardcode-allow: 0.6"\ny = 0.6\n')) == ["정책성 소수 리터럴"]
+    assert kinds(write(tmp_path, "d.py", "x = 1  # hardcode-allow: 50000\ny = 50000\n")) == ["큰 숫자 리터럴"]
+
+
+@pytest.mark.parametrize("lit,kind", [
+    ("8.5e-1", "정책성 소수 리터럴"), ("85e-2", "정책성 소수 리터럴"), ("1.5e-3", "정책성 소수 리터럴"),
+    ("1e6", "큰 숫자 리터럴"), ("0x2710", "큰 숫자 리터럴"), ("0o23420", "큰 숫자 리터럴"),
+    ("0b10011100010000", "큰 숫자 리터럴"),
+])
+def test_지수와_비십진은_값으로_판정(tmp_path, lit, kind):
+    assert kinds(write(tmp_path, "a.py", f"a = {lit}\n")) == [kind]
+
+
+def test_작은_비십진과_허용값_지수는_통과(tmp_path):
+    assert kinds(write(tmp_path, "a.py", "a = 0xFF\nb = 0b11\nc = 5e-1\nd = 1e2\n")) == []
+
+
+def test_f문자열_안쪽은_코드로_검사(tmp_path):
+    assert kinds(write(tmp_path, "a.py", 'x = f"{date(2026,1,1)}"\n')) == ["날짜 리터럴"]
+    assert kinds(write(tmp_path, "b.py", 'x = f"{0.85*y}"\n')) == ["정책성 소수 리터럴"]
+    assert kinds(write(tmp_path, "c.py", 'x = f"{y:.2f} {{0.85}} {z!r}"\n')) == []
+    assert kinds(write(tmp_path, "d.py", 'x = f"기한 2026-01-01 {y}"\n')) == ["날짜 리터럴"]
+
+
+def test_ts_템플릿_안쪽은_코드로_검사(tmp_path):
+    assert kinds(write(tmp_path, "a.ts", "const s = `${new Date(2026, 1, 1)}`;\n")) == ["날짜 리터럴"]
+    assert kinds(write(tmp_path, "b.ts", "const s = `${0.85 * y} 원`;\n")) == ["정책성 소수 리터럴"]
+    assert kinds(write(tmp_path, "c.ts", "const s = `${y} 원`;\n")) == []
+
+
+@pytest.mark.parametrize("src,name", [
+    ("x = date(year=2026, month=1, day=1)", "a.py"),
+    ("x = datetime(year=2026, month=1, day=1)", "a.py"),
+    ("const d = Date.UTC(2026, 0, 1);", "a.ts"),
+    ('x = "a-2026-11-10"', "a.py"),
+    ('x = "2026/11/10"', "a.py"),
+    ('x = "20261110"', "a.py"),
+    ('x = "2026년 11월 기준"', "a.py"),
+    ('x = "2026년 1월"', "a.py"),
+])
+def test_날짜_우회_표기도_걸린다(tmp_path, src, name):
+    assert kinds(write(tmp_path, name, src + "\n")) == ["날짜 리터럴"]
+
+
+def test_숫자만_든_문자열도_걸린다(tmp_path):
+    src = 'a = int("50000")\nb = \'1_000_000\'\nc = "1234"\nd = "A50000"\n'
+    assert kinds(write(tmp_path, "a.py", src)) == ["큰 숫자 리터럴"] * 2
+    assert kinds(write(tmp_path, "b.py", '# hardcode-allow: 50000\na = int("50000")\n')) == []
+
+
+def test_시연_이름은_대소문자_무시(tmp_path):
+    assert kinds(write(tmp_path, "a.py", 'a = "plan-1"\nb = "Cmp-2"\nc = "arch-1"\n')) == ["시연 이름 리터럴"] * 2
+
+
+def test_js_계열도_검사하고_테스트_파일은_제외(tmp_path):
+    d = tmp_path / "src"
+    (d / "__tests__").mkdir(parents=True)
+    for name in ["test_x.py", "x_test.py", "a.test.ts", "a.spec.tsx", "__tests__/b.ts"]:
+        (d / name).write_text("const a = 0.85;\nx = 0.85\n", encoding="utf-8")
+    assert main(["--paths", str(d)]) == 0
+    for name in ["a.js", "b.jsx", "c.mjs"]:
+        (d / name).write_text("const a = 0.85;\n", encoding="utf-8")
+        assert main(["--paths", str(d)]) == 1
+        (d / name).unlink()
+
+
+def test_ts_아포스트로피가_줄_번호를_밀지_않는다(tmp_path):
+    p = write(tmp_path, "a.tsx", "const a = <p>don't</p>;\nconst b = 0.85;\n")
+    assert [v.line for v in check_file(p)] == [2]
+
+
+def test_ts_정규식_리터럴_한계를_고정한다(tmp_path):
+    # 알려진 한계: 정규식 리터럴 안의 따옴표를 문자열 시작으로 본다. 프론트 단계에서 ESLint 규칙으로 보완.
+    p = write(tmp_path, "a.ts", 'const r = /"/; const x = 0.85;\nconst y = 0.85;\n')
+    assert [v.line for v in check_file(p)] == [2]
