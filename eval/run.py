@@ -35,7 +35,46 @@ def load_keys(path: str) -> dict[str, str]:
     return keys
 
 
-KEYS = load_keys(os.environ.get("AXWAR_KEYS", "C:/Users/e9on9/.axwar/keys.env"))
+_KEYS: dict[str, str] = {}
+
+
+def key(name: str) -> str:
+    """키는 처음 쓸 때 읽는다. 키 파일이 없어도 모듈은 불러올 수 있어야 테스트가 돈다."""
+    if not _KEYS:
+        _KEYS.update(load_keys(os.environ.get("AXWAR_KEYS", "C:/Users/e9on9/.axwar/keys.env")))
+    return _KEYS[name]
+
+
+def job_key(row: dict) -> tuple:
+    return (row["task"], row["model"], row["rep"], row["id"])
+
+
+def append_row(path: Path, row: dict) -> None:
+    """한 건이 끝날 때마다 결과 파일에 한 줄 추가한다(중간에 멈춰도 남도록)."""
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        f.flush()
+
+
+def load_rows(path: Path) -> list[dict]:
+    """결과 파일을 읽는다. 같은 건이 여러 번 있으면 마지막 줄(이어하기로 다시 돌린 결과)을 쓴다."""
+    if not Path(path).exists():
+        return []
+    latest: dict[tuple, dict] = {}
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            row = json.loads(line)
+            latest[job_key(row)] = row
+    return list(latest.values())
+
+
+def load_done(path: Path) -> set[tuple]:
+    """오류 없이 끝난 건의 키 집합. 오류 난 건은 이어하기에서 다시 돌린다."""
+    return {job_key(r) for r in load_rows(path) if r.get("err") is None}
+
+
+def filter_jobs(jobs: list, done: set, key) -> list:
+    return [j for j in jobs if key(j) not in done]
 
 # 100만 토큰당 USD (입력, 출력). Gemini는 무료 등급으로 돌리지만 유료 전환 시 비용 비교용으로 적는다.
 MODELS = {
@@ -76,13 +115,13 @@ def call_model(model: str, system: str, user: str) -> tuple[str, int, int]:
     provider = MODELS[model][0]
     if provider == "anthropic":
         b = post("https://api.anthropic.com/v1/messages",
-                 {"x-api-key": KEYS["ANTHROPIC_API_KEY"], "anthropic-version": "2023-06-01"},
+                 {"x-api-key": key("ANTHROPIC_API_KEY"), "anthropic-version": "2023-06-01"},
                  {"model": model, "max_tokens": 300, "system": system, "messages": [{"role": "user", "content": user}]})
         text = "".join(c.get("text", "") for c in b["content"] if c["type"] == "text")
         return text, b["usage"]["input_tokens"], b["usage"]["output_tokens"]
     if provider == "gemini":
         b = post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                 {"x-goog-api-key": KEYS["GEMINI_API_KEY"]},
+                 {"x-goog-api-key": key("GEMINI_API_KEY")},
                  {"systemInstruction": {"parts": [{"text": system}]},
                   "contents": [{"role": "user", "parts": [{"text": user}]}],
                   "generationConfig": {"responseMimeType": "application/json"}})
@@ -91,7 +130,7 @@ def call_model(model: str, system: str, user: str) -> tuple[str, int, int]:
         text = "".join(p.get("text", "") for p in parts)
         return text, u.get("promptTokenCount", 0), u.get("candidatesTokenCount", 0) + u.get("thoughtsTokenCount", 0)
     b = post("https://api.upstage.ai/v1/chat/completions",
-             {"Authorization": "Bearer " + KEYS["UPSTAGE_API_KEY"]},
+             {"Authorization": "Bearer " + key("UPSTAGE_API_KEY")},
              {"model": model, "max_tokens": 300,
               "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]})
     u = b.get("usage", {})
@@ -127,9 +166,18 @@ def main() -> None:
     ap.add_argument("--task", choices=list(TASKS))
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--reps", type=int, default=1)
+    ap.add_argument("--resume", help="이어서 돌릴 결과 파일 경로. 오류 없이 끝난 건은 건너뛴다")
     a = ap.parse_args()
     models = a.models.split(",")
     tasks = [a.task] if a.task else list(TASKS)
+
+    if a.resume:
+        out_path = Path(a.resume)
+    else:
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
+        out_path = DIR / "results" / f"{stamp}.jsonl"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    done = load_done(out_path)
 
     jobs: dict[str, list] = {}
     for t in tasks:
@@ -142,8 +190,18 @@ def main() -> None:
                 for it in items:
                     jobs.setdefault(MODELS[model][0], []).append((t, system, user_fn, fields, model, rep, it))
 
-    rows: list[dict] = []
+    skipped = 0
+    for p in list(jobs):
+        before = len(jobs[p])
+        jobs[p] = filter_jobs(jobs[p], done, key=lambda j: (j[0], j[4], j[5], j[6]["id"]))
+        skipped += before - len(jobs[p])
+        if not jobs[p]:
+            del jobs[p]
+    if skipped:
+        print(f"이어하기: 이미 끝난 {skipped}건 건너뜀", file=sys.stderr, flush=True)
+
     lock = threading.Lock()
+    finished = 0
     total = sum(len(v) for v in jobs.values())
 
     def run(job):
@@ -161,25 +219,25 @@ def main() -> None:
                "err": err, "raw": text, "out": out, "label": it["label"], "field_ok": field_ok,
                "all_ok": all(field_ok.values()), "conf": conf if isinstance(conf, (int, float)) else None,
                "in_tok": in_tok, "out_tok": out_tok}
+        nonlocal finished
         with lock:
-            rows.append(row)
-            if len(rows) % 20 == 0:
-                print(f"진행 {len(rows)}/{total}", file=sys.stderr, flush=True)
+            append_row(out_path, row)
+            finished += 1
+            if finished % 20 == 0:
+                print(f"진행 {finished}/{total}", file=sys.stderr, flush=True)
 
     def run_provider(p):
         with ThreadPoolExecutor(CONCURRENCY[p]) as ex:
             list(ex.map(run, jobs[p]))
 
-    with ThreadPoolExecutor(len(jobs)) as ex:
-        list(ex.map(run_provider, jobs))
+    if jobs:
+        with ThreadPoolExecutor(len(jobs)) as ex:
+            list(ex.map(run_provider, jobs))
 
-    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
-    out_path = DIR / "results" / f"{stamp}.jsonl"
-    out_path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows), encoding="utf-8")
-
+    rows = [r for r in load_rows(out_path) if r["task"] in tasks and r["model"] in models]
     pct = lambda n, d: f"{100 * n / d:.0f}%" if d else "-"  # noqa: E731
     avg = lambda xs: f"{sum(xs) / len(xs):.2f}" if xs else "-"  # noqa: E731
-    print(f"\n결과 파일: eval/results/{stamp}.jsonl\n")
+    print(f"\n결과 파일: {out_path}\n")
     for t in tasks:
         fields = TASKS[t][3]
         print(f"## {t}")
