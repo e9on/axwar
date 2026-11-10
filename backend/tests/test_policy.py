@@ -7,7 +7,7 @@ from app.rules.approver import decide_plan
 from app.rules.deadline import deadline_actions
 from app.rules.models import PlanFacts
 
-POLICY_DOC = config.DATA_ROOT / "00_common" / "approval_authority_policy.md"
+POLICY_DOC = config.data_root() / "00_common" / "approval_authority_policy.md"
 KEYS = [
     "approval.item_limit_krw", "approval.total_limit_krw", "approval.contract_limit_krw",
     "deadline.early_warning_days", "split.return_observe_days", "split.stop_z",

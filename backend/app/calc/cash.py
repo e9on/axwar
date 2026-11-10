@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 
 from app import policy
-from app.data.loader import payment_term_notice, read_table
+from app.data.loader import DataFormatError, payment_term_notices, read_table
 
 _DAILY = "02_masil/financials/fin_cash_daily_ms.csv"
 
@@ -107,10 +107,14 @@ def _po_cluster() -> tuple[date, int, int]:
     return day, len(by_day[day]), sum(by_day[day])
 
 
-def _delayed_collection_sentence() -> str:
-    notice = payment_term_notice()
-    channel = next(r for r in read_table("02_masil/master/m_channel_ms.csv") if r["partner_code"] == notice.partner_code)
+def _delayed_collection_sentence(notice) -> str:
+    channels = [r for r in read_table("02_masil/master/m_channel_ms.csv") if r["partner_code"] == notice.partner_code]
+    if not channels:
+        raise DataFormatError(f"채널 마스터에 통보문({notice.source_file})의 파트너 코드 {notice.partner_code}가 없음")
+    channel = channels[0]
     dues = [r["due_date"] for r in read_table("02_masil/financials/fin_ar_aging_ms.csv") if r["channel_id"] == channel["channel_id"]]
+    if not dues:
+        raise DataFormatError(f"매출채권(fin_ar_aging_ms.csv)에 채널 {channel['channel_id']} 행이 없음")
     text = (
         f"{notice.partner_code}({channel['channel_id']}) 결제조건 {notice.old_days}일→{notice.new_days}일 변경으로 "
         f"회수가 {_md(min(dues))}~{_md(max(dues))}로 밀림"
@@ -131,6 +135,5 @@ def official_forecast_gap() -> dict:
         "defined_min": defined_min,
         "causes": [
             f"{_md(day)} 발주 대금 {n}건 약 {amount / 100_000_000:.1f}억 일시 유출이 주별 평균 전망에 반영되지 않음",
-            _delayed_collection_sentence(),
-        ],
+        ] + [_delayed_collection_sentence(n) for n in payment_term_notices().values()],
     }

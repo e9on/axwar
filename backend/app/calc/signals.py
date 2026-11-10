@@ -19,7 +19,7 @@ from app.calc.campaign import (
 )
 from app import policy
 from app.calc.cash import breach_windows, forecast_window, simulate_cash
-from app.data.loader import payment_term_notice, read_table
+from app.data.loader import payment_term_notices, read_raw_text, read_table
 
 _MKT = "02_masil/marketing/"
 Level = Literal["red", "yellow", "green", "unmeasurable"]
@@ -143,10 +143,10 @@ def future_value_signals(influencer_id: str) -> list[Signal]:
 
 def _payment_terms() -> dict[str, int]:
     """채널 마스터 결제조건. 통보문 발신 파트너의 채널은 통보문의 변경 일수로 덮어쓴다(통보가 마스터보다 최신)."""
-    notice = payment_term_notice()
+    notices = payment_term_notices()
     terms = {r["channel_id"]: r for r in read_table("02_masil/master/m_channel_ms.csv")}
     return {
-        cid: (notice.new_days if r["partner_code"] == notice.partner_code else r["payment_terms_days"])
+        cid: (notices[r["partner_code"]].new_days if r["partner_code"] in notices else r["payment_terms_days"])
         for cid, r in terms.items()
     }
 
@@ -201,7 +201,7 @@ def risk_signals(plan_id: str) -> list[Signal]:
     share = slow / total if total else 0.0
     win = forecast_window()
     breaches = breach_windows(simulate_cash(win.start, win.end))
-    notice = payment_term_notice()
+    notices = payment_term_notices()
     if share > 0 and breaches:
         lvl: Level = "red"
     elif share > 0:
@@ -211,7 +211,8 @@ def risk_signals(plan_id: str) -> list[Signal]:
     signals.append(Signal(
         "slow_payment_channel", "결제 지연 채널 매출 비중", share, f"업계 DSO {dso:g}일 초과",
         lvl,
-        f"결제조건이 업계 DSO보다 긴 채널의 GMV 비중. 파트너 {notice.partner_code}는 통보문에 따라 {notice.new_days}일 적용. "
+        "결제조건이 업계 DSO보다 긴 채널의 GMV 비중. 통보문 적용: "
+        + ", ".join(f"파트너 {n.partner_code} {n.new_days}일" for n in notices.values()) + ". "
         f"현금 하회 구간 {len(breaches)}개", "계산",
     ))
 
@@ -234,16 +235,16 @@ def risk_signals(plan_id: str) -> list[Signal]:
     gmv = sum(o["gmv_krw"] for o in camp_orders.values())
     refund = sum(r["refund_amount_krw"] for r in read_table(_MKT + "mkt_returns_ms.csv") if r["order_id"] in camp_orders)
     rate = refund / gmv if gmv else 0.0
-    bench = next(
-        r["return_rate_pct"] for r in read_table("05_external/benchmark/ext_channel_benchmark.csv")
-        if r["channel_type"] == camp["sales_channel"]
-    ) / 100
-    # 기준선이 소수 첫째 자리(%) 정밀도라 실제 반품률도 0.1%p로 맞춰 비교한다(13.03% vs 13.0%는 같은 수준)
-    rr = round(rate * 100, 1) / (bench * 100)
+    raw = read_raw_text("05_external/benchmark/ext_channel_benchmark.csv", "channel_type", camp["sales_channel"], "return_rate_pct")
+    digits = len(raw.partition(".")[2])  # 기준선 원문의 소수 자릿수
+    bench = float(raw) / 100
+    # 기준선 표기 정밀도에 맞춰 실제 반품률도 같은 자릿수로 반올림해 비교한다
+    rr = round(rate * 100, digits) / (bench * 100)
+    unit = f"{10 ** -digits:g}%p"
     signals.append(Signal(
-        "channel_return_vs_benchmark", "채널 반품률 / 기준선", rr, f"{camp['sales_channel']} 기준 {bench:.1%}, 실제 {rate:.1%}",
+        "channel_return_vs_benchmark", "채널 반품률 / 기준선", rr, f"{camp['sales_channel']} 기준 {bench:.{digits}%}, 실제 {rate:.{digits}%}",
         "red" if rr >= ratio_red else ("yellow" if rr > 1 else "green"),
-        f"기안 캠페인 주문의 금액 반품률 ÷ 같은 채널 유형 기준선. 반품률은 0.1%p 반올림 후 비교. {ratio_red:g}배 이상 위험은 차용한 가정", "가정",
+        f"기안 캠페인 주문의 금액 반품률 ÷ 같은 채널 유형 기준선. 반품률은 {unit} 반올림 후 비교. {ratio_red:g}배 이상 위험은 차용한 가정", "가정",
     ))
 
     # 6) 회차 추세
