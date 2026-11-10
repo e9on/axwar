@@ -105,7 +105,7 @@ def test_측정한계_문구():
 
 def test_마케팅전_적자면_본전불가_빨강(monkeypatch):
     for pre, gmv in [(-1000, 5000), (0, 5000), (100, 0)]:
-        monkeypatch.setattr(signals, "cost_breakdown", lambda _i, pre=pre, gmv=gmv: CostBreakdown("X", gmv, pre, 10, 10, pre - 10, pre - 20))
+        monkeypatch.setattr(signals, "cost_breakdown", lambda _i, pre=pre, gmv=gmv: CostBreakdown("X", gmv, pre, 10, 10, pre - 10, -1))
         s = breakeven_hidden_sales("X")
         assert s.value is None
         assert s.level == "red"
