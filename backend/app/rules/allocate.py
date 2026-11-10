@@ -21,6 +21,8 @@ class DayAllocation:
     capacity_ratio: float
     stock_ratio: dict[str, float]  # 라인별
     sold_out: dict[str, int] = field(default_factory=dict)
+    # 재고·물류가 모자라 공지 예약분을 못 채운 양(이상 신호). 품절과 섞지 않는다.
+    reservation_shortfall: dict[str, int] = field(default_factory=dict)
 
 
 def usable_capacity(
@@ -34,11 +36,12 @@ def usable_capacity(
     if maximum is None:
         return None, ()
     cap = floor(maximum * config.CAPACITY_FALLBACK_RATIO)
+    pct = f"{config.CAPACITY_FALLBACK_RATIO:.0%}"
     hit = RuleHit(
         rule_id="capacity_fallback",
         text=(
-            f"안정 처리량 없음: 최대 {maximum:,}의 85%인 {cap:,}을 쓴다 "
-            "(Kingman 대기행렬 관행: 가동률 85%를 넘으면 대기가 급증)"
+            f"안정 처리량 없음: 최대 {maximum:,}의 {pct}인 {cap:,}을 쓴다 "
+            f"(Kingman 대기행렬 관행: 가동률 {pct}를 넘으면 대기가 급증)"
         ),
         source="설계 4.5",
         badge="가정",
@@ -73,24 +76,43 @@ def allocate_day(
         if line_of[p] not in stock_by_line:
             raise ValueError(f"라인 {line_of[p]}의 재고를 모른다")
     for p in reserved:
-        if p not in demand:
-            raise ValueError(f"예약 기안 {p}에 원하는 양이 없다")
+        if p not in line_of:
+            raise ValueError(f"예약 기안 {p}의 라인을 모른다")
+        if line_of[p] not in stock_by_line:
+            raise ValueError(f"라인 {line_of[p]}의 재고를 모른다")
 
     stock = dict(stock_by_line)
     cap_left = capacity
     shipped: dict[str, int] = {}
     sold_out: dict[str, int] = {}
-    # ② 공지 예약분을 먼저 뗀다 (자기 원하는 양·재고·남은 처리량을 넘기지 않는다)
+    shortfall: dict[str, int] = {}
+    # ② 남은 공지 수량을 먼저 뗀다. 같은 비율 원칙: 남은 공지 수량 비율대로(순서 무관).
+    res_line: dict[str, int] = {}
     for p, q in reserved.items():
-        n = min(q, demand[p], stock[line_of[p]])
-        if cap_left is not None:
-            n = min(n, cap_left)
-            cap_left -= n
-        stock[line_of[p]] -= n
+        res_line[line_of[p]] = res_line.get(line_of[p], 0) + q
+    res_total = sum(reserved.values())
+    if cap_left is None or res_total == 0:
+        rcap = Fraction(1)
+    else:
+        rcap = min(Fraction(1), Fraction(cap_left, res_total))
+    for p, q in reserved.items():
+        ln = line_of[p]
+        rstock = (
+            min(Fraction(1), Fraction(stock[ln], res_line[ln])) if res_line[ln] else Fraction(1)
+        )
+        want = min(demand.get(p, 0), q)
+        n = min(want, floor(q * min(rcap, rstock)))
         shipped[p] = n
-        sold_out[p] = demand[p] - n  # 넘친 양은 이월하지 않는다
+        shortfall[p] = want - n
+        sold_out[p] = max(0, demand.get(p, 0) - q)  # 상한 초과분은 이월하지 않는다
+    if cap_left is not None:
+        cap_left = max(0, cap_left - sum(shipped[p] for p in reserved))
+    # 예약 잠금: 남은 공지 수량은 수요가 없어도 다른 기안이 못 쓴다
+    for ln, q in res_line.items():
+        stock[ln] = max(0, stock[ln] - q)
 
     pool = {p: q for p, q in demand.items() if p not in reserved}
+    carry: dict[str, int] = {p: 0 for p in reserved}
     # ③ 라인별 재고 비율
     line_demand: dict[str, int] = {}
     for p, q in pool.items():
@@ -106,13 +128,10 @@ def allocate_day(
     else:
         cap_ratio = min(Fraction(1), Fraction(cap_left, total))
     # ⑤ 보내는 양 = min, 내림
-    carry: dict[str, int] = {}
     for p, q in pool.items():
         ratio = min(cap_ratio, stock_ratio[line_of[p]])
         shipped[p] = min(q, floor(q * ratio))
         carry[p] = q - shipped[p]  # ⑥ 이월
-    for p in reserved:
-        carry[p] = 0
     return DayAllocation(
         day=day,
         shipped=shipped,
@@ -120,6 +139,7 @@ def allocate_day(
         capacity_ratio=float(cap_ratio),
         stock_ratio={ln: float(r) for ln, r in stock_ratio.items()},
         sold_out=sold_out,
+        reservation_shortfall=shortfall,
     )
 
 
@@ -136,13 +156,14 @@ def run_ledger(
     announced: dict[str, tuple[date, int]] | None = None,
     scm_allowance: dict[str, int] | None = None,
 ) -> list[DayAllocation]:
-    """날마다 재고 += 입고 - 평소 판매 - 보낸 양. 공지는 공지일 하루만 예약한다."""
+    """날마다 재고 += 입고 - 평소 판매 - 보낸 양. 공지 수량은 공지일부터 누적 상한."""
     if end < start:
         raise ValueError("end가 start보다 앞")
     announced = announced or {}
     stock = dict(opening_stock)
     scm_left = dict(scm_allowance or {})
     carry: dict[str, int] = {}
+    cum: dict[str, int] = {}  # 공지 기안의 누적 보낸 양
     out: list[DayAllocation] = []
     day = start
     while day <= end:
@@ -155,8 +176,8 @@ def run_ledger(
         demand = dict(demand_by_day.get(day, {}))
         for p, q in carry.items():
             demand[p] = demand.get(p, 0) + q
-        reserved = {p: q for p, (d, q) in announced.items() if d == day and p in demand}
-        lines = {line_of[p] for p in demand if p in line_of}
+        reserved = {p: q - cum.get(p, 0) for p, (d, q) in announced.items() if d <= day}
+        lines = {line_of[p] for p in (*demand, *reserved) if p in line_of}
         for ln in lines:
             if ln not in stock:
                 raise ValueError(f"라인 {ln}의 재고를 모른다")
@@ -171,18 +192,35 @@ def run_ledger(
             over = max(0, n - slack[ln])  # 안전재고를 파고든 만큼 SCM 허용분 소진
             if over:
                 scm_left[ln] = scm_left.get(ln, 0) - over
+        for p in reserved:
+            cum[p] = cum.get(p, 0) + res.shipped.get(p, 0)
         carry = {p: q for p, q in res.carry.items() if q > 0}
         out.append(res)
         day += timedelta(days=1)
     return out
 
 
-def can_announce(plan_id: str, day: date, qty: int, allocation: DayAllocation) -> bool:
-    if qty < 0:
-        raise ValueError("qty가 음수")
-    if allocation.day != day:
+def can_announce(
+    plan_id: str,
+    day: date,
+    qty: int,
+    line_of: dict[str, str],
+    stock_by_line: dict[str, int],
+    capacity: int | None,
+    reserved_by_line: dict[str, int] | None = None,
+    reserved_capacity: int = 0,
+) -> bool:
+    """예약 시뮬레이션: 쓸 수 있는 재고(안전재고 위 + SCM 허용분)와 물류 처리 능력에서
+    이미 예약된 양을 빼고도 qty를 먼저 뗄 수 있으면 True. day는 호출 기록용이다."""
+    if qty < 0 or reserved_capacity < 0:
+        raise ValueError("qty·reserved_capacity가 음수")
+    if plan_id not in line_of or line_of[plan_id] not in stock_by_line:
+        raise ValueError(f"기안 {plan_id}의 라인 또는 재고를 모른다")
+    ln = line_of[plan_id]
+    free = stock_by_line[ln] - (reserved_by_line or {}).get(ln, 0)
+    if free < qty:
         return False
-    return allocation.shipped.get(plan_id, 0) >= qty
+    return capacity is None or capacity - reserved_capacity >= qty
 
 
 def stockout_days_earlier(used_qty: int, daily_base_sale: float) -> float:
@@ -201,6 +239,12 @@ def stock_alerts(
 ) -> list[tuple[str, Literal["재고 과잉", "재고 부족"]]]:
     out: list[tuple[str, Literal["재고 과잉", "재고 부족"]]] = []
     for sku, stock in ending_stock.items():
+        for name, d in (
+            ("safety_min_weeks", safety_min_weeks),
+            ("safety_max_weeks", safety_max_weeks),
+        ):
+            if sku not in d:
+                raise ValueError(f"{sku}가 {name}에 없다")
         sale = weekly_sale.get(sku)
         if sale is None or sale <= 0:
             raise ValueError(f"{sku}의 주간 판매량이 없거나 0 이하: 주수를 계산할 수 없다")

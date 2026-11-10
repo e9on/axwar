@@ -91,11 +91,51 @@ def test_공지된_수량은_먼저_예약되고_넘친_수요는_품절():
     assert out[1].shipped["A"] == 0  # 이월 없음
 
 
-def test_예약이_안되면_공지할_수_없다():
-    r = allocate_day(D1, {"A": 4000}, {"A": "L"}, {"L": BIG}, 4000)
-    assert can_announce("A", D1, 4000, r) is True
-    assert can_announce("A", D1, 5000, r) is False
-    assert can_announce("없는기안", D1, 1, r) is False
+def test_예약_시뮬레이션으로_공지_가능_판정():
+    line = {"A": "L"}
+    assert can_announce("A", D1, 5000, line, {"L": 4000}, BIG) is False
+    assert can_announce("A", D1, 5000, line, {"L": 6000}, BIG) is True
+    assert can_announce("A", D1, 5000, line, {"L": 6000}, BIG, {"L": 2000}) is False
+    assert can_announce("A", D1, 5000, line, {"L": 6000}, 4000) is False
+    assert can_announce("A", D1, 5000, line, {"L": 6000}, 6000, None, 2000) is False
+
+
+def test_공지_수량은_공지일부터_누적_상한():
+    out = run_ledger(
+        D1, date(2026, 8, 3),
+        {D1: {"A": 3000}, D2: {"A": 4000}, date(2026, 8, 3): {"A": 1000}},
+        {"A": "L"}, {"L": BIG}, {}, {},
+        {D1: None, D2: None, date(2026, 8, 3): None}, {"L": 0},
+        announced={"A": (D1, 5000)},
+    )
+    assert out[0].shipped["A"] == 3000
+    assert out[1].shipped["A"] == 2000
+    assert out[1].sold_out["A"] == 2000 and out[1].carry["A"] == 0
+    assert out[2].shipped["A"] == 0 and out[2].sold_out["A"] == 1000
+
+
+def test_예약은_수요가_없어도_다른_기안이_못_쓴다():
+    out = run_ledger(
+        D1, D1, {D1: {"B": 6000}}, {"A": "L", "B": "L"}, {"L": 8000}, {}, {},
+        {D1: None}, {"L": 0}, announced={"A": (D1, 5000)},
+    )
+    assert out[0].shipped["B"] == 3000
+
+
+def test_예약_부족은_품절과_따로_기록():
+    r = allocate_day(D1, {"A": 9000}, {"A": "L"}, {"L": 3000}, None, {"A": 5000})
+    assert r.shipped["A"] == 3000
+    assert r.reservation_shortfall["A"] == 2000
+    assert r.sold_out["A"] == 4000
+
+
+def test_공지_여럿이_모자라면_남은_수량_비율대로_순서_무관():
+    line = {"A": "L", "B": "L"}
+    d = {"A": 9000, "B": 9000}
+    r1 = allocate_day(D1, d, line, {"L": 4000}, None, {"A": 6000, "B": 2000})
+    r2 = allocate_day(D1, d, line, {"L": 4000}, None, {"B": 2000, "A": 6000})
+    assert r1.shipped == r2.shipped
+    assert r1.shipped["A"] == 3000 and r1.shipped["B"] == 1000
 
 
 def test_안전재고_아래면_여유분_0():
@@ -128,6 +168,8 @@ def test_재고_과잉과_부족():
     assert ("립", "재고 과잉") in res and ("틴트", "재고 부족") in res
     with pytest.raises(ValueError):
         stock_alerts({"립": 1}, {"립": 0}, {"립": 2}, {"립": 6})
+    with pytest.raises(ValueError, match="립"):
+        stock_alerts({"립": 1}, {"립": 5}, {}, {"립": 6})
 
 
 def test_판정_불가_입력은_오류():
