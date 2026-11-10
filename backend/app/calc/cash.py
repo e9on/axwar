@@ -1,4 +1,5 @@
 """Masil 현금 시뮬레이션(계산 정의 1.2). 원본 CSV만 읽는다."""
+# hardcode-allow: 100_000_000 (억 단위 표기 변환, 정책 값 아님)
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, timedelta
