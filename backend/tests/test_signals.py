@@ -1,4 +1,5 @@
-from app.calc.signals import ATTRIBUTION_NOTE, breakeven_hidden_sales, cost_breakdown, future_value_signals, risk_signals
+from app.calc import signals
+from app.calc.signals import ATTRIBUTION_NOTE, CostBreakdown, breakeven_hidden_sales, cost_breakdown, future_value_signals, risk_signals
 from app.calc.volume import _plans
 
 
@@ -95,3 +96,17 @@ def test_이미_흑자면_0():
 def test_측정한계_문구():
     assert "7일" in ATTRIBUTION_NOTE
     assert "클릭" in ATTRIBUTION_NOTE
+    assert "빠지고" in ATTRIBUTION_NOTE
+    assert "포함" in ATTRIBUTION_NOTE
+    # 방향 회귀 방지: 광고 없이도 샀을 구매는 포함(과대)
+    assert "광고 없이도 샀을 구매는 포함" in ATTRIBUTION_NOTE
+    assert "클릭 없이 나중에 산 구매는 빠지고" in ATTRIBUTION_NOTE
+
+
+def test_마케팅전_적자면_본전불가_빨강(monkeypatch):
+    for pre, gmv in [(-1000, 5000), (0, 5000), (100, 0)]:
+        monkeypatch.setattr(signals, "cost_breakdown", lambda _i, pre=pre, gmv=gmv: CostBreakdown("X", gmv, pre, 10, 10, pre - 10, pre - 20))
+        s = breakeven_hidden_sales("X")
+        assert s.value is None
+        assert s.level == "red"
+        assert "본전 불가" in s.basis
