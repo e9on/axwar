@@ -110,3 +110,38 @@ def test_마케팅전_적자면_본전불가_빨강(monkeypatch):
         assert s.value is None
         assert s.level == "red"
         assert "본전 불가" in s.basis
+
+
+def test_설명_숫자는_정책과_통지문에서_온다():
+    from app import policy
+    from app.data.loader import payment_term_notice
+    notice = payment_term_notice()
+    sig = _by_key(risk_signals("PLAN-001"))
+    assert str(notice.new_days) + "일 적용" in sig["slow_payment_channel"].basis
+    assert str(policy.get("signals.hhi_limit")) in sig["spend_concentration"].basis
+    assert f"{policy.get('signals.return_ratio_red'):g}배" in sig["channel_return_vs_benchmark"].basis
+    assert str(policy.get("split.stop_z")) in future_value_signals("INF-001")[0].basis
+
+
+def test_결제조건_통보_대상_채널은_통보문의_파트너코드로_찾는다():
+    from app.calc.signals import _payment_terms
+    from app.data.loader import payment_term_notice, read_table
+    n = payment_term_notice()
+    terms = _payment_terms()
+    for r in read_table("02_masil/master/m_channel_ms.csv"):
+        expect = n.new_days if r["partner_code"] == n.partner_code else r["payment_terms_days"]
+        assert terms[r["channel_id"]] == expect
+
+
+def test_기준값을_정책에서_바꾸면_신호가_따라간다(monkeypatch, tmp_path):
+    from app import policy
+    text = policy.DEFAULT_PATH.read_text(encoding="utf-8")
+    f = tmp_path / "p.toml"
+    f.write_text(text.replace("value = 1800", "value = 99999"), encoding="utf-8")
+    monkeypatch.setenv("AXWAR_POLICY_FILE", str(f))
+    policy.reload()
+    try:
+        assert _by_key(risk_signals("PLAN-001"))["spend_concentration"].level == "green"
+    finally:
+        monkeypatch.undo()
+        policy.reload()

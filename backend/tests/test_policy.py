@@ -12,6 +12,7 @@ KEYS = [
     "approval.item_limit_krw", "approval.total_limit_krw", "approval.contract_limit_krw",
     "deadline.early_warning_days", "split.return_observe_days", "split.stop_z",
     "allocate.capacity_fallback_ratio", "cash.horizon_days",
+    "signals.return_ratio_red", "signals.hhi_limit", "volume.low_confidence_share",
 ]
 
 
