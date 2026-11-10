@@ -1,0 +1,29 @@
+name: 기능
+description: 새 기능이나 화면을 추가한다
+labels: ["기능"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: 무엇을 만드나
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: 왜 필요한가 (근거)
+      description: 설계 문서 절, 원본 데이터, 논문·기사 등
+    validations:
+      required: true
+  - type: dropdown
+    id: condition
+    attributes:
+      label: 관련 완성 조건
+      multiple: true
+      options: [실제로 돌아가는 시스템, 세 가지 상황 시연, 나만의 확장, 다른 부서 영향, 원본과 가정 구분]
+  - type: textarea
+    id: done
+    attributes:
+      label: 완료 기준
+    validations:
+      required: true

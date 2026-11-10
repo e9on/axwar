@@ -1,0 +1,30 @@
+{"id":"R01","product":"쿠션 21호","text":"라이브에서 본 21호는 화사했는데 받아보니 확 누렇게 떠요. 조명빨이었나 봐요.","label":{"reason":"색상불일치","sentiment":"부정","content_gap":true},"note":"라이브 대비 색 차이"}
+{"id":"R02","product":"립 03호","text":"색 예쁘고 발림성 좋아요. 재구매 의사 있음","label":{"reason":"만족","sentiment":"긍정","content_gap":false},"note":"기본 긍정"}
+{"id":"R03","product":"섀도 팔레트","text":"박스가 찌그러져서 왔고 섀도 두 칸이 깨져 있었어요.","label":{"reason":"배송물류","sentiment":"부정","content_gap":false},"note":"배송 중 파손"}
+{"id":"R04","product":"토너","text":"주문한 건 토너인데 에센스가 왔어요. 교환 신청했습니다.","label":{"reason":"배송물류","sentiment":"부정","content_gap":false},"note":"오배송"}
+{"id":"R05","product":"에센스","text":"혜인님 추천이라 샀는데 막상 써보니 딱히 필요 없는 것 같아서 반품하려구요","label":{"reason":"변심후회","sentiment":"중립","content_gap":false},"note":"인플루언서 언급이 있어도 변심"}
+{"id":"R06","product":"립 05호","text":"영상에선 MLBB 코랄이었는데 실제는 형광 핑크에 가까워요. 영상 색보정 너무 심한 듯","label":{"reason":"색상불일치","sentiment":"부정","content_gap":true},"note":"영상 색보정"}
+{"id":"R07","product":"수분크림","text":"펌프가 안 눌려서 내용물이 안 나와요","label":{"reason":"품질불량","sentiment":"부정","content_gap":false},"note":"용기 결함"}
+{"id":"R08","product":"쿠션 23호","text":"색은 영상이랑 똑같아요! 다만 지속력이 좀 아쉽네요. 그래도 만족","label":{"reason":"만족","sentiment":"긍정","content_gap":false},"note":"영상 언급이지만 차이 없음"}
+{"id":"R09","product":"섀도 팔레트","text":"라이브 때 한정이라길래 급하게 샀는데 집에 비슷한 색이 이미 많더라고요ㅠ","label":{"reason":"변심후회","sentiment":"중립","content_gap":false},"note":"한정 압박 후회"}
+{"id":"R10","product":"립 05호","text":"와 색깔 진짜 '대박'이네요. 영상이랑 완전 딴판이라 놀랐어요^^","label":{"reason":"색상불일치","sentiment":"부정","content_gap":true},"note":"반어법"}
+{"id":"R11","product":"토너","text":"배송 3일이나 늦었는데 제품은 순하고 좋아요","label":{"reason":"만족","sentiment":"긍정","content_gap":false},"note":"불만 섞인 전체 긍정"}
+{"id":"R12","product":"쿠션 21호","text":"제 피부톤엔 안 맞네요. 원래 쿨톤이라 웜 계열은 안 맞는데 제가 잘못 골랐어요","label":{"reason":"변심후회","sentiment":"중립","content_gap":false},"note":"색 이야기지만 본인 선택 실수"}
+{"id":"R13","product":"에센스","text":"향이 너무 강해요. 상세페이지에 무향이라고 되어 있었는데","label":{"reason":"기타","sentiment":"부정","content_gap":false},"note":"표시와 다르지만 색 아님"}
+{"id":"R14","product":"섀도 팔레트","text":"실물 색감이 화면보다 훨씬 탁해요. 혜인님 손등 발색이랑 너무 다름","label":{"reason":"색상불일치","sentiment":"부정","content_gap":true},"note":"발색 차이"}
+{"id":"R15","product":"수분크림","text":"뚜껑 열었더니 이상한 냄새가 나고 분리돼 있었어요","label":{"reason":"품질불량","sentiment":"부정","content_gap":false},"note":"내용물 변질"}
+{"id":"R16","product":"립 03호","text":"선물용으로 샀는데 받는 사람이 이미 있다고 해서 반품해요","label":{"reason":"변심후회","sentiment":"중립","content_gap":false},"note":"선물 사유"}
+{"id":"R17","product":"쿠션 23호","text":"다른 사람 주소로 배송됐다가 이틀 늦게 받았어요. 제품은 아직 안 써봄","label":{"reason":"배송물류","sentiment":"부정","content_gap":false},"note":"배송지 오류"}
+{"id":"R18","product":"섀도 팔레트","text":"그냥 그래요. 특별히 좋지도 나쁘지도","label":{"reason":"기타","sentiment":"중립","content_gap":false},"note":"사유 없음"}
+{"id":"R19","product":"립 03호","text":"상세페이지 사진 색이랑은 똑같은데 혜인님 영상에서 본 색이랑은 달라서 좀 실망했어요","label":{"reason":"색상불일치","sentiment":"부정","content_gap":true},"note":"상세페이지와는 같고 영상과 다름"}
+{"id":"R20","product":"토너","text":"좋아요","label":{"reason":"만족","sentiment":"긍정","content_gap":false},"note":"짧은 긍정"}
+{"id":"R21","product":"쿠션 21호","text":"커버력 최고! 라이브 보고 산 보람 있어요","label":{"reason":"만족","sentiment":"긍정","content_gap":false},"note":"라이브 언급이지만 차이 없음"}
+{"id":"R22","product":"에센스","text":"용기에 금이 가 있어서 새고 있었어요. 택배 상자는 멀쩡했고요","label":{"reason":"품질불량","sentiment":"부정","content_gap":false},"note":"상자 멀쩡 → 제품 결함"}
+{"id":"R23","product":"섀도 팔레트","text":"충동구매였어요... 라이브 분위기에 휩쓸려서. 제품 잘못은 없어요","label":{"reason":"변심후회","sentiment":"중립","content_gap":false},"note":"충동구매"}
+{"id":"R24","product":"립 05호","text":"Color looks totally different from the video, very disappointed","label":{"reason":"색상불일치","sentiment":"부정","content_gap":true},"note":"영어 리뷰"}
+{"id":"R25","product":"수분크림","text":"건성인 저한텐 좀 가벼워요. 여름엔 괜찮을 듯","label":{"reason":"기타","sentiment":"중립","content_gap":false},"note":"사용감 취향"}
+{"id":"R26","product":"쿠션 21호","text":"호수가 반대로 왔어요. 21호 시켰는데 23호 옴","label":{"reason":"배송물류","sentiment":"부정","content_gap":false},"note":"색처럼 보이지만 오배송"}
+{"id":"R27","product":"립 03호","text":"영상 보고 기대했던 것보다 색이 연하긴 한데 오히려 데일리로 쓰기 좋아서 만족해요","label":{"reason":"만족","sentiment":"긍정","content_gap":true},"note":"차이는 있으나 만족"}
+{"id":"R28","product":"섀도 팔레트","text":"ㅋㅋ 뭐 이딴 걸 팔아","label":{"reason":"기타","sentiment":"부정","content_gap":false},"note":"사유 불명 부정"}
+{"id":"R29","product":"토너","text":"피부에 트러블이 올라왔어요. 저랑 안 맞나봐요","label":{"reason":"기타","sentiment":"부정","content_gap":false},"note":"피부 반응은 불량 아님"}
+{"id":"R30","product":"에센스","text":"두 개 시켰는데 하나만 왔어요","label":{"reason":"배송물류","sentiment":"부정","content_gap":false},"note":"수량 누락"}

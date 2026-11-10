@@ -1,0 +1,14 @@
+name: 작업
+description: 설정, 정리, 조사 같은 작업
+labels: ["작업"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: 할 일
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: 완료 기준

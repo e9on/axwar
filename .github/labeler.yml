@@ -1,0 +1,15 @@
+backend:
+  - changed-files:
+      - any-glob-to-any-file: "backend/**"
+frontend:
+  - changed-files:
+      - any-glob-to-any-file: "frontend/**"
+eval:
+  - changed-files:
+      - any-glob-to-any-file: "eval/**"
+docs:
+  - changed-files:
+      - any-glob-to-any-file: ["작업노트/**", "**/*.md"]
+ci:
+  - changed-files:
+      - any-glob-to-any-file: [".github/**", "Dockerfile", "axhub.yaml"]
