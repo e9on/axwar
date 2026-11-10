@@ -32,6 +32,7 @@ table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 9.5pt;
 tr { break-inside: avoid; }
 th, td { border: 1px solid #c9d1d9; padding: 4px 6px; vertical-align: top; text-align: left; }
 th { background: #eaf1f8; }
+th:first-child, td:first-child { min-width: 4.5em; }
 code { font-family: Consolas, monospace; font-size: 9pt; background: #f3f4f6; padding: 1px 4px; border-radius: 3px; }
 pre { background: #f6f8fa; border: 1px solid #d0d7de; padding: 8px; border-radius: 4px; white-space: pre-wrap; font-size: 8.5pt; }
 pre code { background: none; padding: 0; }
