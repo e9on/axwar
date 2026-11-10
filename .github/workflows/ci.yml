@@ -11,15 +11,15 @@ jobs:
     name: 백엔드
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - name: 시험 실행기 문법 검사
         run: python -m py_compile eval/*.py
       - name: uv 설치
         if: hashFiles('backend/pyproject.toml') != ''
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v10.3.3
       - name: pytest
         if: hashFiles('backend/pyproject.toml') != ''
         working-directory: backend
@@ -30,12 +30,12 @@ jobs:
     name: 프론트
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: 프론트 폴더 확인
         id: check
         run: |
           if [ -f frontend/package.json ]; then echo "exists=true" >> "$GITHUB_OUTPUT"; else echo "exists=false" >> "$GITHUB_OUTPUT"; echo "frontend/ 없음 — 건너뜀"; fi
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: steps.check.outputs.exists == 'true'
         with:
           node-version: "22"
