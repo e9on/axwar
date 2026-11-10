@@ -15,3 +15,6 @@ EARLY_WARNING_DAYS = 5
 RETURN_OBSERVE_DAYS = 28
 # 자동 보류 기준의 z 값(한쪽 95%).
 STOP_Z = 1.645
+
+# 안정 처리량이 없을 때 쓰는 가정 비율: 최대 처리량의 85%(Kingman 대기행렬 관행).
+CAPACITY_FALLBACK_RATIO = 0.85
