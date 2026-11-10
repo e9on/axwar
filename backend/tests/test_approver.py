@@ -30,7 +30,7 @@ def test_PLAN001은_하회구간이라_CEO와_이사회_그리고_지표반대�
 def test_PLAN019는_대표와_그룹보고():
     d = decide_plan(plan(4_807_921, date(2026, 9, 14), pid="PLAN-019"), W)
     assert d.approvers == ("Masil 대표", "그룹 보고")
-    assert "plan_total_over_1억" in ids(d)
+    assert "plan_total_over_limit" in ids(d)
 
 
 def test_건별_1천만원과_총액_1억원_이하는_마케팅_전결():
@@ -42,7 +42,7 @@ def test_건별_1천만원과_총액_1억원_이하는_마케팅_전결():
 def test_건별_1천만원_초과는_대표():
     d = decide_plan(plan(10_000_001, date(2026, 9, 30), total=90_000_000), W)
     assert d.approvers == ("Masil 대표", "그룹 보고")
-    assert "plan_item_over_1천만" in ids(d)
+    assert "plan_item_over_limit" in ids(d)
 
 
 def test_구간_경계일은_포함():
@@ -55,13 +55,13 @@ def test_구간_경계일은_포함():
 def test_전속계약_28억은_CEO와_이사회():
     d = decide_contract(contract(2_800_000_000), W)
     assert d.approvers == ("CEO", "이사회")
-    assert "contract_over_10억" in ids(d)
+    assert "contract_over_limit" in ids(d)
 
 
 def test_전속계약_10억_이하는_대표():
     d = decide_contract(contract(1_000_000_000), W)
     assert d.approvers == ("Masil 대표",)
-    assert "contract_under_10억" in ids(d)
+    assert "contract_within_limit" in ids(d)
 
 
 def test_지표_좋은데_줄이면_추가승인():

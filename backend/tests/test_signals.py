@@ -18,10 +18,10 @@ def test_혜인_비용분해():
 
 
 def test_혜인_재구매는_업계보다_낮아_빨강():
-    h = _by_key(future_value_signals("INF-001"))["repurchase_90d"]
+    h = _by_key(future_value_signals("INF-001"))["repurchase_rate"]
     assert round(h.value, 4) == 0.0852
     assert h.level == "red"
-    d = _by_key(future_value_signals("INF-002"))["repurchase_90d"]
+    d = _by_key(future_value_signals("INF-002"))["repurchase_rate"]
     assert round(d.value, 3) == 0.241
     assert d.level == "green"
 

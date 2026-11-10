@@ -74,12 +74,12 @@ def decide_plan(p: PlanFacts, windows: list[Window]) -> ApproverDecision:
         approvers = ("Masil 대표", "그룹 보고")
         if p.amount_krw > item_limit:
             hits.append(RuleHit(
-                "plan_item_over_1천만",
+                "plan_item_over_limit",
                 f"건별 {_won(p.amount_krw)}이 {item_txt} 초과라 Masil 대표 승인·그룹 보고",
                 POLICY, "원본"))
         if p.plan_total_krw > total_limit:
             hits.append(RuleHit(
-                "plan_total_over_1억",
+                "plan_total_over_limit",
                 f"기안 총액 {_won(p.plan_total_krw)}이 {total_txt} 초과라 Masil 대표 승인·그룹 보고",
                 POLICY, "원본"))
     else:
@@ -107,13 +107,13 @@ def decide_contract(c: ContractFacts, windows: list[Window]) -> ApproverDecision
     elif c.annual_fixed_krw > contract_limit:
         approvers = ("CEO", "이사회")
         hits.append(RuleHit(
-            "contract_over_10억",
+            "contract_over_limit",
             f"전속계약 연 {_won(c.annual_fixed_krw)}이 {limit_txt} 초과라 CEO·이사회 승인",
             POLICY, "원본"))
     else:
         approvers = ("Masil 대표",)
         hits.append(RuleHit(
-            "contract_under_10억",
+            "contract_within_limit",
             f"전속계약 연 {_won(c.annual_fixed_krw)}이 {limit_txt} 이하라 Masil 대표 승인",
             POLICY, "원본"))
     opposite = (c.direction == "갱신" and not c.indicator_good) or (
