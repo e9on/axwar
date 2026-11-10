@@ -18,8 +18,10 @@ jobs:
       - name: 시험 실행기 문법 검사
         run: python -m py_compile eval/*.py
       - name: uv 설치
-        if: hashFiles('backend/pyproject.toml') != ''
         uses: astral-sh/setup-uv@v10.3.3
+      - name: 도구 테스트 (tools/)
+        working-directory: tools
+        run: uv run --no-project --python 3.11 --with markdown --with pytest python -m pytest -q -p no:cacheprovider
       - name: pytest
         if: hashFiles('backend/pyproject.toml') != ''
         working-directory: backend
