@@ -7,14 +7,3 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA_ROOT: Path = Path(
     os.environ.get("AXWAR_DATA_ROOT", REPO_ROOT / "01_참가자_배포용" / "04_원본데이터")
 )
-
-# 기한 전 조기경고 시작 일수. 가정(원본에 없음): 기한 5일 전부터 미승인이면 조기경고.
-EARLY_WARNING_DAYS = 5
-
-# 2차 집행 전 1차 반품 관찰 기간(일).
-RETURN_OBSERVE_DAYS = 28
-# 자동 보류 기준의 z 값(한쪽 95%).
-STOP_Z = 1.645
-
-# 안정 처리량이 없을 때 쓰는 가정 비율: 최대 처리량의 85%(Kingman 대기행렬 관행).
-CAPACITY_FALLBACK_RATIO = 0.85

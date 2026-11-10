@@ -9,7 +9,7 @@ from fractions import Fraction
 from math import floor
 from typing import Literal
 
-from app import config
+from app import policy
 from app.rules.models import RuleHit
 
 
@@ -35,8 +35,9 @@ def usable_capacity(
         return stable, ()
     if maximum is None:
         return None, ()
-    cap = floor(maximum * config.CAPACITY_FALLBACK_RATIO)
-    pct = f"{config.CAPACITY_FALLBACK_RATIO:.0%}"
+    ratio = policy.get("allocate.capacity_fallback_ratio")
+    cap = floor(maximum * ratio)
+    pct = f"{ratio:.0%}"
     hit = RuleHit(
         rule_id="capacity_fallback",
         text=(

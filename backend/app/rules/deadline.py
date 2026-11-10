@@ -2,7 +2,7 @@
 from datetime import date, timedelta
 from typing import Literal
 
-from app import config
+from app import policy
 
 
 def deadline_actions(
@@ -13,12 +13,12 @@ def deadline_actions(
 ) -> list[Literal["조기경고", "기본거부"]]:
     """승인되면 조치가 없다. 미승인이면 기한 전 early_days일부터 조기경고, 기한 당일과 이후는 기본거부.
 
-    early_days가 None이면 호출 시점의 config.EARLY_WARNING_DAYS를 쓴다.
+    early_days가 None이면 호출 시점의 policy.get("deadline.early_warning_days")를 쓴다.
     """
     if approved:
         return []
     if early_days is None:
-        early_days = config.EARLY_WARNING_DAYS
+        early_days = policy.get("deadline.early_warning_days")
     if today >= deadline:
         return ["기본거부"]
     if today >= deadline - timedelta(days=early_days):

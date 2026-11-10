@@ -3,7 +3,7 @@ import math
 from dataclasses import dataclass
 from datetime import date, timedelta
 
-from app import config
+from app import policy
 from app.calc.cash import Window
 from app.rules.models import RuleHit
 
@@ -33,8 +33,10 @@ def make_split(
     restock_date: date,
     windows: list[Window],
     contract_end: date,
-    observe_days: int = config.RETURN_OBSERVE_DAYS,
+    observe_days: int | None = None,
 ) -> SplitPlan:
+    if observe_days is None:
+        observe_days = policy.get("split.return_observe_days")
     phase1 = max(0, min(logistics_limit, spare_stock, requested_qty))
     phase2 = requested_qty - phase1
     candidates = [restock_date + timedelta(days=1), phase1_date + timedelta(days=observe_days)]
@@ -52,7 +54,9 @@ def make_split(
     return SplitPlan(phase1, phase1_date, phase2, p2_date, tuple(hits))
 
 
-def return_stop_threshold(baseline: float, n_orders: int, z: float = config.STOP_Z) -> float:
+def return_stop_threshold(baseline: float, n_orders: int, z: float | None = None) -> float:
+    if z is None:
+        z = policy.get("split.stop_z")
     if n_orders <= 0:
         raise ValueError("1차 주문 수는 1 이상이어야 함")
     return baseline + z * math.sqrt(baseline * (1 - baseline) / n_orders)
@@ -77,7 +81,7 @@ def phase2_gate(
     auto_stopped = False
 
     if observe_days is None:
-        observe_days = config.RETURN_OBSERVE_DAYS
+        observe_days = policy.get("split.return_observe_days")
     if days_since_phase1 < observe_days:
         reasons.append(f"관찰 {observe_days}일 미만({days_since_phase1}일)")
     if phase1_orders <= 0:

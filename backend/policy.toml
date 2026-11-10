@@ -1,0 +1,42 @@
+# 정책 설정. 규칙 코드는 이 파일에서만 기준값을 읽는다(코드에 숫자를 두지 않는다).
+# 항목마다 value(값), source(출처 또는 "가정: 이유"), description(설명)을 둔다.
+
+[approval.item_limit_krw]
+value = 10000000
+source = "approval_authority_policy.md 캠페인 확대안 집행"
+description = "건별 이 금액 이하면 마케팅팀 전결, 초과하면 Masil 대표 승인·그룹 보고"
+
+[approval.total_limit_krw]
+value = 100000000
+source = "approval_authority_policy.md 캠페인 확대안 집행"
+description = "기안 총액이 이 금액을 넘으면 Masil 대표 승인·그룹 보고"
+
+[approval.contract_limit_krw]
+value = 1000000000
+source = "approval_authority_policy.md 인플루언서 연간 전속계약 체결·갱신"
+description = "전속계약 연 금액이 이 금액을 넘으면 CEO·이사회, 이하면 Masil 대표"
+
+[deadline.early_warning_days]
+value = 5
+source = "가정: 원본에 없음. 기한 5일 전부터 미승인이면 알릴 시간이 필요하다고 봄"
+description = "승인 기한 몇 일 전부터 미승인 건에 조기 경고를 내는지"
+
+[split.return_observe_days]
+value = 28
+source = "가정: 원본에 없음. 1차 집행 뒤 반품이 거의 나타나는 기간을 4주로 봄"
+description = "2차 집행 전 1차 반품을 관찰하는 기간(일)"
+
+[split.stop_z]
+value = 1.645
+source = "통계 관행: 정규분포 한쪽 95% 임계값"
+description = "반품률이 평소보다 이 z 값만큼 높으면 2차 집행 자동 보류"
+
+[allocate.capacity_fallback_ratio]
+value = 0.85
+source = "가정: Kingman 대기행렬 관행(가동률 85%를 넘으면 대기가 급증)"
+description = "안정 처리량이 없을 때 최대 처리량에 곱해 쓰는 비율"
+
+[cash.horizon_days]
+value = 90
+source = "계산 정의 1.2 '향후 90일'"
+description = "현금 전망을 내다보는 기간(일)"
