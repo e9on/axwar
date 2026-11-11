@@ -82,12 +82,13 @@ CREATE TABLE policy_changes (
 
 
 def _migrate_1_to_2(db: sqlite3.Connection) -> None:
-    """버전 2: AI 판정 기록(ai_judgments), 요청의 목적·상태, 작업 상세."""
+    """버전 2: AI 판정 기록(ai_judgments, 비용 장부 행 연결), 요청의 목적·상태, 작업 상세."""
     db.execute("CREATE TABLE ai_judgments ("
                "id INTEGER PRIMARY KEY, ts TEXT NOT NULL, sim_date TEXT NOT NULL, "
                "case_id INTEGER NOT NULL REFERENCES cases(id) ON DELETE CASCADE, "
                "kind TEXT NOT NULL, model TEXT NOT NULL, input_summary TEXT NOT NULL, result TEXT NOT NULL, "
-               "needs_human INTEGER NOT NULL, confidence REAL)")
+               "needs_human INTEGER NOT NULL, confidence REAL, "
+               "ledger_id INTEGER REFERENCES ai_calls(id) ON DELETE SET NULL)")
     db.execute("ALTER TABLE requests ADD COLUMN purpose TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE requests ADD COLUMN status TEXT NOT NULL DEFAULT '대기'")
     db.execute("ALTER TABLE tasks ADD COLUMN detail TEXT NOT NULL DEFAULT ''")
@@ -385,12 +386,13 @@ class Store:
     # ---- AI 판정 기록(비용 장부 ai_calls와 별개) ----
 
     def add_judgment(self, case_id: int, kind: str, model: str, input_summary: str, result: dict,
-                     needs_human: bool, confidence: float | None) -> int:
+                     needs_human: bool, confidence: float | None, ledger_id: int | None = None) -> int:
+        """ledger_id는 같은 호출의 비용 장부(ai_calls) 행. 가짜 AI·실패면 None."""
         with self._tx() as db:
             cur = db.execute("INSERT INTO ai_judgments (ts, sim_date, case_id, kind, model, input_summary, result, "
-                             "needs_human, confidence) VALUES (?,?,?,?,?,?,?,?,?)",
+                             "needs_human, confidence, ledger_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
                              (_now(), self._clock(db).isoformat(), case_id, kind, model, input_summary, _json(result),
-                              int(needs_human), confidence))
+                              int(needs_human), confidence, ledger_id))
             self._event(db, case_id, "AI판정", "AI",
                         {"judgment_id": cur.lastrowid, "kind": kind, "model": model, "needs_human": needs_human})
             return cur.lastrowid

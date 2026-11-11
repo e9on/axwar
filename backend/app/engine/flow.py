@@ -412,7 +412,7 @@ class Engine:
             needs_human = True
             notes.append("필수 첨부 없음")
         self.store.add_judgment(case["id"], "회신해석", j.model, f"{req['dept']} 회신: {text}", result,
-                                needs_human, j.confidence)
+                                needs_human, j.confidence, j.ledger_id)
         if needs_human:
             why = "; ".join(notes + [f"AI 해석 {j.stance}"])
             self.store.set_request_status(request_id, R_HUMAN, "AI", why)
@@ -536,7 +536,8 @@ class Engine:
             self.store.add_review(case_id, product, text)
             j = judge.interpret_review(self._provider("review"), product, text)
             self.store.add_judgment(case_id, "리뷰해석", j.model, f"{product} 리뷰: {text}",
-                                    {**asdict(j), "raw": j.raw[:RAW_KEEP]}, j.needs_human, j.confidence)
+                                    {**asdict(j), "raw": j.raw[:RAW_KEEP]}, j.needs_human, j.confidence,
+                                    j.ledger_id)
             color += int(j.reason == COLOR_REVIEW or j.content_gap)
             human += int(j.needs_human)
         f = self.store.get_case(case_id)["facts"]

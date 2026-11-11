@@ -750,3 +750,12 @@ def test_엔진_이벤트를_남긴다(store):
     assert store.events(cid)[-1]["kind"] == "조기경고" and store.events(cid)[-1]["detail"] == {"target": "CEO"}
     assert store.events(None)[-1]["case_id"] is None
     assert [e["kind"] for e in store.events(kind="조기경고")] == ["조기경고"]
+
+
+def test_AI_판정에_비용_행_ID를_남긴다(store):
+    cid = store.create_case("k", "r", {}, "접수")
+    store.add_ai_call(cid, "reply", "claude-haiku-5-5", 10, 10)
+    call_id = store.ai_calls()[0]["id"]
+    store.add_judgment(cid, "회신해석", "claude-haiku-5-5", "", {}, False, None, ledger_id=call_id)
+    store.add_judgment(cid, "회신해석", "fake", "", {}, False, None)
+    assert [j["ledger_id"] for j in store.list_judgments(cid)] == [call_id, None]

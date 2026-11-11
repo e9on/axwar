@@ -235,3 +235,22 @@ def test_content_gap_문자열_true_false는_받아들인다():
         text = '{"reason":"만족","sentiment":"긍정","content_gap":%s}' % s
         j = interpret_review(FakeProvider([text]), "p", "t")
         assert j.content_gap is want and j.needs_human is False
+
+
+def test_판정은_제공자의_장부_행_ID를_싣는다():
+    class P:
+        model = "m"
+
+        def complete(self, system, user):
+            return Completion(reply_json(), 1, 1, "m", ledger_id=7)
+
+    class R:
+        model = "m"
+
+        def complete(self, system, user):
+            return Completion(review_json(), 1, 1, "m", ledger_id=8)
+
+    assert interpret_reply(P(), "물류", "요청", "회신", TODAY).ledger_id == 7
+    assert interpret_review(R(), "p", "t").ledger_id == 8
+    assert reply(reply_json()).ledger_id is None
+    assert interpret_reply(FakeProvider([RuntimeError("x")]), "물류", "요청", "회신", TODAY).ledger_id is None

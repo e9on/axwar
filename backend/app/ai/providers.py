@@ -18,7 +18,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Callable, Protocol
@@ -44,6 +44,7 @@ class Completion:
     model: str
     stop_reason: str | None = None  # 잘림은 "max_tokens"
     thinking_tokens: int | None = None
+    ledger_id: int | None = None  # 비용 장부(ai_calls) 행 ID. 예산 제공자를 거친 호출만 채운다
 
 
 class Provider(Protocol):
@@ -378,7 +379,7 @@ class BudgetedProvider:
                     note(rid, e)
                 except Exception:  # noqa: BLE001
                     logger.exception("정산 실패 기록도 실패")
-        return c
+        return replace(c, ledger_id=rid)
 
 
 # ---------------------------------------------------------------- 만들기

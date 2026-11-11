@@ -353,3 +353,17 @@ def test_여러_승인권자는_모두_승인해야_하고_같은_역할의_재�
     assert store.list_tasks(cid) == []
     assert eng.decide(cid, "이사회", "승인")["status"] == "1차 집행"
     assert len(store.list_tasks(cid)) == 2
+
+
+def test_AI판정은_같은_호출의_비용_행을_가리킨다(store):
+    provider = BudgetedProvider(FakeProvider([ACCEPT], model="claude-haiku-5-5"), store)
+    eng = Engine(store, provider=provider)
+    cid = eng.seed("scenario_1")[0]
+    eng.reply(store.list_requests(cid)[0]["id"], "전량 가능합니다")
+    assert store.list_judgments(cid)[0]["ledger_id"] == store.ai_calls()[0]["id"]
+
+
+def test_가짜_AI면_비용_행이_없다(store):
+    eng, _, cid = seeded(store, ACCEPT)
+    eng.reply(store.list_requests(cid)[0]["id"], "전량 가능합니다")
+    assert store.list_judgments(cid)[0]["ledger_id"] is None

@@ -517,3 +517,27 @@ def test_예산_제공자는_느린_호출이_겹쳐도_한도를_넘지_않는�
     [t.start() for t in threads]
     [t.join() for t in threads]
     assert results.count("ok") == 3 and inner.calls == 3
+
+
+# ---- 비용 행 연결(Task 11a 수정 2) ----
+
+def test_예산_제공자는_정산한_장부_행_ID를_돌려준다():
+    ledger = MemoryCostLedger()
+    c1 = BudgetedProvider(Stub(), ledger, today=lambda: date(2030, 1, 2)).complete("s", "u")
+    c2 = BudgetedProvider(Stub(), ledger, today=lambda: date(2030, 1, 2)).complete("s", "u")
+    assert c1.ledger_id is not None and c2.ledger_id is not None and c1.ledger_id != c2.ledger_id
+
+
+def test_가짜와_규칙_제공자는_장부_행_ID가_없다():
+    assert FakeProvider(["x"]).complete("s", "u").ledger_id is None
+    assert providers.make_provider("reply").complete("s", "회신: 가능").ledger_id is None
+
+
+def test_정산이_실패해도_예약_행_ID를_돌려준다():
+    class BadSettle(MemoryCostLedger):
+        def settle(self, *a, **k):
+            raise RuntimeError("디스크")
+
+    ledger = BadSettle()
+    c = BudgetedProvider(Stub(), ledger, today=lambda: date(2030, 1, 2)).complete("s", "u")
+    assert c.ledger_id is not None and c.ledger_id in ledger._reserved
