@@ -508,7 +508,7 @@ class Store:
 
     def _update_row(self, table: str, label: str, allowed: tuple[str, ...], row_id: int, fields: dict, actor: str,
                     event_kind: str) -> None:
-        """허용된 열만 고치고 출처를 '화면'으로 바꾼다(다시 가져와도 덮어쓰지 않게). 변경 전후를 이벤트로 남긴다."""
+        """허용된 열만 고치고 출처를 "화면"으로 바꾼다(시연 행은 시연 유지). 변경 전후를 이벤트로 남긴다."""
         bad = set(fields) - set(allowed)
         if bad or not fields:
             raise ValueError(f"{label}에서 고칠 수 없는 항목: {sorted(bad) or '(비어 있음)'}")
@@ -520,7 +520,9 @@ class Store:
             changes = {k: {"before": bool(old[k]) if k in _BOOL_COLUMNS else old[k], "after": v}
                        for k, v in fields.items()}
             sets = ", ".join(f"{k}=?" for k in fields)
-            db.execute(f"UPDATE {table} SET {sets}, origin='화면', updated_at=? WHERE id=?",
+            # 시연 행은 시연으로 둔다(초기화로 지워지게). 그 밖은 '화면'으로 바꿔 다시 가져와도 덮어쓰지 않게.
+            db.execute(f"UPDATE {table} SET {sets}, "
+                       f"origin=CASE WHEN origin='시연' THEN '시연' ELSE '화면' END, updated_at=? WHERE id=?",
                        (*[_db_value(k, v) for k, v in fields.items()], _now(), row_id))
             self._event(db, None, event_kind, actor, {"id": row_id, "changes": changes})
 

@@ -759,3 +759,12 @@ def test_AI_판정에_비용_행_ID를_남긴다(store):
     store.add_judgment(cid, "회신해석", "claude-haiku-5-5", "", {}, False, None, ledger_id=call_id)
     store.add_judgment(cid, "회신해석", "fake", "", {}, False, None)
     assert [j["ledger_id"] for j in store.list_judgments(cid)] == [call_id, None]
+
+
+def test_시연_행을_고쳐도_출처는_시연이라_초기화하면_지워진다(store):
+    cid = store.add_contract({"influencer_code": "INF-T", "influencer_name": "시연", "annual_fixed_krw": 1,
+                              "notice_deadline": "2030-01-01", "expiry_date": "2030-02-01"}, "a", origin="시연")
+    store.update_contract(cid, {"annual_fixed_krw": 2}, "담당자")
+    assert store.get_contract(cid)["origin"] == "시연"
+    store.reset()
+    assert all(c["influencer_code"] != "INF-T" for c in store.contracts())
