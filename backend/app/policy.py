@@ -22,6 +22,7 @@ _SCHEMA: dict[str, type] = {
     "signals.hhi_limit": int,
     "volume.low_confidence_share": float,
     "scm.stockout_loss_pct": float,
+    "scm.no_reply_days": int,
     "capacity.label_span_chars": int,
     "ai.total_cap_usd": float,
     "ai.daily_cap_usd": float,

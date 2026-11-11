@@ -55,8 +55,8 @@ def test_시연_폴더_기본값과_환경변수(monkeypatch, tmp_path):
 def test_장면1_파일을_읽는다():
     sc = scenarios.load("scenario_1")
     assert sc.name == "scenario_1" and sc.plans == ("PLAN-019",) and sc.contracts == ()
-    assert [s["action"] for s in sc.script] == ["회신", "결정"]
-    assert sc.script[0]["dept"] == "물류" and sc.script[1]["actor"] == "Masil 대표"
+    assert [s["action"] for s in sc.script] == ["회신", "회신", "결정"]
+    assert [s.get("dept") for s in sc.script[:2]] == ["물류", "SCM"] and sc.script[2]["actor"] == "Masil 대표"
 
 
 def test_사람_목록은_역할과_보고_체계를_담는다():

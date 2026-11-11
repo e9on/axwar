@@ -8,8 +8,20 @@ import pytest
 from app import config, policy
 from app.ai.providers import BudgetedProvider, FakeProvider
 from app.engine import flow, scenarios
+from app.calc import inventory
 from app.engine.flow import Engine
 from app.store.db import MODE_OPERATION, open_db
+
+# 이 파일의 대부분은 승인·기한·등록부 흐름(11a)을 본다. 사용자 결정 2(모든 건이 재고 장부를 거침) 뒤에는 시연 데이터의 라인 여유가 0이라
+# 물류 회신만 해도 SCM 요청이 생기므로, 재고를 보는 시험(REAL_LEDGER)만 빼고 재고가 충분한 장부로 둔다. 재고 흐름은 test_flow_11b.py가 본다.
+REAL_LEDGER = ("test_장면1_정상", "test_대본을_끝까지_실행하면_1차_집행", "test_리뷰_색상불일치면_콘텐츠_수정_요청과_첨부필수",
+               "test_모의_반품은_사실에_쌓이고_2차가_없으면_열리지_않는다", "test_끝난_건은_등록부가_바뀌어도_그대로_경고만_한번")
+
+
+@pytest.fixture(autouse=True)
+def _ample_stock(request, monkeypatch):
+    if request.node.name not in REAL_LEDGER:
+        monkeypatch.setattr(inventory, "line_spare", lambda category, day: 10**9)
 
 ACCEPT = json.dumps({"stance": "수용", "qty_limit": None, "next_date": None, "needs_human": False,
                      "confidence": 0.9}, ensure_ascii=False)
@@ -48,7 +60,7 @@ def statuses(store, cid):
 # ---- 지시서·개정 11a 필수 ----
 
 def test_장면1_정상(store):
-    eng, fake = make(store, ACCEPT)
+    eng, fake = make(store, ACCEPT, ACCEPT)
     ids = eng.seed("scenario_1")
     assert len(ids) == 1
     c = store.get_case(ids[0])
@@ -72,23 +84,37 @@ def test_장면1_정상(store):
     assert store.get_request(reqs[0]["id"])["status"] == "처리됨"
     assert [x["case_id"] for x in eng.todo("Masil 대표")["승인 대기"]] == [c["id"]]
 
-    r2 = eng.play(steps()[1])  # 대표 승인
+    # 사용자 결정 2(2026-11-11): 처리량 숫자 없는 "전량 가능"도 재고 장부를 돌린다. 9/14 선케어 라인은 안전재고 위 여유가 0이라 SCM 요청이 생긴다.
+    f = store.get_case(c["id"])["facts"]
+    assert f["stock"]["spare"] == 0 and f["stock"]["shortage"] is True and f["stock"]["capacity"] is None
+    assert f["stock"]["day_qty"] == f["stock"]["share"] == f["stock"]["want"] > 0
+    scm = [r for r in store.list_requests(c["id"]) if r["dept"] == "SCM"]
+    assert [(r["purpose"], r["status"]) for r in scm] == [("안전재고 사용", "대기")]
+    with pytest.raises(ValueError, match="분할 승인만"):  # SCM이 답하기 전에는 분할 없는 승인이 안 된다
+        eng.decide(c["id"], "Masil 대표", "승인")
+    r_scm = eng.play(steps()[1])  # SCM "전량 허용"
+    assert r_scm["needs_human"] is False and store.get_case(c["id"])["facts"]["scm"]["state"] == "전량 허용"
+    assert store.get_case(c["id"])["status"] == "승인 대기" and store.events(c["id"], kind="재승인알림") == []
+
+    r2 = eng.play(steps()[2])  # 대표 승인
     assert r2["status"] == "1차 집행" and r2["changed"] is True
-    tasks = store.list_tasks(c["id"])
+    tasks = [t for t in store.list_tasks(c["id"]) if t["dept"] in ("물류", "CS")]  # SCM 발주 조정 요청은 따로 센다
     assert sorted((t["dept"], t["title"]) for t in tasks) == [("CS", "CS 대비"), ("물류", "물류 출고")]
     assert all(t["due"] == "2026-09-14" for t in tasks)
-    assert statuses(store, c["id"]) == ["회신 대기", "승인 대기", "승인", "1차 집행"]
+    f = store.get_case(c["id"])["facts"]
+    assert f["phase1"] == {"qty": f["stock"]["day_qty"], "date": "2026-09-14"} and f["phase2"] is None  # 집행일 하루 수량 단위
+    assert statuses(store, c["id"]) == ["회신 대기", "승인 대기", "승인", "1차 집행"]  # SCM 전량 허용은 분할안이 그대로라 재승인 없음
     assert [a["approvers"] for a in store.list_approvals(c["id"])] == [["Masil 대표"]]
     assert eng.todo("그룹 재무")["알림"][0]["case_id"] == c["id"]  # 그룹 보고
     assert eng.todo("Masil 대표")["승인 대기"] == []
-    assert len(fake.calls) == 1
+    assert len(fake.calls) == 2
 
 
 def test_대본을_끝까지_실행하면_1차_집행(store):
-    eng, _ = make(store, ACCEPT)
+    eng, _ = make(store, ACCEPT, ACCEPT)
     eng.seed("scenario_1")
     results = eng.run_script("scenario_1")
-    assert [r["status"] for r in results] == ["승인 대기", "1차 집행"]
+    assert [r["status"] for r in results] == ["승인 대기", "승인 대기", "1차 집행"]
 
 
 def test_승인권자가_아니면_거절하고_상태_그대로(store):
@@ -301,7 +327,7 @@ def test_캘린더에_기한_집행일_하회구간(store):
 
 
 def test_리뷰_색상불일치면_콘텐츠_수정_요청과_첨부필수(store):
-    eng, _, cid = seeded(store, ACCEPT, COLOR, HAPPY, ACCEPT, ACCEPT)
+    eng, _, cid = seeded(store, ACCEPT, ACCEPT, COLOR, HAPPY, ACCEPT, ACCEPT)
     eng.run_script("scenario_1")
     g = eng.add_reviews(cid, [("선케어", "영상에서 본 색이랑 실제 색이 달라요"), ("선케어", "만족해요")])
     assert g.open is False and "콘텐츠 수정 요청" in g.actions
@@ -449,7 +475,7 @@ def test_승인_전_등록부_변경은_사실만_바꾸고_상태는_그대로(
 
 
 def test_끝난_건은_등록부가_바뀌어도_그대로_경고만_한번(store):
-    eng, _, cid = seeded(store, ACCEPT)
+    eng, _, cid = seeded(store, ACCEPT, ACCEPT)
     eng.run_script("scenario_1")
     eng.update_plan("PLAN-019", {"settlement_date": "2026-09-20"}, "캠페인 담당자")
     eng.sync()

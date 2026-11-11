@@ -12,7 +12,7 @@ from app.ai.providers import FakeProvider
 from app.calc import inventory, volume
 from app.calc.campaign import return_count_rate
 from app.engine import scenarios
-from app.engine.flow import Engine
+from app.engine.flow import Engine, _required_roles
 from app.rules.split import return_stop_threshold
 from app.store.db import open_db
 
@@ -100,6 +100,7 @@ def test_장면2_조건변경_SCM_일부허용(store):
     s = f["stock"]
     assert (s["stable"], s["maximum"], s["capacity"]) == (20000, 26000, 20000)
     assert abs(s["want"] - 16000) < 10 and s["share"] == s["want"]  # 7/27 혜인 라이브 약 16,000개, 물류 몫 전부
+    assert s["day_qty"] == s["want"] == 15996  # 사용자 결정 1: 요청 단위는 기안 물량 전체가 아니라 집행일 하루 수량
     assert s["want"] < s["capacity"]  # 물류는 넉넉
     assert (s["line"], s["line_stock"], s["safety_min"], s["spare"]) == ("기초", 20185, 48868, 0)  # 설계 4.5 확인값
     assert s["shortage"] is True and s["need"] == s["share"]
@@ -108,10 +109,11 @@ def test_장면2_조건변경_SCM_일부허용(store):
     days = s["need"] / inventory.line_daily_sale("기초")
     assert f"약 {days:.1f}일 일찍 품절" in scm["text"] and "4%" in scm["text"]
     assert [x["case_id"] for x in eng.todo("SCM 담당자")["회신 대기"]] == [cid]
-    # 첫 분할안: SCM이 필요한 양을 모두 허용한다고 본 안 — 1차 = 물류 몫, 2차 = 나머지, 2차 집행일 8/24
+    # 첫 분할안: SCM이 필요한 양을 모두 허용한다고 본 안 — 1차 = 물류 몫 = 하루 수량이라 2차는 0(날짜 없음)
     sp = f["split"]
-    assert sp["phase1_qty"] == s["share"] and sp["phase1_date"] == "2026-07-27" and sp["phase2_date"] == "2026-08-24"
-    assert sp["phase1_qty"] + sp["phase2_qty"] == f["volume"]["units"]
+    assert sp["phase1_qty"] == s["share"] and sp["phase1_date"] == "2026-07-27"
+    assert sp["phase2_qty"] == 0 and sp["phase2_date"] is None
+    assert sp["phase1_qty"] + sp["phase2_qty"] == s["day_qty"]
 
     # ---- 승인권자가 먼저 분할 승인(SCM 회신을 기다리는 동안 확정은 보류)
     assert eng.play(st[1])["status"] == "승인 대기"
@@ -125,7 +127,7 @@ def test_장면2_조건변경_SCM_일부허용(store):
     assert r["status"] == "재승인 대기" and r["needs_human"] is False
     f = store.get_case(cid)["facts"]
     assert f["split"]["phase1_qty"] == 3000 and f["split"]["phase1_date"] == "2026-07-27"
-    assert f["split"]["phase2_qty"] == f["volume"]["units"] - 3000 and f["split"]["phase2_date"] == "2026-08-24"
+    assert f["split"]["phase2_qty"] == 12996 and f["split"]["phase2_date"] == "2026-08-24"  # 하루 수량 − 1차
     assert f["scm"]["state"] == "일부 허용" and f["scm"]["allow"] == 3000
     assert f["approved_roles"] == []
     alerts = [e["detail"]["text"] for e in store.events(cid, kind="재승인알림")]
@@ -141,7 +143,7 @@ def test_장면2_조건변경_SCM_일부허용(store):
     assert statuses(store, cid) == ["회신 대기", "승인 대기", "재승인 대기", "분할 승인", "1차 집행", "2차 잠금"]
     f = store.get_case(cid)["facts"]
     assert f["phase1"] == {"qty": 3000, "date": "2026-07-27"}
-    assert f["phase2"] == {"qty": f["volume"]["units"] - 3000, "date": "2026-08-24"}
+    assert f["phase2"] == {"qty": 12996, "date": "2026-08-24"}
     assert sorted(t for t in tasks(store, cid) if t[0] in ("물류", "CS")) == [("CS", "CS 대비"), ("물류", "물류 출고")]
     # 2차 집행일 8/24는 하회 구간(7/21~8/22) 밖 → 2차 승인권자 Masil 대표로 이동, 권한 이동 1건
     ch = store.get_approver_changes(cid)
@@ -192,7 +194,7 @@ def test_장면2_조건변경_SCM_일부허용(store):
 def test_설계_8장_장면2_날짜는_기존_함수_결과와_같다(store):
     """2차 개시일·관찰 종료일은 엔진이 기존 함수로 계산한 값이며 설계 8장 숫자와 같다."""
     eng, _, cid, st = scene2(store, ACCEPT, SCM_PART)
-    eng.play(st[0])
+    to_scm_reply(eng, store, cid, st, "3,000개까지 허용합니다.")
     s = store.get_case(cid)["facts"]["split"]
     assert s["phase2_date"] == "2026-08-24"  # max(입고 다음 날 8/20, 하회 구간 끝 다음 날 8/23, 1차 + 28일 8/24)
     assert (date.fromisoformat(s["phase1_date"]) + timedelta(days=policy.get("split.return_observe_days"))
@@ -205,6 +207,11 @@ def test_설계_8장_장면2_날짜는_기존_함수_결과와_같다(store):
 
 # ============================================================== 장면 2 — SCM 거절
 
+def fake_spare(monkeypatch, *pairs):
+    """장부의 라인 여유 경로를 대본으로 바꾼다(실제 시연 데이터에서는 거절 뒤 여유가 생기는 날이 없다)."""
+    monkeypatch.setattr(inventory, "spare_path", lambda category, start, end: [(d, q) for d, q in pairs if d >= start])
+
+
 def run_to_refusal(store, *extra):
     eng, fake, cid, st = scene2(store, ACCEPT, SCM_REFUSE, *extra, name="scenario_2_reject")
     for i in range(4):
@@ -212,67 +219,113 @@ def run_to_refusal(store, *extra):
     return eng, fake, cid, st
 
 
-def test_장면2_SCM_거절(store):
+SHIFT_DAY = date(2026, 8, 22)  # 하회 구간(7/21~8/22) 마지막 날: 연기해도 승인권자가 그대로
+
+
+def run_to_shift(store, monkeypatch):
+    """SCM 거절 뒤 8/21에는 여유가 모자라고(9,000개) 8/22부터 1차 수량 이상(20,000개) 생기는 장부."""
+    fake_spare(monkeypatch, (date(2026, 8, 20), 0), (date(2026, 8, 21), 9000), (SHIFT_DAY, 20000))
+    return run_to_refusal(store)
+
+
+def test_장면2_SCM_거절_실제_장부에서는_1차_차단(store):
     eng, fake, cid, st = scene2(store, ACCEPT, SCM_REFUSE, name="scenario_2_reject")
     eng.play(st[0]); eng.play(st[1]); eng.play(st[2])
-    approved_split = store.get_case(cid)["facts"]["split"]
     # SCM "거절"은 애매한 회신이 아니라 SCM의 결정이다 → 사람 확인 없이 처리
+    r = eng.play(st[3])
+    assert r["needs_human"] is False and r["status"] == "1차 차단"
+    f = store.get_case(cid)["facts"]
+    assert f["scm"]["state"] == "거절" and f["scm"]["allow"] == 0
+    # 입고(8/19) 다음 날부터 장부를 돌려도 라인 여유가 1차 수량 15,996개 이상이 되는 날이 없다 → 차단, 이유 문장 포함
+    reason = f["phase1_blocked"]["reason"]
+    assert "SCM 거절" in reason and "입고(8/19) 다음 날" in reason and "15,996개" in reason and "1차 차단" in reason
+    assert f["phase1"] is None and f["shift"] is None and f["settlement_date"] == "2026-07-27"
+    assert statuses(store, cid)[-1] == "1차 차단" and store.get_case(cid)["status"] == "1차 차단"
+    # 승인권자(CEO·이사회)와 캠페인 담당에게 이유가 간다. 출고·CS 작업은 생기지 않는다.
+    assert sorted(e["detail"]["target"] for e in store.events(cid, kind="1차차단")) == ["CEO", "이사회"]
+    assert any("1차 차단" in a["text"] for a in eng.todo("그룹 CEO")["알림"])
+    assert [t["title"] for t in eng.todo("캠페인 담당자")["작업"] if t["title"] == "1차 차단 확인"] == ["1차 차단 확인"]
+    assert [t for t in tasks(store, cid) if t[0] in ("물류", "CS")] == []
+    assert eng.decide(cid, "그룹 CEO", "분할승인")["changed"] is False  # 더 결정할 수 없다
+    with pytest.raises(PermissionError, match="SCM"):
+        eng.adjust_phase1(cid, "캠페인 담당자", 3000)
+    assert len(fake.calls) == 2
+
+
+def test_장면2_SCM_거절_여유가_생기는_첫날로_연기(store, monkeypatch):
+    eng, fake, cid, st = scene2(store, ACCEPT, SCM_REFUSE, name="scenario_2_reject")
+    fake_spare(monkeypatch, (date(2026, 8, 20), 0), (date(2026, 8, 21), 9000), (SHIFT_DAY, 20000))
+    eng.play(st[0]); eng.play(st[1]); eng.play(st[2])
+    share = store.get_case(cid)["facts"]["split"]["phase1_qty"]
     r = eng.play(st[3])
     assert r["needs_human"] is False and r["status"] == "재승인 대기"
     f = store.get_case(cid)["facts"]
     assert f["scm"]["state"] == "거절" and f["scm"]["allow"] == 0
-    # 1차는 입고 다음 날 8/20으로 연기, 수량은 그대로(물류 몫)
-    assert f["phase1_date"] == "2026-08-20" and f["split"]["phase1_date"] == "2026-08-20"
-    assert f["split"]["phase1_qty"] == approved_split["phase1_qty"]
+    # 8/20은 0, 8/21은 9,000(모자람) → 1차 수량 이상 생기는 첫날 8/22. 수량은 그날 여유(20,000)와 물류 몫 중 작은 값
+    assert f["phase1_date"] == "2026-08-22" and f["split"]["phase1_date"] == "2026-08-22"
+    assert f["split"]["phase1_qty"] == min(20000, share) == share and f["split"]["phase2_qty"] == 0
+    assert f["shift"] == {"from": "2026-07-27", "to": "2026-08-22", "reason": "SCM 거절"}
     assert f["settlement_date"] == "2026-07-27"  # 등록부 집행일은 그대로 — 연기는 별도 키
-    # 8/20도 하회 구간(7/21~8/22) 안이라 승인권자 CEO 유지, 권한 이동 없음
+    assert f["stock"]["spare"] == 20000 and f["stock"]["day"] == "2026-08-22"
+    # 8/22도 하회 구간 안이라 승인권자 CEO 유지, 권한 이동 없음
     assert f["approvers"] == ["CEO", "이사회", "이사회 의결"] and store.get_approver_changes(cid) == []
     assert [x["case_id"] for x in eng.todo("그룹 CEO")["승인 대기"]] == [cid]
-    assert any("1차 날짜" in e["detail"]["text"] and "SCM 거절" in e["detail"]["text"]
-               for e in store.events(cid, kind="재승인알림"))
-    # 2차 관찰 끝(8/20 + 28일 = 9/17)이 계약 만료(8/31) 뒤, 갱신 미확정 → 날짜를 정할 수 없다
-    assert f["split"]["phase2_date"] is None
-    assert any(h["rule_id"] == "split_expiry" for h in f["split"]["hits"])
-    end = date.fromisoformat(f["split"]["phase1_date"]) + timedelta(days=policy.get("split.return_observe_days"))
-    assert end == date(2026, 9, 17) and end > EXPIRY
-
-    eng.play(st[4])
-    eng.play(st[5])
-    assert store.get_case(cid)["status"] == "2차 차단"
-    assert statuses(store, cid)[-3:] == ["1차 집행", "2차 잠금", "2차 차단"]
+    texts = [e["detail"]["text"] for e in store.events(cid, kind="재승인알림")]
+    assert len(texts) == 2 and all("1차 날짜 7/27→8/22" in t and "SCM 거절" in t for t in texts)
+    # 재승인 뒤 1차 집행(하루 수량 전부라 2차는 없다)
+    eng.decide(cid, "그룹 CEO", "분할승인"); eng.decide(cid, "이사회", "분할승인")
     f = store.get_case(cid)["facts"]
-    assert f["phase1"]["date"] == "2026-08-20" and f["phase2"]["date"] is None
-    assert all(t["due"] == "2026-08-20" for t in store.list_tasks(cid) if t["title"] in ("물류 출고", "CS 대비"))
-    g = eng.phase2_status(cid)
-    assert g.blocked and not g.open and any("계약 만료 뒤" in x for x in g.reasons)
-
+    assert store.get_case(cid)["status"] == "1차 집행" and f["phase1"] == {"qty": share, "date": "2026-08-22"}
+    assert f["phase2"] is None
+    assert all(t["due"] == "2026-08-22" for t in store.list_tasks(cid) if t["title"] in ("물류 출고", "CS 대비"))
     # N2: 기준일을 옮겨 점검이 여러 번 돌아도 연기한 1차 날짜가 등록부 값으로 되돌아가지 않는다
-    eng.play(st[6])
-    assert store.get_clock() == date(2026, 9, 17)
+    eng.advance(date(2026, 9, 17))
     f = store.get_case(cid)["facts"]
-    assert f["phase1_date"] == "2026-08-20" and f["phase1"]["date"] == "2026-08-20" and f["approvers"][0] == "CEO"
-    assert store.get_case(cid)["status"] == "2차 차단"
+    assert f["phase1_date"] == "2026-08-22" and f["phase1"]["date"] == "2026-08-22"
     assert len(fake.calls) == 2
 
 
-def test_연기한_1차_날짜는_승인_대기_중_점검이_돌아도_유지된다(store):
-    eng, _, cid, st = run_to_refusal(store)
-    eng.advance(store.get_clock() + timedelta(days=3))  # 재승인 대기 중 점검
+def test_거절_뒤_여유가_생기는_첫날이_계약_만료_뒤면_1차_차단(store, monkeypatch):
+    eng, _, cid, st = scene2(store, ACCEPT, SCM_REFUSE, name="scenario_2_reject")
+    fake_spare(monkeypatch, (date(2026, 9, 5), 20000))  # 계약 만료 8/31 뒤
+    for i in range(4):
+        eng.play(st[i])
     f = store.get_case(cid)["facts"]
-    assert f["phase1_date"] == "2026-08-20" and f["settlement_date"] == "2026-07-27"
+    assert store.get_case(cid)["status"] == "1차 차단"
+    assert "9/5" in f["phase1_blocked"]["reason"] and "계약 만료(8/31)" in f["phase1_blocked"]["reason"]
+    assert f["shift"] is None and f["phase1_date"] == "2026-07-27"
+
+
+def test_갱신이_확정된_계약이면_만료_뒤의_첫날로도_연기한다(store, monkeypatch):
+    eng, _, cid, st = scene2(store, ACCEPT, SCM_REFUSE, name="scenario_2_reject")
+    ccid = eng.open_contract("INF-001")
+    eng.decide(ccid, "그룹 CEO", "승인"); eng.decide(ccid, "이사회", "승인")
+    assert store.get_case(ccid)["status"] == "갱신 승인"
+    fake_spare(monkeypatch, (date(2026, 9, 5), 20000))
+    for i in range(4):
+        eng.play(st[i])
+    f = store.get_case(cid)["facts"]
+    assert store.get_case(cid)["status"] == "재승인 대기" and f["phase1_date"] == "2026-09-05"
+
+
+def test_연기한_1차_날짜는_승인_대기_중_점검이_돌아도_유지된다(store, monkeypatch):
+    eng, _, cid, st = run_to_shift(store, monkeypatch)
+    eng.advance(store.get_clock() + timedelta(days=2))  # 재승인 대기 중 점검(무응답 일수 3일 미만)
+    f = store.get_case(cid)["facts"]
+    assert f["phase1_date"] == "2026-08-22" and f["settlement_date"] == "2026-07-27"
     assert store.get_case(cid)["status"] == "재승인 대기" and store.events(cid, kind="재승인알림") != []
     assert len(store.events(cid, kind="재승인알림")) == 2  # 점검이 다시 돌아도 알림은 늘지 않는다
 
 
-def test_등록부_집행일을_고치면_연기는_버려지고_등록부_값이_이긴다(store):
-    eng, _, cid, st = run_to_refusal(store)
+def test_등록부_집행일을_고치면_연기는_버려지고_등록부_값이_이긴다(store, monkeypatch):
+    eng, _, cid, st = run_to_shift(store, monkeypatch)
     eng.update_plan("PLAN-001", {"settlement_date": "2026-09-30", "contract_deadline": "2026-09-25"}, "캠페인 담당자")
     f = store.get_case(cid)["facts"]
     assert f["settlement_date"] == "2026-09-30" and f["phase1_date"] == "2026-09-30" and f["shift"] is None
 
 
-def test_SCM_거절후_수량만_줄여_진행할_수_없다(store):
-    eng, _, cid, _ = run_to_refusal(store)
+def test_SCM_거절후_수량만_줄여_진행할_수_없다(store, monkeypatch):
+    eng, _, cid, _ = run_to_shift(store, monkeypatch)
     before_case = store.get_case(cid)
     before_tasks, before_events = store.list_tasks(cid), len(store.events(cid))
     with pytest.raises(PermissionError, match="SCM"):
@@ -287,6 +340,142 @@ def test_SCM_거절후_수량만_줄여_진행할_수_없다(store):
     assert store.get_case(cid)["facts"]["phase1"]["qty"] == before_case["facts"]["split"]["phase1_qty"]
 
 
+# ============================================================== SCM 무응답 (사용자 결정 4)
+
+def test_SCM이_요청_뒤_3일_동안_답이_없으면_거절로_처리한다(store):
+    eng, fake, cid, st = scene2(store, ACCEPT, name="scenario_2_reject")
+    for i in range(3):
+        eng.play(st[i])
+    asked = store.get_clock()
+    assert policy.get("scm.no_reply_days") == 3
+    eng.advance(asked + timedelta(days=2))
+    assert scm_request(store, cid)["status"] == "대기" and store.get_case(cid)["facts"]["scm"]["state"] == "요청"
+    acts = eng.advance(asked + timedelta(days=3))
+    assert [a["action"] for a in acts if a["action"] == "SCM무응답"] == ["SCM무응답"]
+    assert "무응답 3일" in [a for a in acts if a["action"] == "SCM무응답"][0]["text"]
+    f = store.get_case(cid)["facts"]
+    assert scm_request(store, cid)["status"] == "처리됨" and f["scm"]["state"] == "거절" and f["scm"]["no_reply_days"] == 3
+    assert "무응답 3일" in f["scm"]["reply"]
+    # 거절 경로(3번)와 같다: 실제 장부에서는 1차 차단, 이유 문장에 무응답이 들어간다
+    assert store.get_case(cid)["status"] == "1차 차단" and "무응답 3일" in f["phase1_blocked"]["reason"]
+    assert len(fake.calls) == 1  # AI 해석 없이 규칙으로 처리
+
+
+def test_SCM_무응답_거절은_연기_경로로도_간다(store, monkeypatch):
+    eng, fake, cid, st = scene2(store, ACCEPT, name="scenario_2_reject")
+    fake_spare(monkeypatch, (SHIFT_DAY, 20000))
+    for i in range(3):
+        eng.play(st[i])
+    eng.advance(store.get_clock() + timedelta(days=3))
+    f = store.get_case(cid)["facts"]
+    assert store.get_case(cid)["status"] == "재승인 대기" and f["phase1_date"] == "2026-08-22"
+    assert f["shift"]["reason"].startswith("SCM 무응답 3일")
+    assert all("무응답 3일" in e["detail"]["text"] for e in store.events(cid, kind="재승인알림"))
+    assert any("무응답 3일" in e["detail"]["text"] for e in store.events(cid, kind="분할안변경"))
+
+
+def test_SCM이_답했으면_사람확인_중이어도_무응답이_아니다(store):
+    eng, _, cid, st = scene2(store, ACCEPT, SCM_VAGUE)
+    eng.play(st[0])
+    eng.reply(scm_request(store, cid)["id"], "검토해 보고 알려드릴게요.")
+    assert scm_request(store, cid)["status"] == "사람 확인"
+    eng.advance(store.get_clock() + timedelta(days=10))
+    assert store.get_case(cid)["facts"]["scm"]["state"] == "요청" and store.get_case(cid)["status"] != "1차 차단"
+
+
+def test_SCM이_3일_안에_답하면_무응답_처리를_하지_않는다(store):
+    eng, _, cid, st = scene2(store, ACCEPT, SCM_PART)
+    eng.play(st[0])
+    eng.advance(store.get_clock() + timedelta(days=2))
+    eng.reply(scm_request(store, cid)["id"], "3,000개까지 허용합니다.")
+    eng.advance(store.get_clock() + timedelta(days=10))
+    assert store.get_case(cid)["facts"]["scm"]["state"] == "일부 허용"
+
+
+def test_승인이_다_모였어도_SCM_무응답_3일이면_거절_경로로_간다(store, monkeypatch):
+    eng, _, cid, st = scene2(store, ACCEPT)
+    fake_spare(monkeypatch, (SHIFT_DAY, 20000))
+    eng.play(st[0]); eng.play(st[1]); eng.play(st[2])
+    assert store.get_case(cid)["facts"]["approved_roles"] == ["CEO", "이사회"]
+    eng.advance(store.get_clock() + timedelta(days=3))
+    f = store.get_case(cid)["facts"]
+    assert store.get_case(cid)["status"] == "재승인 대기" and f["approved_roles"] == [] and f["phase1_date"] == "2026-08-22"
+
+
+# ============================================================== 등록부 집행일 변경 → 재고 점검·분할안 다시 (걱정 5)
+
+def test_등록부_집행일이_바뀌면_재고_점검과_분할안을_새_날짜로_다시_돌린다(store):
+    eng, _, cid, st = scene2(store, ACCEPT, SCM_PART)
+    eng.play(st[0])
+    old = scm_request(store, cid)
+    assert store.get_case(cid)["facts"]["stock"]["day"] == "2026-07-27"
+    eng.update_plan("PLAN-001", {"settlement_date": "2026-08-05", "contract_deadline": "2026-07-30"}, "캠페인 담당자")
+    f = store.get_case(cid)["facts"]
+    assert f["stock"]["day"] == "2026-08-05" and f["phase1_date"] == "2026-08-05"
+    assert f["split"]["phase1_date"] == "2026-08-05"
+    assert f["stock"]["want"] == f["stock"]["day_qty"] > 0  # 곡선이 같은 만큼 옮겨져 새 집행일에도 하루 수량이 있다
+    assert store.get_request(old["id"])["status"] == "처리됨"  # 이전 날짜로 보낸 요청은 닫힌다
+    reqs = [r for r in store.list_requests(cid) if r["purpose"] == "안전재고 사용" and r["status"] == "대기"]
+    assert len(reqs) == 1 and reqs[0]["id"] != old["id"] and "8/5" in reqs[0]["text"]
+    assert f["scm"]["state"] == "요청"
+
+
+def test_집행일이_바뀌어_재고가_충분해지면_분할안과_SCM_요청이_없어진다(store, monkeypatch):
+    eng, _, cid, st = scene2(store, ACCEPT)
+    eng.play(st[0])
+    assert store.get_case(cid)["facts"]["split"] is not None
+    monkeypatch.setattr(inventory, "line_spare", lambda category, day: 10**9)
+    eng.update_plan("PLAN-001", {"settlement_date": "2026-08-05", "contract_deadline": "2026-07-30"}, "캠페인 담당자")
+    f = store.get_case(cid)["facts"]
+    assert f["split"] is None and f["scm"] is None and f["stock"]["shortage"] is False and f["allocation"] == "전량"
+    assert [r for r in store.list_requests(cid) if r["purpose"] == "안전재고 사용" and r["status"] != "처리됨"] == []
+
+
+def test_집행일이_바뀌면_받은_승인은_무효가_되고_새_분할안을_다시_승인받는다(store):
+    eng, _, cid, st = scene2(store, ACCEPT)
+    eng.play(st[0]); eng.play(st[1])
+    assert store.get_case(cid)["facts"]["approved_roles"] == ["CEO"]
+    eng.update_plan("PLAN-001", {"settlement_date": "2026-08-05", "contract_deadline": "2026-07-30"}, "캠페인 담당자")
+    f = store.get_case(cid)["facts"]
+    assert store.get_case(cid)["status"] == "재승인 대기" and f["approved_roles"] == [] and f["split"]["phase1_date"] == "2026-08-05"
+
+
+def test_집행일이_바뀌지_않으면_재점검하지_않는다(store):
+    eng, _, cid, st = scene2(store, ACCEPT)
+    eng.play(st[0])
+    before = [r["id"] for r in store.list_requests(cid)]
+    eng.sync()
+    eng.advance(store.get_clock() + timedelta(days=1))
+    assert [r["id"] for r in store.list_requests(cid)] == before
+
+
+# ============================================================== 모든 건이 재고 장부를 거친다 · 하루 수량 단위 (사용자 결정 1·2)
+
+def test_하루_수량_단위_1차는_물류_몫과_허용분_중_작은_값_2차는_하루_수량에서_뺀_나머지(store):
+    eng, _, cid, st = scene2(store, ACCEPT, SCM_PART)
+    to_scm_reply(eng, store, cid, st, "3,000개까지 허용합니다.")
+    sp = store.get_case(cid)["facts"]["split"]
+    s = store.get_case(cid)["facts"]["stock"]
+    assert (sp["phase1_qty"], sp["phase2_qty"]) == (min(s["share"], 3000), s["day_qty"] - 3000) == (3000, 12996)
+
+
+def test_비분할_경로도_집행일_하루_수량이_1차_수량이다(store, monkeypatch):
+    fake = FakeProvider([ACCEPT])
+    eng = Engine(store, provider=fake)
+    eng.seed("scenario_2")
+    scenarios.register_plan(store, "PLAN-002")  # 색조 라인(재고 여유 충분)
+    cid = eng.open_plan("PLAN-002")
+    eng.reply(store.list_requests(cid)[0]["id"], "전량 가능합니다.")  # 처리량 숫자 없음 — 그래도 장부는 돈다
+    f = store.get_case(cid)["facts"]
+    assert f["stock"] is not None and f["stock"]["capacity"] is None and f["stock"]["shortage"] is False
+    assert f["stock"]["day_qty"] > 0 and f["stock"]["day_qty"] < f["volume"]["units"]
+    for role in _required_roles(f):
+        eng.decide(cid, role, "승인")
+    done = store.get_case(cid)["facts"]
+    assert done["phase1"]["qty"] == f["stock"]["day_qty"] and done["phase2"] is None
+    assert store.get_case(cid)["status"] == "1차 집행"
+
+
 def test_수량_조정은_캠페인_담당만_하고_늘릴_수_없다(store):
     eng, _, cid, st = scene2(store, ACCEPT, SCM_PART)
     eng.play(st[0])
@@ -298,7 +487,7 @@ def test_수량_조정은_캠페인_담당만_하고_늘릴_수_없다(store):
     r = eng.adjust_phase1(cid, "캠페인 담당자", 2000)  # 허용 범위 안에서 줄이는 것은 가능
     assert r["changed"] is True
     f = store.get_case(cid)["facts"]
-    assert f["split"]["phase1_qty"] == 2000 and f["split"]["phase2_qty"] == f["volume"]["units"] - 2000
+    assert f["split"]["phase1_qty"] == 2000 and f["split"]["phase2_qty"] == f["stock"]["day_qty"] - 2000
 
 
 def test_조정으로_분할안이_바뀌면_받은_승인은_무효가_되어_재승인(store):
@@ -335,13 +524,18 @@ def test_재고가_충분하면_SCM에_요청하지_않는다(store):
     assert f["split"] is None and f["allocation"] == "전량" and r["status"] == "승인 대기"
 
 
-def test_처리량_숫자_없는_전량가능_회신은_재고를_보지_않는다(store):
+def test_처리량_숫자_없는_전량가능_회신도_재고_장부를_돌린다(store):
+    """사용자 결정 2: 재고 장부 점검은 모든 건. 처리 능력을 모르면 회신 수용 = 요청 수량(제한 없음)으로 본다."""
     eng, _ = make(store, ACCEPT)
     cid = eng.seed("scenario_2")[0]
     eng.reply(store.list_requests(cid)[0]["id"], "전량 가능합니다.")
     f = store.get_case(cid)["facts"]
-    assert f["stock"] is None and f["split"] is None and f["allocation"] == "전량"
-    assert [r for r in store.list_requests(cid) if r["dept"] == "SCM"] == []
+    s = f["stock"]
+    assert s["stable"] is None and s["maximum"] is None and s["capacity"] is None
+    assert s["share"] == s["want"] == s["day_qty"] == 15996  # 물류 몫 = 요청 수량
+    assert (s["spare"], s["shortage"], s["need"]) == (0, True, 15996)
+    assert [r["purpose"] for r in store.list_requests(cid) if r["dept"] == "SCM"] == ["안전재고 사용"]
+    assert f["split"]["phase1_qty"] == 15996 and f["split"]["phase2_qty"] == 0 and f["scm"]["state"] == "요청"
 
 
 def test_물류가_최대만_말하면_85퍼센트를_쓰고_근거를_남긴다(store):
@@ -356,9 +550,10 @@ def test_물류가_최대만_말하면_85퍼센트를_쓰고_근거를_남긴다
 def test_SCM이_전량_허용하면_분할안이_그대로라_재승인_없이_확정(store):
     eng, _, cid, st = scene2(store, ACCEPT, SCM_FULL)
     r = to_scm_reply(eng, store, cid, st, "전량 허용합니다.")
-    assert r["status"] == "2차 잠금" and store.events(cid, kind="재승인알림") == []
+    # 전량 허용이면 1차 = 하루 수량 전부라 2차가 없다 → 바로 1차 집행
+    assert r["status"] == "1차 집행" and store.events(cid, kind="재승인알림") == []
     f = store.get_case(cid)["facts"]
-    assert f["scm"]["state"] == "전량 허용" and f["phase1"]["qty"] == f["split"]["phase1_qty"]
+    assert f["scm"]["state"] == "전량 허용" and f["phase1"]["qty"] == f["split"]["phase1_qty"] and f["phase2"] is None
 
 
 def test_SCM이_수량_없이_애매하게_답하면_사람확인(store):
@@ -417,10 +612,13 @@ def test_예약할_재고가_모자라면_공지를_막는다(store):
 
 
 def test_갱신이_확정되면_2차_차단이_풀리고_2차_날짜가_정해진다(store):
-    eng, _, cid, st = scene2(store, ACCEPT, SCM_REFUSE, name="scenario_2_reject")
-    for i in range(6):
-        eng.play(st[i])
+    eng, _, cid, st = scene2(store, ACCEPT, SCM_PART)
+    # 계약 만료가 2차 날짜(8/24)보다 이른 상황(등록부 계약 만료를 8/10으로)
+    eng.update_contract(store.list_contracts()[0]["id"], {"expiry_date": "2026-08-10"}, "계약 담당자")
+    to_scm_reply(eng, store, cid, st, "3,000개까지 허용합니다.")
+    eng.play(st[4]); eng.play(st[5])
     assert store.get_case(cid)["status"] == "2차 차단"
+    assert store.get_case(cid)["facts"]["phase2"]["date"] is None
     ccid = eng.open_contract("INF-001")
     eng.decide(ccid, "그룹 CEO", "승인")
     eng.decide(ccid, "이사회", "승인")
@@ -428,7 +626,7 @@ def test_갱신이_확정되면_2차_차단이_풀리고_2차_날짜가_정해�
     eng.advance(store.get_clock() + timedelta(days=1))
     assert store.get_case(cid)["status"] == "2차 잠금"
     p2 = store.get_case(cid)["facts"]["phase2"]
-    assert p2["date"] == "2026-09-17" and p2["qty"] > 0
+    assert p2["date"] == "2026-08-24" and p2["qty"] == 12996
 
 
 def test_실행_점검은_갱신_미확정이면_만료_뒤를_막는다(store):
@@ -566,6 +764,7 @@ def test_승인된_계약은_기한이_지나도_기본거부되지_않는다(st
 
 def test_필요한_승인이_모였으면_SCM_회신을_기다려도_기한에_기본거부되지_않는다(store):
     eng, _, cid, st = scene2(store, ACCEPT)
+    store.change_policy("scm.no_reply_days", 30, "시험", "무응답 처리 전에 기한이 지나는 경우를 본다")
     eng.play(st[0]); eng.play(st[1]); eng.play(st[2])  # 승인은 모였고 SCM 응답만 남음
     eng.advance(date(2026, 7, 20))  # 확정 기한(7/17) 지남
     assert store.get_case(cid)["status"] == "승인 대기"
@@ -574,6 +773,7 @@ def test_필요한_승인이_모였으면_SCM_회신을_기다려도_기한에_�
 
 def test_승인이_모자라면_SCM_회신을_받아도_기한에_기본거부된다(store):
     eng, _, cid, st = scene2(store, ACCEPT)
+    store.change_policy("scm.no_reply_days", 30, "시험", "무응답 처리 전에 기한이 지나는 경우를 본다")
     eng.play(st[0]); eng.play(st[1])  # 이사회 승인 없음
     eng.advance(date(2026, 7, 17))
     assert store.get_case(cid)["status"] == "확정 보류"

@@ -111,3 +111,18 @@ def stock_state(day: date) -> list[SkuState]:
     return [SkuState(r["sku_id"], r["sku_name"], r["category"], sku_stock(r["sku_id"], day),
                      _recent_avg_sales(r["sku_id"]), r["safety_stock_weeks_min"], r["safety_stock_weeks_max"])
             for r in _skus()]
+
+
+def line_last_inbound(category: str) -> date:
+    """라인 상품의 모든 발주 중 가장 늦은 입고일. 이 날 뒤에는 장부에 더 들어올 재고가 없어 여유는 줄기만 한다."""
+    last = [arrive for s in line_skus(category) for arrive, _ in _inbound(s, date.min)]
+    return max(last) if last else date.min
+
+
+def spare_path(category: str, start: date, end: date) -> list[tuple[date, int]]:
+    """start부터 end까지(양끝 포함) 날마다 쓸 수 있는 재고(line_spare)."""
+    out, day = [], start
+    while day <= end:
+        out.append((day, line_spare(category, day)))
+        day += timedelta(days=1)
+    return out

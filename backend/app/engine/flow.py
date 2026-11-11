@@ -6,8 +6,11 @@
 - AI 판정은 ai_judgments(store.add_judgment)에, 비용은 제공자(BudgetedProvider)가 ai_calls에 남긴다.
 - 부서 요청은 목적(purpose)을 달고, 회신이 수용으로 해석되면 목적별 처리기(_handlers)가 사실을 바꾼다.
   처리기가 사람 확인 사유(문자열)를 돌려주면 사실을 바꾸지 않고 사람 확인으로 넘긴다.
-- 물류가 처리 능력을 숫자로 답하면 재고 장부(calc.inventory)와 같은 퍼센트 배분(rules.allocate)으로 1차 집행일의
-  쓸 수 있는 재고를 보고, 모자라면 SCM에 안전재고 사용을 묻는다. 수량은 SCM이 정하고, 분할안이 바뀌면 재승인이다.
+- 물류가 회신하면 모든 건이 재고 장부(calc.inventory)와 같은 퍼센트 배분(rules.allocate)으로 1차 집행일의
+  쓸 수 있는 재고를 본다(처리량 숫자가 없으면 처리 능력 제한 없음). 요청 단위는 집행일 하루 수량이다.
+  모자라면 SCM에 안전재고 사용을 묻고 수량은 SCM이 정하며, 분할안이 바뀌면 재승인이다.
+  SCM 거절·무응답(scm.no_reply_days)은 장부를 앞으로 돌려 여유가 1차 수량 이상 생기는 첫날로 연기하고, 없거나 계약 만료 뒤면 1차 차단.
+  등록부 집행일이 바뀌면 재고 점검·분할안을 새 날짜로 다시 돌린다.
 - 1차 날짜는 phase1_date(등록부 집행일에서 엔진이 옮긴 날짜 shift 포함), 2차는 STAGES["2차"]에 따로 둔다.
 """
 from __future__ import annotations
@@ -46,10 +49,11 @@ S_PHASE1, S_PHASE2_LOCK, S_PHASE2_HOLD, S_DONE = "1차 집행", "2차 잠금", "
 S_REVIEW, S_RENEW_OK, S_CHANGE_OK, S_AGREED = "검토", "갱신 승인", "조건변경 승인", "합의"
 S_REAPPROVAL = "재승인 대기"  # 받은 승인이 무효가 되어 새로 받아야 함(설계 4.1·4.2 변경 통보)
 S_PHASE2_BLOCKED = "2차 차단"  # 갱신 미확정인데 2차 집행일이 계약 만료 뒤(설계 4.6)
+S_PHASE1_BLOCKED = "1차 차단"  # SCM 거절 뒤 장부를 돌려도 1차 수량을 받칠 날이 없거나 계약 만료 뒤(사용자 결정 2026-11-11)
 S_NOTICE_DRAFT, S_NOTICE_SENT, S_WAIT_PARTNER, S_HUMAN = "통보 초안", "통보 발송", "상대 회신 대기", "사람 확인"
 APPROVAL_STATES = (S_WAIT_APPROVAL, S_REAPPROVAL)
 OPEN = {KIND_PLAN: (S_WAIT_REPLY, *APPROVAL_STATES), KIND_CONTRACT: (S_REVIEW, *APPROVAL_STATES)}
-TERMINAL = {KIND_PLAN: (S_REJECTED, S_HOLD, S_DONE), KIND_CONTRACT: (S_REJECTED, S_AGREED)}
+TERMINAL = {KIND_PLAN: (S_REJECTED, S_HOLD, S_DONE, S_PHASE1_BLOCKED), KIND_CONTRACT: (S_REJECTED, S_AGREED)}
 RENEWAL_CONFIRMED = (S_RENEW_OK, S_CHANGE_OK, S_AGREED)
 
 # 요청 상태와 목적
@@ -78,7 +82,7 @@ COLOR_REVIEW = "색상불일치"  # 리뷰 해석 사유 값
 NO_VOLUME = "추정 불가 — 담당자 입력 필요"
 ALLOC_HOLD, ALLOC_FULL, ALLOC_PARTIAL = "보류", "전량", "조건부"
 EV_WARN, EV_REPORT, EV_REAPPROVE, EV_DRIFT = "조기경고", "그룹보고", "재승인알림", "등록부변경경고"
-EV_SPLIT, EV_STOCK, EV_ANNOUNCE = "분할안변경", "재고부족", "공지"
+EV_SPLIT, EV_STOCK, EV_ANNOUNCE, EV_BLOCK = "분할안변경", "재고부족", "공지", "1차차단"
 SCM_ASKED, SCM_FULL, SCM_PARTIAL, SCM_REFUSED = "요청", "전량 허용", "일부 허용", "거절"
 ORDER_ADJUST, MEASURE = "발주 조정 요청", "측정 요청"
 # 사건 사실 ← 등록부 열(등록부가 원천). 바뀌면 사실을 새로 읽고 다시 판정한다.
@@ -279,6 +283,7 @@ class Engine:
             "approvers": list(dec.approvers), "approver_hits": _hits(dec.hits), "approved_roles": [],
             "volume": vol, "allocation": ALLOC_HOLD, "warned_targets": [], "phase1": None, "phase2": None,
             "phase1_date": plan["settlement_date"], "shift": None, "split": None, "stock": None, "scm": None,
+            "curve_anchor": plan["settlement_date"],  # 일별 물량 곡선이 놓인 집행일(등록부 집행일을 옮기면 곡선도 같은 만큼 옮김)
         }
         cid = self.store.create_case(KIND_PLAN, plan_id, facts, S_DRAFT)
         if vol["units"] is None:
@@ -406,6 +411,7 @@ class Engine:
         out: list[dict] = []
         for case in self.store.list_cases():
             out += self._refresh(case["id"], cache)
+            out += self._scm_timeout(self.store.get_case(case["id"]), d)
             case = self.store.get_case(case["id"])
             out += self._phase2_refresh(case["id"])
             if case["status"] not in OPEN[case["kind"]]:
@@ -515,6 +521,9 @@ class Engine:
                         "before": list(change.before), "after": list(change.after), "reason": change.reason})
         if changes or change is not None:
             self.store.update_facts(case_id, f, actor, "등록부 반영·승인권자 재판정")
+        if case["kind"] == KIND_PLAN and "settlement_date" in changes and f.get("logistics"):
+            self._recheck_stock(case_id)  # 집행일이 바뀌었으니 재고 점검·분할안을 새 날짜로 다시 돌린다
+            f = self.store.get_case(case_id)["facts"]
         material = [k for k in MATERIAL[case["kind"]] if k in changes]
         if f.get(ok_key) and (material or change is not None):
             out += self._invalidate(case_id, material, changes, change, actor)
@@ -660,9 +669,9 @@ class Engine:
         else:
             f["allocation"] = ALLOC_FULL if j.stance == "수용" else ALLOC_PARTIAL
         self.store.update_facts(case_id, f, "AI", "물류 회신 반영")
-        # 처리 능력을 숫자(평소·최대)로 답한 건만 재고 장부와 배분을 계산한다. "전량 가능"만 답하면 물량 전체를 가능으로 본다.
-        if f["volume"]["units"] is not None and (stable is not None or maximum is not None):
-            self._check_stock(case_id, stable, maximum)
+        # 모든 건이 재고 장부를 거친다(사용자 결정 2026-11-11). 처리량 숫자가 없으면 처리 능력을 제한 없음(회신 수용 = 요청 수량)으로 본다.
+        if f["volume"]["units"] is not None:
+            self._check_stock(case_id)
 
     def _on_content_fix(self, case_id: int, req: dict, j: judge.ReplyJudgment, text: str) -> None:
         f = self.store.get_case(case_id)["facts"]
@@ -693,24 +702,34 @@ class Engine:
         return any(r["purpose"] == P_STOCK and r["status"] != R_DONE for r in self.store.list_requests(case_id))
 
     def _active_loads(self, day: date) -> tuple[dict[str, int], dict[str, str]]:
-        """day에 물량이 있는 진행 중 기안(등록부 사건)의 원하는 양과 기안이 속한 라인."""
-        active = {c["ref_id"]: c["facts"]["volume"]["product_line"] for c in self.store.list_cases(KIND_PLAN)
+        """day에 물량이 있는 진행 중 기안(등록부 사건)의 원하는 양과 기안이 속한 라인.
+        등록부 집행일을 옮긴 기안은 일별 물량 곡선도 같은 만큼 옮겨 읽는다(곡선은 원본 집행일에 놓여 있음)."""
+        active = {c["ref_id"]: c["facts"] for c in self.store.list_cases(KIND_PLAN)
                   if c["status"] not in TERMINAL[KIND_PLAN] and (c["facts"].get("volume") or {}).get("units") is not None}
-        loads = volume_calc.total_daily_load(day, day).get(day, {})
-        demand = {pid: round(q) for pid, q in loads.items() if pid in active and round(q) > 0}
-        return demand, {pid: active[pid] for pid in demand}
+        loads = volume_calc.total_daily_load(date.min, date.max)
+        demand: dict[str, int] = {}
+        for pid, f in active.items():
+            moved = (_d(f["settlement_date"]) - _d(f.get("curve_anchor") or f["settlement_date"])).days
+            q = round(loads.get(day - timedelta(days=moved), {}).get(pid, 0))
+            if q > 0:
+                demand[pid] = q
+        return demand, {pid: active[pid]["volume"]["product_line"] for pid in demand}
 
-    def _check_stock(self, case_id: int, stable: int | None, maximum: int | None) -> None:
-        """1차 집행일의 물류 몫(같은 퍼센트 배분)과 재고 장부의 쓸 수 있는 재고를 비교한다.
-        모자라면 SCM에 안전재고 사용을 묻고(수량은 SCM이 정한다), SCM이 필요한 양을 모두 허용한다고 본 첫 분할안을 만든다."""
+    def _check_stock(self, case_id: int) -> None:
+        """1차 집행일의 물류 몫(같은 퍼센트 배분)과 재고 장부의 쓸 수 있는 재고를 비교한다. 모든 건이 거친다.
+        요청 단위는 집행일 하루 수량(day_qty)이다. 모자라면 SCM에 안전재고 사용을 묻고(수량은 SCM이 정한다),
+        SCM이 필요한 양을 모두 허용한다고 본 첫 분할안(1차 = 물류 몫, 2차 = 하루 수량 − 1차)을 만든다."""
         case = self.store.get_case(case_id)
         f, ref = case["facts"], case["ref_id"]
+        lg = f["logistics"]
+        stable, maximum = lg["stable"], lg["maximum"]
         line, units, d1 = f["volume"]["product_line"], f["volume"]["units"], _d(f["phase1_date"])
-        cap, cap_hits = usable_capacity(stable, maximum)
+        cap, cap_hits = usable_capacity(stable, maximum)  # 숫자가 없으면 None = 처리 능력 제한 없음(회신 수용 = 요청 수량)
         demand, line_of = self._active_loads(d1)
         want = demand.get(ref, 0)
         room = {ln: sum(demand.values()) + 1 for ln in set(line_of.values())}  # 재고 제약 없이 물류 몫만 본다
         share = min(units, allocate_day(d1, demand, line_of, room, cap).shipped.get(ref, 0)) if want else 0
+        day_qty = min(units, want)
         spare = inventory.line_spare(line, d1)
         need = max(0, share - spare)
         daily = inventory.line_daily_sale(line)
@@ -718,18 +737,19 @@ class Engine:
         f["stock"] = {
             "line": line, "day": d1.isoformat(), "line_stock": inventory.line_stock(line, d1),
             "safety_min": inventory.line_safety_min(line), "spare": spare, "stable": stable, "maximum": maximum,
-            "capacity": cap, "capacity_hits": _hits(cap_hits), "want": want, "share": share, "need": need,
-            "shortage": need > 0, "daily_sale": daily, "restock": restock.isoformat(),
+            "capacity": cap, "capacity_hits": _hits(cap_hits), "want": want, "day_qty": day_qty, "share": share,
+            "need": need, "shortage": need > 0, "daily_sale": daily, "restock": restock.isoformat(),
             "days_earlier": stockout_days_earlier(need, daily) if need > 0 and daily > 0 else 0.0,
         }
+        f["split"], f["scm"] = None, None
         if share < want:
             f["allocation"] = ALLOC_PARTIAL
         if need <= 0:
             self.store.update_facts(case_id, f, "시스템", "재고 장부 점검: 여유 충분")
             return
-        sp = make_split(units, share, spare + need, d1, restock, self._windows(), self._split_end(f))
+        sp = make_split(day_qty, share, spare + need, d1, restock, self._windows(), self._split_end(f))
         f["split"] = self._split_dict(sp)
-        f["scm"] = {"state": SCM_ASKED, "need": need, "allow": None}
+        f["scm"] = {"state": SCM_ASKED, "need": need, "allow": None, "asked_on": self._today().isoformat()}
         f["allocation"] = ALLOC_PARTIAL
         self.store.update_facts(case_id, f, "시스템", "재고 장부 점검: 안전재고 위 여유 부족")
         s = f["stock"]
@@ -741,6 +761,20 @@ class Engine:
         self._request_once(case_id, SCM, ask, False, P_STOCK)
         self.store.add_event(case_id, EV_STOCK, "시스템", {"text": ask, "stock": s})
         self._order_adjustments(case_id, d1)
+
+    def _recheck_stock(self, case_id: int) -> None:
+        """등록부 집행일이 바뀌면 분할안·재고 점검을 새 날짜로 다시 돌린다. 이전 날짜로 보낸 SCM 요청은 닫고 새로 묻는다.
+        (받은 승인이 있으면 무효로 하는 것은 집행일이 승인 사실이라 _refresh의 11a 경로가 한다.)"""
+        case = self.store.get_case(case_id)
+        f = case["facts"]
+        if f["volume"]["units"] is None:
+            return
+        for r in self.store.list_requests(case_id):
+            if r["purpose"] == P_STOCK and r["status"] != R_DONE:
+                self.store.set_request_status(r["id"], R_DONE, "시스템", "집행일이 바뀌어 새 날짜로 다시 점검")
+        f["allocation"] = ALLOC_FULL if f["logistics"]["stance"] == "수용" else ALLOC_PARTIAL
+        self.store.update_facts(case_id, f, "시스템", "집행일 변경: 재고 점검 다시")
+        self._check_stock(case_id)
 
     def _order_adjustments(self, case_id: int, day: date) -> None:
         """재고 과잉 상품은 SCM에 발주 조정을 요청한다(같은 상품은 열린 요청이 있으면 다시 만들지 않는다)."""
@@ -780,30 +814,87 @@ class Engine:
         self._apply_scm(case_id, allow, text)
         return None
 
-    def _apply_scm(self, case_id: int, allow: int, text: str) -> None:
+    def _ready_day(self, f: dict, qty: int) -> tuple[date | None, int, str]:
+        """SCM 거절 뒤: 입고 다음 날부터 장부를 앞으로 돌려 라인 여유가 qty 이상 생기는 첫날과 그날 여유.
+        없거나 계약 만료(갱신 미확정) 뒤면 날짜 None과 차단 이유. 장부 전망은 라인의 마지막 입고일까지(그 뒤는 줄기만 함)."""
+        s = f["stock"]
+        restock = _d(s["restock"])
+        first = restock + timedelta(days=1)
+        last = max(inventory.line_last_inbound(s["line"]), first)
+        path = inventory.spare_path(s["line"], first, last)
+        found = next(((d, q) for d, q in path if q >= qty), None)
+        base = f"SCM가 안전재고 사용을 거절했고 입고({_md(restock)}) 다음 날부터 장부를 돌려도"
+        if found is None:
+            best = max(path, key=lambda x: x[1]) if path else None
+            peak = f" (가장 큰 여유 {best[1]:,}개, {_md(best[0])})" if best else ""
+            return None, 0, f"{base} {_md(last)}까지 라인 여유가 1차 수량 {qty:,}개 이상인 날이 없어 1차 차단{peak}"
+        end = self._split_end(f)
+        if found[0] > end:
+            return None, found[1], (f"{base} 여유가 생기는 첫날 {_md(found[0])}이 계약 만료({_md(end)}) 뒤"
+                                    "(갱신 미확정)라 1차 차단")
+        return found[0], found[1], ""
+
+    def _apply_scm(self, case_id: int, allow: int, text: str, actor: str = "AI", no_reply_days: int | None = None) -> None:
         case = self.store.get_case(case_id)
         f = case["facts"]
         s, sc, old = f["stock"], f["scm"], f["split"]
         restock, windows = _d(s["restock"]), self._windows()
         if allow > 0:
             state = SCM_FULL if allow >= sc["need"] else SCM_PARTIAL
-            sp = make_split(f["volume"]["units"], s["share"], s["spare"] + allow,
+            sp = make_split(s["day_qty"], s["share"], s["spare"] + allow,
                             _d(self._phase1_on(f, f["settlement_date"])), restock, windows, self._split_end(f))
             reason = f"SCM {state} {allow:,}개"
         else:
-            # 거절·무응답: 1차를 입고 다음 날로 연기한다. 수량만 줄여 안전재고를 쓰는 우회는 하지 않는다.
-            # 입고분이 1차를 받친다고 보고 수량은 물류 몫 그대로 둔다.
+            # 거절·무응답: 수량만 줄여 안전재고를 쓰는 우회는 하지 않는다. 장부를 앞으로 돌려 여유가 1차 수량 이상 생기는 첫날로 연기하고,
+            # 그런 날이 없거나 계약 만료 뒤면 1차 차단. 1차 수량은 그날 여유와 물류 몫 중 작은 값.
             state = SCM_REFUSED
-            later = restock + timedelta(days=1)
-            sp = make_split(f["volume"]["units"], s["share"], s["share"], later, restock, windows, self._split_end(f))
-            f["shift"] = {"from": f["settlement_date"], "to": later.isoformat(), "reason": "SCM 거절"}
+            why = f"SCM 무응답 {no_reply_days}일(거절로 처리)" if no_reply_days else "SCM 거절"
+            later, spare_then, blocked = self._ready_day(f, s["share"])
+            if later is None:
+                f["scm"] = {**sc, "state": state, "allow": 0, "reply": text}
+                if no_reply_days:
+                    f["scm"]["no_reply_days"] = no_reply_days
+                self._block_phase1(case_id, f, f"{why} — {blocked}", actor)
+                return
+            sp = make_split(s["day_qty"], s["share"], spare_then, later, restock, windows, self._split_end(f))
+            s["spare"], s["day"] = spare_then, later.isoformat()
+            f["shift"] = {"from": f["settlement_date"], "to": later.isoformat(), "reason": why}
             f["phase1_date"] = later.isoformat()
-            reason = f"SCM 거절 — 1차 날짜를 입고 다음 날 {_md(later)}로 연기"
+            reason = f"{why} — 1차 날짜를 장부 여유가 생기는 첫날 {_md(later)}로 연기"
         f["split"] = self._split_dict(sp)
         f["scm"] = {**sc, "state": state, "allow": allow, "reply": text}
-        self.store.update_facts(case_id, f, "AI", f"SCM 응답 반영: {reason}")
+        if no_reply_days:
+            f["scm"]["no_reply_days"] = no_reply_days
+        self.store.update_facts(case_id, f, actor, f"SCM 응답 반영: {reason}")
         self._refresh(case_id, {"windows": windows})  # 날짜가 바뀌었으면 승인권자를 등록부 길로 다시 판정
-        self._reapprove_if_changed(case_id, old, reason, "AI")
+        self._reapprove_if_changed(case_id, old, reason, actor)
+
+    def _block_phase1(self, case_id: int, f: dict, reason: str, actor: str) -> None:
+        """1차 차단: 승인권자·캠페인 담당에게 이유를 알린다. 다시 풀려면 집행일·물량을 바꿔 새 기안으로."""
+        case = self.store.get_case(case_id)
+        f["phase1_blocked"] = {"reason": reason, "at": self._today().isoformat()}
+        self.store.update_facts(case_id, f, actor, f"1차 차단: {reason}")
+        self.store.set_status(case_id, S_PHASE1_BLOCKED, actor, reason)
+        text = f"{case['ref_id']} {reason}"
+        for role in _required_roles(f):
+            self.store.add_event(case_id, EV_BLOCK, actor, {"target": role, "text": text})
+        self._task_once(case_id, CAMPAIGN, "1차 차단 확인", self._today(), text)
+
+    def _scm_timeout(self, case: dict, d: date) -> list[dict]:
+        """SCM이 안전재고 사용 요청에 요청 후 scm.no_reply_days일이 지나도 답이 없으면 거절로 처리한다(사용자 결정).
+        답은 했지만 사람 확인 중인 요청은 무응답이 아니다."""
+        sc = case["facts"].get("scm")
+        if case["kind"] != KIND_PLAN or case["status"] not in OPEN[KIND_PLAN] or not sc or sc["state"] != SCM_ASKED:
+            return []
+        days = policy.get("scm.no_reply_days")
+        waiting = [r for r in self.store.list_requests(case["id"]) if r["purpose"] == P_STOCK and r["status"] == R_WAIT]
+        if not waiting or (d - _d(sc["asked_on"])).days < days:
+            return []
+        self.store.set_request_status(waiting[-1]["id"], R_DONE, "시스템", f"SCM 무응답 {days}일 — 거절로 처리")
+        self._apply_scm(case["id"], 0, f"무응답 {days}일", "시스템", no_reply_days=days)
+        now = self.store.get_case(case["id"])
+        return [{"date": d.isoformat(), "case_id": case["id"], "action": "SCM무응답", "status": now["status"],
+                 "text": f"{case['ref_id']} SCM 무응답 {days}일 — 거절로 처리"}]
 
     def _reapprove_if_changed(self, case_id: int, old: dict, reason: str, actor: str) -> list[dict]:
         """분할안이 바뀌었는데 받은 승인이 있으면 무효로 하고 재승인을 받는다(설계 4.5: 처음 승인한 분할안과 달라지면)."""
@@ -838,7 +929,7 @@ class Engine:
         if qty == old["phase1_qty"]:
             return {"case_id": case_id, "changed": False, "status": case["status"]}
         s = f["stock"]
-        sp = make_split(f["volume"]["units"], qty, qty, _d(old["phase1_date"]), _d(s["restock"]), self._windows(),
+        sp = make_split(s["day_qty"], qty, qty, _d(old["phase1_date"]), _d(s["restock"]), self._windows(),
                         self._split_end(f))
         f["split"] = self._split_dict(sp)
         self.store.update_facts(case_id, f, actor, f"1차 수량 조정 {old['phase1_qty']:,}→{qty:,}")
@@ -975,8 +1066,8 @@ class Engine:
             raise ValueError("부서 회신을 기다리는 중이라 아직 승인할 수 없음")
         if action == D_SPLIT and not f.get("split"):
             raise ValueError("분할안이 없어 분할 승인할 수 없음")
-        if action == D_APPROVE and (f.get("stock") or {}).get("shortage"):
-            raise ValueError("재고 부족으로 1차 수량이 제한되는 건이라 분할 승인만 가능")
+        if action == D_APPROVE and (f.get("stock") or {}).get("shortage") and (f.get("scm") or {}).get("state") != SCM_FULL:
+            raise ValueError("재고 부족으로 1차 수량이 제한되는 건이라 분할 승인만 가능(SCM이 전량 허용하면 승인도 가능)")
         if role in f.get("approved_roles", []):
             return {**base, "changed": False, "status": case["status"], "message": "이미 승인함"}
         self.store.add_approval(case_id, (role,), action, actor, comment)
@@ -1010,7 +1101,9 @@ class Engine:
                 self._phase2_approvers(f, case_id)
         else:
             first = S_APPROVED
-            f["phase1"] = {"qty": f["volume"]["units"], "date": f["settlement_date"]}
+            # 비분할 경로도 분할 경로와 같은 단위(집행일 하루 수량). 하루 수량을 모르면(물량 곡선 밖) 기안 물량 전체.
+            f["phase1"] = {"qty": (f.get("stock") or {}).get("day_qty") or f["volume"]["units"],
+                           "date": f.get("phase1_date") or f["settlement_date"]}
             f["phase2"] = None
         self.store.update_facts(case_id, f, "시스템", "집행 수량 확정")
         self.store.set_status(case_id, first, actor, "승인권자 전원 승인")
@@ -1146,7 +1239,7 @@ class Engine:
         if p2.get("date"):
             return
         line = f["volume"]["product_line"]
-        sp = make_split(f["volume"]["units"], p1["qty"], p1["qty"], _d(p1["date"]), inventory.line_restock_date(line),
+        sp = make_split(p1["qty"] + p2["qty"], p1["qty"], p1["qty"], _d(p1["date"]), inventory.line_restock_date(line),
                         self._windows(), date.max)
         p2["date"] = sp.phase2_date.isoformat() if sp.phase2_date else None
         if p2["date"]:
@@ -1192,7 +1285,7 @@ class Engine:
             if (c and e["detail"]["target"] == role and c["status"] in OPEN[c["kind"]]
                     and self._warn_target(c["facts"]) == role):
                 out["기한 임박"].append({**self._item(c), "text": e["detail"]["text"]})
-        for kind in (EV_REPORT, EV_REAPPROVE):
+        for kind in (EV_REPORT, EV_REAPPROVE, EV_BLOCK):
             for e in self.store.events(kind=kind):
                 c = cases.get(e["case_id"])
                 if c and e["detail"]["target"] == role:

@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 
 from app.calc.inventory import restock_date, spare_stock
 
@@ -66,3 +66,20 @@ def test_재고_상태에서_재고_과잉은_립과_쿠션():
     alerts = stock_alerts({r.sku_id: max(0, round(r.stock)) for r in rows}, {r.sku_id: r.weekly_sale for r in rows},
                           {r.sku_id: r.min_weeks for r in rows}, {r.sku_id: r.max_weeks for r in rows})
     assert sorted(s for s, kind in alerts if kind == "재고 과잉") == ["SKU-3001", "SKU-3002"]
+
+
+def test_라인_마지막_입고일은_모든_발주의_가장_늦은_도착일():
+    assert inventory.line_last_inbound("기초") >= inventory.line_restock_date("기초")
+
+
+def test_여유_경로는_날마다_쓸_수_있는_재고를_돌려준다():
+    path = inventory.spare_path("기초", date(2026, 8, 19), date(2026, 8, 21))
+    assert [d for d, _ in path] == [date(2026, 8, 19), date(2026, 8, 20), date(2026, 8, 21)]
+    assert all(q == inventory.line_spare("기초", d) for d, q in path)
+    assert inventory.spare_path("기초", date(2026, 8, 21), date(2026, 8, 19)) == []
+
+
+def test_입고가_끝난_뒤에는_평소_판매만큼_여유가_줄기만_한다():
+    last = inventory.line_last_inbound("기초")
+    a, b = (inventory.line_spare("기초", last + timedelta(days=n)) for n in (1, 2))
+    assert a >= b

@@ -202,3 +202,11 @@ def test_값_검증은_자료형_양수_빈문자열을_본다():
 def test_품절_손실_비율은_설계값이고_출처가_있다():
     value, source, desc = policy.entry("scm.stockout_loss_pct")
     assert value == 0.04 and "설계 4.5" in source and desc.strip()
+
+
+def test_SCM_무응답_일수는_사용자_지정_3일():
+    value, source, desc = policy.entry("scm.no_reply_days")
+    assert value == 3 and "사용자 지정(2026-11-11)" in source and desc.strip()
+    assert policy.validate("scm.no_reply_days", 5) == 5
+    with pytest.raises(ValueError):
+        policy.validate("scm.no_reply_days", 0)
