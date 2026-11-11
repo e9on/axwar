@@ -14,6 +14,9 @@
 - 2차 승인·집행(설계 7.3): 2차 게이트가 모두 풀리고 판매율 판정이 조절·유지(보류 아님)로 끝나면 2차 승인 대기. 승인 기한 =
   max(2차 집행일 - phase2.prep_days, 진입일 + phase2.min_approval_days). 조기 경고·방치 올림·기본 거부는 1차와 같은 장치.
   모두 승인 → 2차 집행(물류 출고·CS 대비, 날짜 = 2차 집행일) → 집행일이 지나면 완료. 거절·기본 거부 → 2차 없이 완료(통보 없음).
+- 시연·운영 분리(최종 수정 H1): 기준일 이동·일일 점검·대본·할 일·캘린더·재고 장부·갱신 확정은 지금 모드의 사건(origin)만 본다.
+  운영 모드는 API 요청이 들어올 때 오늘 점검이 안 돌았으면 먼저 돌린다(ensure_daily_check). 결정·상신도 확정 기한이 지났으면(당일까지 허용) 기본 거부.
+- 계약 건 거절·기본 거부는 모두 조건변경 통보 초안으로 이어진다(통보 기한이 지나도록 미발송이면 경고·방치 올림).
 - 1차 날짜는 phase1_date(등록부 집행일에서 엔진이 옮긴 날짜 shift 포함), 2차는 STAGES["2차"]에 따로 둔다.
 """
 from __future__ import annotations
@@ -42,7 +45,7 @@ from app.rules.capacity import parse_capacity
 from app.rules.deadline import deadline_actions
 from app.rules.models import ApproverChange, ApproverDecision, ContractFacts, PlanFacts, RuleHit
 from app.rules.split import GateResult, make_split, phase2_gate
-from app.store.db import CLOCK_LOCKED, MODE_OPERATION, Store
+from app.store.db import CASE_DEMO, CASE_OPERATION, CLOCK_LOCKED, MODE_OPERATION, Store
 
 KIND_PLAN, KIND_CONTRACT = "기안", "계약"
 
@@ -60,6 +63,7 @@ S_NOTICE_DRAFT, S_NOTICE_SENT, S_WAIT_PARTNER, S_HUMAN = "통보 초안", "통�
 APPROVAL_STATES = (S_WAIT_APPROVAL, S_REAPPROVAL)
 OPEN = {KIND_PLAN: (S_WAIT_REPLY, *APPROVAL_STATES), KIND_CONTRACT: (S_REVIEW, *APPROVAL_STATES)}
 TERMINAL = {KIND_PLAN: (S_REJECTED, S_HOLD, S_DONE, S_PHASE1_BLOCKED), KIND_CONTRACT: (S_REJECTED, S_AGREED)}
+CONTRACT_ENDED = (*TERMINAL[KIND_CONTRACT], S_RENEW_OK)  # 이 상태면 같은 인플루언서의 다음 계약 기간 사건을 새로 열 수 있다(M2)
 RENEWAL_CONFIRMED = (S_RENEW_OK, S_CHANGE_OK, S_AGREED)
 
 # 요청 상태와 목적
@@ -73,6 +77,8 @@ SCM, MARKETING, PARTNER = "SCM", "마케팅팀", "인플루언서 측"
 LIVE = "라이브"  # 원본 판매 채널 값: 라이브 방송 판매는 전용 코드로 효과를 가른다
 # 거절이 "애매한 회신"이 아니라 그 부서의 결정인 요청 목적(SCM이 안전재고 사용을 거절하는 것은 정해진 답)
 DEFINITIVE_REFUSAL = (P_STOCK,)
+# 값이 역할 목록(쉼표로 구분)인 정책 항목: 바꿀 때 모르는 역할을 넣을 수 없다
+ROLE_LIST_KEYS = ("admin.policy_editors", "admin.review_inputters", "admin.return_inputters", "admin.registry_editors")
 # 조건변경 통보 재협상안(설계 5.2): 성과 피 기준을 총매출이 아니라 공제 후 순액으로. 고정 피 금액은 시스템이 정하지 않는다.
 NET_BASE = "공제 후 순액"
 NET_DEDUCTIONS = ("반품 환불", "쿠폰", "채널 수수료")
@@ -95,6 +101,9 @@ EV_STALE = "방치올림"  # 담당이 처리하지 않은 사람 확인·판단
 EV_DECIDE = "판매율판단"  # 판매율 보류 건에 대한 담당의 2차 계속·취소 판단(컨트롤러 판정 10)
 STALE_SCM_HUMAN, STALE_PHASE2_HOLD = "SCM 사람 확인", "2차 보류 판단"  # 방치 올림 대상 종류(두 번째는 작업 제목과 같음)
 STALE_PHASE2_WAIT = "2차 승인"  # 2차 승인 대기 건의 방치 올림 키
+STALE_NOTICE = "통보 발송"  # 통보 기한이 지나도록 통보 초안이 발송되지 않은 계약 건의 방치 올림 키(작업 제목과 같음)
+EV_P2_HOLD, EV_P2_EXCEPTION = "2차보류", "2차예외승인"
+CHOICE_EXCEPTION = "예외 승인"
 EV_P2_WAIT, EV_P2_DECIDE, EV_P2_DONE = "2차승인대기", "2차결정", "2차완료"
 P2_REJECT, P2_DENY, P2_EXECUTED = "거절", "기본 거부", "집행"  # phase2_result.result 값
 P2_NONE = "2차 없음"  # 2차 취소·판매율 조절 0개로 2차가 없어진 건이 반품 관찰을 마치고 완료될 때의 결과
@@ -227,9 +236,23 @@ class Engine:
                 return r["id"]
         return self.store.add_request(case_id, dept, text, attach, purpose=purpose)
 
+    def _mode_origin(self) -> str:
+        """지금 모드가 다루는 사건 출처: 운영 모드는 운영 사건, 시연 모드는 시연 사건(H1: 서로의 사건을 건드리지 않는다)."""
+        return CASE_OPERATION if self.store.get_mode() == MODE_OPERATION else CASE_DEMO
+
+    def _cases(self, kind: str | None = None) -> list[dict]:
+        """지금 모드의 사건만(기준일 이동·점검·대본·할 일·캘린더·재고 장부·갱신 확정이 모두 이것을 본다)."""
+        origin = self._mode_origin()
+        return [c for c in self.store.list_cases(kind) if c["origin"] == origin]
+
     def _find_case(self, kind: str, ref_id: str) -> dict | None:
-        rows = [c for c in self.store.list_cases(kind) if c["ref_id"] == ref_id]
+        rows = [c for c in self._cases(kind) if c["ref_id"] == ref_id]
         return rows[-1] if rows else None
+
+    def _guard_open(self, kind: str, ref_id: str) -> None:
+        """운영 모드에서 시연 등록부 행으로는 사건을 열 수 없다(시연 출처 사건은 운영 점검이 보지 않으므로)."""
+        if self.store.case_origin(kind, ref_id) != self._mode_origin():
+            raise ValueError(f"{ref_id}는 시연 등록부 행이라 운영 모드에서 사건을 열 수 없음")
 
     def role_of(self, person: str) -> str:
         """보는 사람의 역할. 역할 이름을 사람 대신 받는 것은 시연 모드에서만."""
@@ -295,6 +318,7 @@ class Engine:
         if found is not None:
             return found["id"]
         plan = self.store.get_plan(plan_id)
+        self._guard_open(KIND_PLAN, plan_id)
         dec, ind, total = self._plan_decision(plan, self._windows())
         vol = self._volume(plan)
         facts = {
@@ -319,12 +343,16 @@ class Engine:
     @_locked
     def open_contract(self, influencer_code: str, actor: str = "시스템") -> int:
         """등록부의 전속계약으로 갱신 검토 사건을 연다(이미 있으면 그 사건). 승인 대기."""
-        found = self._find_case(KIND_CONTRACT, influencer_code)
-        if found is not None:
-            return found["id"]
         c = scenarios.registry_contract(self.store, influencer_code)
         if c is None:
             raise KeyError(f"등록부에 없는 전속계약: {influencer_code}")
+        mine = [x for x in self._cases(KIND_CONTRACT) if x["ref_id"] == influencer_code]
+        same_period = [x for x in mine if x["facts"].get("contract_row_id") == c["id"]]
+        if same_period:
+            return same_period[-1]["id"]
+        if mine and mine[-1]["status"] not in CONTRACT_ENDED:
+            return mine[-1]["id"]  # 이전 기간 사건이 아직 진행 중이면 그 사건(끝난 뒤에야 다음 기간 사건을 연다)
+        self._guard_open(KIND_CONTRACT, influencer_code)
         dec, ind = self._contract_decision(c, self._windows())
         facts = {
             "contract_row_id": c["id"], "influencer_code": influencer_code, "influencer_name": c["influencer_name"],
@@ -438,7 +466,7 @@ class Engine:
     def change_policy(self, actor: str, key: str, value, reason: str) -> None:
         """정책 값을 바꾼다(검증·이력은 저장소). 편집 역할 목록을 바꿀 때는 모르는 역할을 넣을 수 없다."""
         self._require_policy_editor(actor, "정책")
-        if key == "admin.policy_editors":
+        if key in ROLE_LIST_KEYS:
             names = [r.strip() for r in str(value).split(",") if r.strip()]
             bad = [r for r in names if r not in scenarios.ROLES]
             if not names or bad:
@@ -448,7 +476,7 @@ class Engine:
     @_locked
     def set_mode(self, actor: str, mode: str) -> None:
         self._require_policy_editor(actor, "실행 모드")
-        self.store.set_mode(mode)
+        self.store.set_mode(mode, actor)
 
     # ---------------------------------------------------------------- 기준일·기한
 
@@ -474,17 +502,31 @@ class Engine:
     @_locked
     def check_deadlines(self) -> list[dict]:
         """오늘(운영은 실제 오늘) 기준으로 기한·승인권자를 점검한다. 여러 번 불러도 같은 조치를 두 번 하지 않는다."""
-        return self._daily(self._today(), {"windows": self._windows()})
+        out = self._daily(self._today(), {"windows": self._windows()})
+        if self.store.get_mode() == MODE_OPERATION:
+            self.store.set_last_daily_check(self._today())  # 오늘 점검을 마쳤다(H5: 같은 날 요청마다 다시 돌지 않게)
+        return out
+
+    def ensure_daily_check(self) -> list[dict]:
+        """운영 모드에서 오늘의 일일 점검이 아직 안 돌았으면 한 번 돌린다(요청이 들어올 때·서버 시작 때). 멱등: 마지막 점검일을 저장소에 기록.
+        이미 돌았는지는 엔진 잠금 없이 먼저 본다(요청마다 잠금을 기다리지 않게)."""
+        def done() -> bool:
+            return self.store.get_mode() != MODE_OPERATION or self.store.last_daily_check() == self._today()
+        if done():
+            return []
+        with self._lock:
+            return [] if done() else self.check_deadlines()
 
     def _daily(self, d: date, cache: dict) -> list[dict]:
         out: list[dict] = []
-        for case in self.store.list_cases():
+        for case in self._cases():
             out += self._refresh(case["id"], cache)
             out += self._scm_timeout(self.store.get_case(case["id"]), d)
             case = self.store.get_case(case["id"])
             out += self._phase2_refresh(case["id"])
             out += self._escalate_phase2_hold(self.store.get_case(case["id"]), d)
             out += self._phase2_daily(self.store.get_case(case["id"]), d)
+            out += self._notice_overdue(self.store.get_case(case["id"]), d)
             if case["status"] not in OPEN[case["kind"]]:
                 continue
             # 필요한 승인이 모두 있는데 다른 부서 회신(SCM)만 기다리는 건은 승인된 건이다
@@ -505,15 +547,47 @@ class Engine:
 
     # ---------------------------------------------------------------- 등록부 반영·재판정·확정 (한 경로)
 
+    def require_registry_editor(self, actor: str) -> str:
+        """기안·계약 등록부를 쓸 수 있는 역할인지(정책 admin.registry_editors). 아니면 PermissionError. 역할을 돌려준다."""
+        role = self.role_of(actor)
+        editors = [r.strip() for r in policy.get("admin.registry_editors").split(",") if r.strip()]
+        if role not in editors:
+            raise PermissionError(f"{actor}({role})는 등록부를 바꿀 수 없음 — {'·'.join(editors)}만")
+        return role
+
+    def _row_origin_for_new(self) -> str:
+        """지금 화면에서 등록하는 등록부 행의 출처: 시연 모드는 시연(초기화 때 지워짐), 운영 모드는 화면."""
+        return "화면" if self.store.get_mode() == MODE_OPERATION else "시연"
+
+    def _require_row_editable(self, row: dict) -> None:
+        """시연 모드에서는 시연 출처 행만 고친다(운영·가져오기 행을 시연 중에 고쳐 운영 데이터가 바뀌지 않게)."""
+        if self.store.get_mode() != MODE_OPERATION and row["origin"] != "시연":
+            raise PermissionError("시연 모드에서는 시연 등록부 행만 고칠 수 있음 — 운영 등록부 행은 운영 모드에서 고칠 것")
+
+    @_locked
+    def add_plan(self, fields: dict, actor: str) -> int:
+        self.require_registry_editor(actor)
+        return self.store.add_plan(fields, actor, origin=self._row_origin_for_new())
+
+    @_locked
+    def add_contract(self, fields: dict, actor: str) -> int:
+        self.require_registry_editor(actor)
+        return self.store.add_contract(fields, actor, origin=self._row_origin_for_new())
+
     @_locked
     def update_plan(self, plan_id: str, fields: dict, actor: str) -> list[dict]:
         """등록부 기안을 고치고(화면 수정) 그 기안의 사건을 바로 다시 판정한다."""
-        self.store.update_plan(self.store.get_plan(plan_id)["id"], fields, actor)
+        self.require_registry_editor(actor)
+        row = self.store.get_plan(plan_id)
+        self._require_row_editable(row)
+        self.store.update_plan(row["id"], fields, actor)
         return self._refresh_where(lambda c: c["kind"] == KIND_PLAN and c["ref_id"] == plan_id, actor)
 
     @_locked
     def update_contract(self, contract_row_id: int, fields: dict, actor: str) -> list[dict]:
         """등록부 계약을 고치고 그 계약의 사건을 바로 다시 판정한다."""
+        self.require_registry_editor(actor)
+        self._require_row_editable(self.store.get_contract(contract_row_id))
         self.store.update_contract(contract_row_id, fields, actor)
         return self._refresh_where(
             lambda c: c["kind"] == KIND_CONTRACT and c["facts"].get("contract_row_id") == contract_row_id, actor)
@@ -526,7 +600,7 @@ class Engine:
     def _refresh_where(self, pick, actor: str) -> list[dict]:
         cache: dict = {"windows": self._windows()}
         out: list[dict] = []
-        for c in self.store.list_cases():
+        for c in self._cases():
             if pick(c):
                 out += self._refresh(c["id"], cache, actor)
         return out
@@ -846,6 +920,17 @@ class Engine:
             raise ValueError("사람 확인 상태인 요청은 회신이 아니라 사람 확인 처리로만 받을 수 있음")
         return self.reply(request_id, text, attachments)
 
+    def _lapsed_deny(self, case: dict, base: dict) -> dict | None:
+        """H5: 결정·상신이 들어왔는데 확정 기한이 이미 지났으면(기한 당일까지는 허용) 기본 거부로 처리하고 그 결과를 돌려준다.
+        지금 모드의 사건에만 적용한다(다른 모드의 사건에 이 모드의 시계를 대지 않는다)."""
+        today = self._today()
+        if case["origin"] != self._mode_origin() or today <= _d(case["facts"]["deadline"]):
+            return None
+        res = self._default_deny(case, today)
+        deadline = _md(_d(case["facts"]["deadline"]))
+        return {**base, "changed": False, "status": res["status"],
+                "message": f"확정 기한 {deadline}이 지나 기본 거부로 처리함 — 결정을 받지 않음"}
+
     def _default_deny(self, case: dict, d: date) -> dict:
         """기한까지 승인 없음 → 기본 거부(설계 3장 2번·4.3). 기안은 확정 보류(철회)."""
         deadline = _md(_d(case["facts"]["deadline"]))
@@ -859,6 +944,26 @@ class Engine:
         else:
             status = self._draft_notice(case, d)
         return {"date": d.isoformat(), "case_id": case["id"], "action": "기본거부", "status": status}
+
+    def _notice_overdue(self, case: dict, d: date) -> list[dict]:
+        """통보 초안이 통보 기한이 지나도록 발송되지 않았으면 계약 담당에게 경고하고(한 번), 정책 일수가 더 지나면 방치 올림.
+        통보가 나가지 않으면 자동 갱신된다(설계 4.3·7.4)."""
+        f = case["facts"]
+        if case["kind"] != KIND_CONTRACT or case["status"] != S_NOTICE_DRAFT or d <= _d(f["deadline"]):
+            return []
+        out: list[dict] = []
+        if not f.get("notice_overdue_warned_on"):
+            text = (f"{case['ref_id']} 통보 기한 {_md(_d(f['deadline']))}이 지났는데 조건변경 통보가 발송되지 않음 — "
+                    "통보하지 않으면 계약이 자동 갱신됨")
+            self.store.add_event(case["id"], EV_WARN, "시스템", {"target": CONTRACT_OWNER, "pending": [], "text": text,
+                                                             "deadline": f["deadline"], "notice_overdue": True})
+            f["notice_overdue_warned_on"] = d.isoformat()
+            self.store.update_facts(case["id"], f, "시스템", "통보 기한 초과 경고")
+            out.append({"date": d.isoformat(), "case_id": case["id"], "action": "조기경고", "target": CONTRACT_OWNER,
+                        "text": text})
+        got = self._escalate_stale(self.store.get_case(case["id"]), STALE_NOTICE, _d(f["deadline"]), CONTRACT_OWNER,
+                                   _required_roles(f), "통보 기한", d, "조건변경 통보 미발송")
+        return out + ([got] if got else [])
 
     # ---------------------------------------------------------------- 회신
 
@@ -938,7 +1043,7 @@ class Engine:
         f = self.store.get_case(case_id)["facts"]
         f["content_fix_confirmed"] = True
         self.store.update_facts(case_id, f, "AI", "콘텐츠 수정 확인(첨부 포함)")
-        self._phase2_judge(case_id)  # 리뷰 잠금이 풀렸으면 다음은 판매율
+        self._phase2_refresh(case_id)  # 리뷰 잠금이 풀렸으면 다음은 판매율(이미 판정한 건은 2차 승인 대기로 되돌아감)
 
     # ---------------------------------------------------------------- 재고 장부·SCM (설계 4.5)
 
@@ -947,7 +1052,7 @@ class Engine:
         c = scenarios.registry_contract(self.store, influencer_id) if influencer_id else None
         if c is None:
             return date.max, True
-        return _d(c["expiry_date"]), self._renewal_confirmed(influencer_id)
+        return _d(c["expiry_date"]), self._renewal_confirmed(c)
 
     def _split_end(self, f: dict) -> date:
         """분할안의 2차 날짜 상한: 갱신이 확정됐으면 제한 없음, 아니면 계약 만료일."""
@@ -966,7 +1071,7 @@ class Engine:
     def _active_loads(self, day: date) -> tuple[dict[str, int], dict[str, str]]:
         """day에 물량이 있는 진행 중 기안(등록부 사건)의 원하는 양과 기안이 속한 라인.
         등록부 집행일을 옮긴 기안은 일별 물량 곡선도 같은 만큼 옮겨 읽는다(곡선은 원본 집행일에 놓여 있음)."""
-        active = {c["ref_id"]: c["facts"] for c in self.store.list_cases(KIND_PLAN)
+        active = {c["ref_id"]: c["facts"] for c in self._cases(KIND_PLAN)
                   if c["status"] not in TERMINAL[KIND_PLAN] and (c["facts"].get("volume") or {}).get("units") is not None}
         loads = volume_calc.total_daily_load(date.min, date.max)
         demand: dict[str, int] = {}
@@ -1224,13 +1329,15 @@ class Engine:
         base = {"case_id": case_id, "actor": actor}
         if f.get("announce"):
             return {**base, "changed": False, "qty": f["announce"]["qty"], "message": "이미 공지함"}
+        if case["status"] in TERMINAL[KIND_PLAN] or self._today() > _d(f["phase1"]["date"]):
+            raise ValueError("1차 집행일이 지났거나 끝난 건은 공지할 수 없음")
         fixed = f["phase1"]["qty"]
         if qty is not None and qty != fixed:
             raise ValueError(f"공지 수량은 1차 수량({fixed:,}개)으로 고정")
         d1, s = _d(f["phase1"]["date"]), f.get("stock")
         if s is not None:
             allow = (f.get("scm") or {}).get("allow") or 0
-            others = [c["facts"]["announce"] for c in self.store.list_cases(KIND_PLAN)
+            others = [c["facts"]["announce"] for c in self._cases(KIND_PLAN)
                       if c["id"] != case_id and (c["facts"].get("announce") or {}).get("date") == d1.isoformat()
                       and c["facts"]["announce"]["line"] == s["line"]]
             reserved = sum(a["qty"] for a in others)
@@ -1266,17 +1373,19 @@ class Engine:
                                 {"text": t.text, "ok": t.ok}, not t.ok, None, t.ledger_id)
         self.store.set_status(case["id"], S_NOTICE_DRAFT, "AI", "조건변경 통보 초안 생성" if t.ok else "AI 초안 실패")
         note = "통보 초안을 확인하고 발송해 주세요" if t.ok else "AI 초안이 실패했으니 통보문을 직접 작성해 발송해 주세요"
-        self._task_once(case["id"], CONTRACT_OWNER, "통보 발송", d, f"{case['ref_id']}: {note}")
+        deadline = _d(f["deadline"])
+        self._task_once(case["id"], CONTRACT_OWNER, "통보 발송", deadline if d <= deadline else d,
+                        f"{case['ref_id']}: {note}(통보 기한 {_md(deadline)}까지)")
         return S_NOTICE_DRAFT
 
     @_locked
     def send_notice(self, case_id: int, actor: str, text: str | None = None) -> dict:
         """계약 담당이 통보문을 발송한다(초안이 없으면 text를 직접 줘야 한다). 상대 회신을 기다린다."""
         role = self.role_of(actor)
-        if role != CONTRACT_OWNER:
-            raise PermissionError(f"{actor}({role})는 통보를 발송할 수 없음 — {CONTRACT_OWNER}만")
         case = self.store.get_case(case_id)
         f = case["facts"]
+        if not self._can_handle(f, STALE_NOTICE, role, CONTRACT_OWNER):
+            raise PermissionError(f"{actor}({role})는 통보를 발송할 수 없음 — {CONTRACT_OWNER}(또는 방치로 올려 받은 사람)만")
         base = {"case_id": case_id, "actor": actor}
         if case["kind"] != KIND_CONTRACT:
             raise ValueError("전속계약 건이 아님")
@@ -1332,9 +1441,18 @@ class Engine:
         base = {"case_id": case_id, "actor": actor, "role": role, "action": action}
         if case["status"] not in OPEN[case["kind"]]:
             return {**base, "changed": False, "status": case["status"], "message": "결정 단계가 지난 건이라 상태 그대로"}
+        lapsed = self._lapsed_deny(case, base)
+        if lapsed is not None:
+            return lapsed
         if action == D_REJECT:
             self.store.add_approval(case_id, (role,), action, actor, comment)
+            if case["kind"] == KIND_CONTRACT:
+                # 계약 갱신 거절은 끝이 아니다: 자동 갱신을 막으려면 조건변경 통보가 나가야 한다(설계 7.4 조건변경 승인 → 통보 초안)
+                self.store.set_status(case_id, S_CHANGE_OK, actor, comment or "승인권자 거절 — 조건변경 통보로 진행")
+                return {**base, "changed": True, "status": self._draft_notice(case, self._today())}
             self.store.set_status(case_id, S_REJECTED, actor, comment or "승인권자 거절")
+            self._task_once(case_id, CAMPAIGN, "확정 보류(철회) 처리", self._today(),
+                            f"{case['ref_id']}: 승인권자({role})가 거절해 확정하지 않음. 상대측에 보류·철회를 알림")
             return {**base, "changed": True, "status": S_REJECTED}
         if case["status"] == S_WAIT_REPLY:
             raise ValueError("부서 회신을 기다리는 중이라 아직 승인할 수 없음")
@@ -1386,6 +1504,9 @@ class Engine:
             f["phase1"] = {"qty": min(day_qty, share) if share is not None and st.get("day_qty") else day_qty,
                            "date": f.get("phase1_date") or f["settlement_date"]}
             f["phase2"] = None
+        if not f["phase2"]:  # 처음부터 2차가 없는 건(비분할·2차 수량 0): 1차 집행일 + 반품 관찰 기간이 지나면 완료(결과 2차 없음)
+            f["phase2_dropped"] = {"why": "분할 없음 — 2차 집행 계획이 없는 승인", "actor": actor,
+                                   "at": self._today().isoformat()}
         self.store.update_facts(case_id, f, "시스템", "집행 수량 확정")
         self.store.set_status(case_id, first, actor, "승인권자 전원 승인")
         self._report(case)
@@ -1438,7 +1559,11 @@ class Engine:
                                "수정하고 수정본과 원본 대비 비교 자료를 첨부해 회신해 주세요", True, P_CONTENT)
         if human:
             self._task_once(case_id, owner, "리뷰 사람 확인", self._today(), f"AI가 확신하지 못한 리뷰 {human}건")
-        return self._gate(self.store.get_case(case_id))
+        case = self.store.get_case(case_id)
+        g = self._gate(case)
+        if case["status"] == S_PHASE2_WAIT and [r for r in g.reasons if r != NO_SALES]:
+            self._regress_from_wait(case, g)  # M8: 2차 승인 대기 중 들어온 리뷰가 잠금 사유를 만들면 받은 2차 승인은 무효
+        return g
 
     @_locked
     def add_returns(self, case_id: int, change_of_mind: int, color: int, actor: str | None = None) -> GateResult:
@@ -1452,15 +1577,55 @@ class Engine:
         self.store.update_facts(case_id, f, "시스템", "모의 반품 반영")
         case = self.store.get_case(case_id)
         g = self._gate(case)
-        if g.auto_stopped and case["status"] == S_PHASE2_LOCK:
-            self.store.set_status(case_id, S_PHASE2_HOLD, "시스템", "; ".join(g.reasons))
+        if case["status"] == S_PHASE2_WAIT and [r for r in g.reasons if r != NO_SALES]:
+            self._regress_from_wait(case, g)  # M8: 2차 승인 대기 중 들어온 반품이 기준을 넘으면 받은 2차 승인은 무효
+        elif g.auto_stopped and case["status"] == S_PHASE2_LOCK:
+            self._hold_for_returns(case, g)
         else:
             self._phase2_judge(case_id)  # 반품 보류가 없으면 다음은 판매율(추가 결정 8)
         return g
 
-    def _renewal_confirmed(self, influencer_code: str) -> bool:
-        return any(c["ref_id"] == influencer_code and c["status"] in RENEWAL_CONFIRMED
-                   for c in self.store.list_cases(KIND_CONTRACT))
+    def _hold_for_returns(self, case: dict, g: GateResult, voided: list[str] | None = None) -> None:
+        """반품이 통계 기준을 넘어 2차 자동 보류. 빠져나오는 길을 함께 연다: 캠페인 담당의 판단 작업(방치 올림 대상, 결정 9 장치).
+        캠페인 담당은 2차 취소만 할 수 있고, 그래도 2차를 하려면 2차 승인권자 중 최고 역할이 예외 승인한다(H3)."""
+        case_id = case["id"]
+        f = self.store.get_case(case_id)["facts"]
+        if f.get("phase2_decision"):  # 새 보류는 새 판단을 받는다(이전 판단은 기록으로 남김)
+            f.setdefault("phase2_decision_log", []).append(f.pop("phase2_decision"))
+        for key in (STALE_PHASE2_HOLD, STALE_PHASE2_WAIT):
+            f.get("escalated", {}).pop(key, None)
+        f["phase2_hold"] = {"cause": "반품", "reasons": list(g.reasons), "at": self._today().isoformat()}
+        self.store.update_facts(case_id, f, "시스템", "2차 자동 보류(반품)")
+        why = "; ".join(g.reasons)
+        note = why + (f" — 받은 2차 승인({'·'.join(voided)}) 무효" if voided else "")
+        self.store.set_status(case_id, S_PHASE2_HOLD, "시스템", note)
+        text = (f"{case['ref_id']} 반품이 기준을 넘어 2차 자동 보류: {why}. 캠페인 담당은 2차 취소만 할 수 있고, "
+                "그래도 2차를 하려면 2차 승인권자 중 최고 역할이 이유를 적어 예외 승인해야 함")
+        self.store.add_event(case_id, EV_P2_HOLD, "시스템", {"cause": "반품", "reasons": list(g.reasons),
+                                                          "voided_roles": voided or [], "text": text})
+        self._task_once(case_id, CAMPAIGN, STALE_PHASE2_HOLD, self._today(), text)
+
+    def _regress_from_wait(self, case: dict, g: GateResult) -> None:
+        """2차 승인 대기 중 게이트가 다시 닫혔다(M8): 받은 2차 승인을 무효로 하고, 반품 자동 보류면 2차 보류, 리뷰 잠금이면 2차 잠금."""
+        case_id = case["id"]
+        f = case["facts"]
+        voided = list(f.get(STAGES["2차"][2], []))
+        f[STAGES["2차"][2]] = []
+        self.store.update_facts(case_id, f, "시스템", "2차 승인 무효(게이트 재판정)")
+        if g.auto_stopped:
+            self._hold_for_returns(self.store.get_case(case_id), g, voided)
+            return
+        note = "; ".join(g.reasons) + " — 2차 승인 대기를 2차 잠금으로 되돌림"
+        self.store.set_status(case_id, S_PHASE2_LOCK, "시스템", note)
+        self.store.add_event(case_id, EV_P2_HOLD, "시스템", {"cause": "리뷰", "reasons": list(g.reasons),
+                                                          "voided_roles": voided, "text": f"{case['ref_id']} {note}"})
+
+    def _renewal_confirmed(self, contract: dict) -> bool:
+        """이 등록부 계약(기간·만료일)의 갱신이 확정됐는가. 같은 계약 행·만료일의 지금 모드 사건만 센다(M1)."""
+        return any(c["ref_id"] == contract["influencer_code"] and c["status"] in RENEWAL_CONFIRMED
+                   and c["facts"].get("contract_row_id") == contract["id"]
+                   and c["facts"].get("expiry") == contract["expiry_date"]
+                   for c in self._cases(KIND_CONTRACT))
 
     def _gate(self, case: dict) -> GateResult:
         """반품·리뷰·관찰·계약 만료 판정(_gate_core)에 1차 판매 실적 입력 여부를 더한다(추가 결정 8)."""
@@ -1481,7 +1646,7 @@ class Engine:
         inf = f.get("influencer_id") or ""
         end, renewal = self._contract_terms(inf)
         p1_date = _d(p1["date"]) if p1.get("date") else self._today()
-        r = f.get("returns") or {}
+        r = {} if f.get("phase2_exception") else (f.get("returns") or {})  # 예외 승인을 받은 건은 반품 보류 사유를 보지 않는다
         return phase2_gate(
             phase1_orders=p1.get("qty") or 0,
             change_of_mind_returns=r.get("change_of_mind", 0), color_returns=r.get("color", 0),
@@ -1630,7 +1795,11 @@ class Engine:
         if role not in pending:
             raise ValueError(f"{actor}({role})는 이미 결정한 승인권자라 상신할 수 없음")
         today = self._today()
-        if not first and "기본거부" in deadline_actions(_d(f["phase2_deadline"]), today, approved=False):
+        if first:
+            lapsed = self._lapsed_deny(case, {"case_id": case_id, "actor": actor, "role": role, "stage": stage})
+            if lapsed is not None:
+                return lapsed
+        if not first and today > _d(f["phase2_deadline"]):  # 2차 승인은 기한 당일까지 가능
             res = self._phase2_default_deny(case, today)
             return {"case_id": case_id, "actor": actor, "role": role, "stage": stage, "changed": False,
                     "status": res["status"], "message": res["text"]}
@@ -1649,28 +1818,36 @@ class Engine:
             else:
                 new.append(label)
         ups = self._active_ups(f, stage)
+        ok_key = STAGES[stage][2]
+        voided = to in f.get(ok_key, [])  # H4: 상급자가 이미 한 승인은 무효, 다시 결재(상신만으로 확정되지 않음)
+        if voided:
+            f[ok_key] = [r for r in f[ok_key] if r != to]
+            if first and not f[ok_key]:
+                f.pop("split_chosen", None)
+                f.pop("approved_split", None)
         rec = {"stage": stage, "from": role, "to": to, "actor": actor, "opinion": opinion, "reason": reason.strip(),
-               "at": today.isoformat(), "active": True, "base": ups[0]["base"] if ups else list(before)}
+               "at": today.isoformat(), "active": True, "base": ups[0]["base"] if ups else list(before),
+               "voided_decision": voided}
         f["escalations"] = [*f.get("escalations", []), rec]
         f[a_key] = new
         self.store.update_facts(case_id, f, actor, f"{stage} 상신: {role}→{to}")
         ref = case["ref_id"]
         text = f"{ref} {stage} 상신: {role}({actor})가 {to}에게 올림 — {opinion}: {rec['reason']}"
+        if voided:
+            text += f" (상신으로 이전 결정 무효: {to}가 이미 한 승인을 무효로 하고 다시 결재)"
         self.store.add_approver_change(case_id, ApproverChange(
             before, tuple(new), f"상신: {role}({actor})가 {to}에게 올림 — {opinion}: {rec['reason']}",
             tuple(RuleHit(**h) for h in f.get(h_key, [])), today))
         self.store.add_event(case_id, EV_UP, actor, {"stage": stage, "from": role, "to": to, "target": to,
                                                     "opinion": opinion, "reason": rec["reason"], "text": text})
+        if voided:
+            self.store.add_event(case_id, EV_REAPPROVE, actor, {"target": to, "text": text, "stage": stage})
         base = {"case_id": case_id, "actor": actor, "role": role, "stage": stage, "to": to, "opinion": opinion,
-                "changed": True}
-        if first:
-            done = self._maybe_finalize(case_id, actor)  # 올린 자리에 들어갈 상급자가 이미 승인했다면 이것으로 모두 승인
-            now = self.store.get_case(case_id)
-            return {**base, "status": done[0]["status"] if done else now["status"], "approvers": now["facts"][a_key],
-                    "required_roles": _required_roles(now["facts"]), "pending": _pending_roles(now["facts"])}
-        left = _pending_roles(f, "2차")
-        status = self._start_phase2_exec(case_id, actor) if not left else S_PHASE2_WAIT
-        return {**base, "status": status, "approvers": new, "required_roles": _required_roles(f, "2차"), "pending": left}
+                "changed": True, "voided_decision": voided}
+        # 상신만으로는 확정되지 않는다: 상급자가 (다시) 결재해야 한다
+        now = self.store.get_case(case_id)
+        return {**base, "status": now["status"], "approvers": now["facts"][a_key],
+                "required_roles": _required_roles(now["facts"], stage), "pending": _pending_roles(now["facts"], stage)}
 
     # ---------------------------------------------------------------- 2차 수량의 판매율 조절 (추가 결정 8)
 
@@ -1726,14 +1903,17 @@ class Engine:
             f[STAGES["2차"][1]].append({"rule_id": "sellthrough_adjust", "text": core,
                                        "source": "1차 판매 실적", "badge": "계산"})
 
-    def _hold_guard(self, case_id: int, actor: str, reason) -> tuple[dict, dict, dict]:
-        """판매율 보류 판단의 공통 검사. 보류 상태가 아니거나 반품 보류면 ValueError, 이미 판단했으면 ValueError,
-        담당도 올려 받은 사람도 아니면 PermissionError, 이유가 비면 ValueError."""
+    def _hold_guard(self, case_id: int, actor: str, reason, sell_only: bool = True) -> tuple[dict, dict, dict]:
+        """2차 보류 판단의 공통 검사. 보류 상태가 아니면 ValueError. sell_only(2차 계속)면 판매율 보류만, 아니면(2차 취소) 반품 보류도 가능.
+        이미 판단했으면 ValueError, 담당도 올려 받은 사람도 아니면 PermissionError, 이유가 비면 ValueError."""
         case = self.store.get_case(case_id)
         f = case["facts"]
         rec = f.get("phase2_sellthrough") or {}
-        if case["kind"] != KIND_PLAN or case["status"] != S_PHASE2_HOLD or rec.get("outcome") != SELL_HOLD:
-            raise ValueError("1차 판매율이 하한 미만이라 2차 보류가 된 건만 판단할 수 있음(반품 보류는 해당 없음)")
+        if case["kind"] != KIND_PLAN or case["status"] != S_PHASE2_HOLD:
+            raise ValueError("2차 보류 상태인 건만 판단할 수 있음")
+        if sell_only and rec.get("outcome") != SELL_HOLD:
+            raise ValueError("1차 판매율이 하한 미만이라 2차 보류가 된 건만 2차 계속을 판단할 수 있음"
+                             "(반품 보류는 2차 취소 또는 2차 승인권자 중 최고 역할의 예외 승인)")
         if f.get("phase2_decision"):
             raise ValueError("이미 판단한 건 — 판단은 한 번만")
         role = self.role_of(actor)
@@ -1747,6 +1927,7 @@ class Engine:
                      amt_a: int, status: str) -> dict:
         case_id, ref = case["id"], case["ref_id"]
         qty_b, amt_b = rec["qty_before"], rec["amount_before"]
+        basis = (f"1차 판매율 {rec['rate']:.1%} 보류 건" if rec.get("rate") is not None else "반품 자동 보류 건")
         f["phase2_decision"] = {"choice": choice, "reason": reason.strip(), "actor": actor, "qty_before": qty_b,
                                 "qty_after": qty_a, "at": self._today().isoformat()}
         self.store.update_facts(case_id, f, actor, f"판매율 보류 판단: {choice}")
@@ -1754,10 +1935,10 @@ class Engine:
         task = self._hold_task(case_id)
         if task:
             self.store.set_task_status(task["id"], "완료", actor)
-        text = (f"{ref} 1차 판매율 {rec['rate']:.1%} 보류 건을 {choice}으로 판단: 2차 {qty_b:,}→{qty_a:,}개, "
+        text = (f"{ref} {basis}을 {choice}으로 판단: 2차 {qty_b:,}→{qty_a:,}개, "
                 f"금액 {amt_b:,}→{amt_a:,}원 — 이유: {reason.strip()}")
         self.store.add_event(case_id, EV_DECIDE, actor, {
-            "choice": choice, "rate": rec["rate"], "reason": reason.strip(), "qty_before": qty_b, "qty_after": qty_a,
+            "choice": choice, "rate": rec.get("rate"), "reason": reason.strip(), "qty_before": qty_b, "qty_after": qty_a,
             "amount_before": amt_b, "amount_after": amt_a, "text": text})
         return {"case_id": case_id, "choice": choice, "status": status, "qty_before": qty_b, "qty_after": qty_a,
                 "amount_before": amt_b, "amount_after": amt_a, "text": text}
@@ -1789,13 +1970,61 @@ class Engine:
     @_locked
     def cancel_phase2(self, case_id: int, actor: str, reason: str) -> dict:
         """판매율 보류 건을 2차 취소로 판단한다: 2차 없음, 상태는 1차 집행(2차 잠금 해제)."""
-        case, f, rec = self._hold_guard(case_id, actor, reason)
+        case, f, rec = self._hold_guard(case_id, actor, reason, sell_only=False)
+        if rec.get("outcome") != SELL_HOLD:  # 반품 보류: 판매율 기록이 없을 수 있으니 계획 2차에서 이전 수량·금액을 잡는다
+            p2 = f["phase2"]
+            rec = {"qty_before": p2["qty"], "amount_before": p2.get("amount_krw") or self._plan_amount_of(f, p2["qty"]),
+                   "rate": None}
         f["phase2"] = None
         out = self._finish_hold(case, f, rec, actor, CHOICE_CANCEL, reason, 0, 0, S_PHASE1)
         acts = self._close_without_phase2(case_id, actor, f"{actor}가 2차 취소({reason.strip()})")
         if acts:
             out |= {"status": self.store.get_case(case_id)["status"], "actions": acts}
         return out
+
+    def _exception_role(self, f: dict) -> str | None:
+        """반품 보류 예외 승인을 할 수 있는 역할: 그 건 2차 승인권자(2차 판정이 없으면 1차 승인권자) 중 보고 체계에서 가장 높은 역할."""
+        roles = _required_roles(f, "2차") if f.get(STAGES["2차"][0]) else _required_roles(f)
+        chain = self.people.escalation
+        known = [r for r in roles if r in chain]
+        return max(known, key=chain.index) if known else None
+
+    @_locked
+    def approve_phase2_exception(self, case_id: int, actor: str, qty: int, reason: str) -> dict:
+        """반품 자동 보류 건을 2차 승인권자 중 최고 역할이 이유를 적어 예외 승인한다(H3). 수량은 1 이상 계획 2차 이하, 금액은 같은 비율로
+        줄이고 2차 승인권자를 다시 판정하며 2차 잠금(승인 대기) 경로로 보낸다. 이후 반품 보류 사유는 다시 걸지 않는다."""
+        case = self.store.get_case(case_id)
+        f = case["facts"]
+        if case["kind"] != KIND_PLAN or case["status"] != S_PHASE2_HOLD or not f.get("phase2"):
+            raise ValueError("2차 보류 상태인 건만 예외 승인할 수 있음")
+        rec = f.get("phase2_sellthrough") or {}
+        if rec.get("outcome") == SELL_HOLD:
+            raise ValueError("판매율이 하한 미만인 보류는 예외 승인이 아니라 2차 계속·취소로 판단함")
+        if f.get("phase2_decision"):
+            raise ValueError("이미 판단한 건 — 판단은 한 번만")
+        role, top = self.role_of(actor), self._exception_role(f)
+        if top is None or role != top:
+            raise PermissionError(f"{actor}({role})는 예외 승인할 수 없음 — 이 건 2차 승인권자 중 최고 역할"
+                                  f"({top or '없음'})만")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("예외 승인 이유 문장이 필요함")
+        p2 = f["phase2"]
+        qty_b = p2["qty"]
+        amt_b = p2.get("amount_krw") or self._plan_amount_of(f, qty_b)
+        if not isinstance(qty, int) or isinstance(qty, bool) or not 1 <= qty <= qty_b:
+            raise ValueError(f"2차 수량은 1 이상 계획 2차({qty_b:,}개) 이하의 정수여야 함: {qty!r}")
+        amt_a = amt_b * qty // qty_b
+        f["phase2_exception"] = {"actor": actor, "role": role, "reason": reason.strip(), "qty_before": qty_b,
+                                 "qty_after": qty, "at": self._today().isoformat()}
+        core = (f"반품 보류 건을 {role}({actor})가 예외 승인: 2차 {qty_b:,}→{qty:,}개, 금액 {amt_b:,}→{amt_a:,}원"
+                f" — 이유: {reason.strip()}")
+        self._resize_phase2(f, case_id, amt_b, qty, amt_a, "반품 보류 예외 승인으로", core)
+        out = self._finish_hold(case, f, {"qty_before": qty_b, "amount_before": amt_b, "rate": None}, actor,
+                                CHOICE_EXCEPTION, reason, qty, amt_a, S_PHASE2_LOCK)
+        self.store.add_event(case_id, EV_P2_EXCEPTION, actor, {"role": role, "reason": reason.strip(), "qty_before": qty_b,
+                                                            "qty_after": qty, "amount_after": amt_a, "text": core})
+        acts = self._phase2_refresh(case_id)  # 판매 실적이 있고 다른 잠금이 없으면 곧바로 2차 승인 대기
+        return {**out, "status": self.store.get_case(case_id)["status"], "actions": acts}
 
     # ---------------------------------------------------------------- 2차 승인·집행 (수정 회차 1 판정 3)
 
@@ -1936,7 +2165,7 @@ class Engine:
             raise PermissionError(f"{actor}({role})는 이 건의 2차 승인권자가 아님 — 2차 승인권자: {'·'.join(required)}")
         base = {"case_id": case_id, "actor": actor, "role": role, "action": action, "stage": "2차"}
         today = self._today()
-        if "기본거부" in deadline_actions(_d(f["phase2_deadline"]), today, approved=False):
+        if today > _d(f["phase2_deadline"]):  # 기한 당일까지 승인 가능, 지나면 기본 거부(M4)
             res = self._phase2_default_deny(case, today)
             return {**base, "changed": False, "status": res["status"], "message": res["text"]}
         ref, qty = case["ref_id"], f["phase2"]["qty"]
@@ -1959,6 +2188,13 @@ class Engine:
         f = case["facts"]
         if case["status"] == S_PHASE1 and f.get("phase2_dropped"):
             return self._close_without_phase2(case["id"], "시스템", f["phase2_dropped"]["why"])
+        if case["status"] == S_PHASE2_BLOCKED:
+            end, renewal = self._contract_terms(f.get("influencer_id") or "")
+            if renewal or d <= end:  # 갱신이 확정되지 않은 채 계약 만료일이 지나야 끝낸다(그 전에 확정되면 차단이 풀림)
+                return []
+            text = (f"{case['ref_id']} 계약 만료({_md(end)})가 지나도록 갱신이 확정되지 않아 2차 없음 — 완료")
+            return [{"date": d.isoformat(), "case_id": case["id"], "action": EV_P2_DECIDE,
+                     "status": self._phase2_end(case["id"], "시스템", P2_NONE, text), "text": text}]
         if case["status"] == S_PHASE2_EXEC:
             if d <= _d(f["phase2"]["date"]):
                 return []
@@ -1967,9 +2203,10 @@ class Engine:
                      "status": self._phase2_end(case["id"], "시스템", P2_EXECUTED, text), "text": text}]
         if case["status"] != S_PHASE2_WAIT:
             return []
-        acts = deadline_actions(_d(f["phase2_deadline"]), d, approved=False)
-        if "기본거부" in acts:
+        dl = _d(f["phase2_deadline"])
+        if d > dl:  # 기한 당일까지 승인 가능(M4): 지난 다음 날 점검에서 기본 거부
             return [self._phase2_default_deny(case, d)]
+        acts = ["조기경고"] if d >= dl - timedelta(days=policy.get("deadline.early_warning_days")) else []
         out: list[dict] = []
         if "조기경고" in acts:
             w = self._warn(case, d, "2차")
@@ -2060,6 +2297,8 @@ class Engine:
             return c["status"] in OPEN[c["kind"]] and int(key.rsplit("#", 1)[1]) in self._human_stock_ids(c["id"])
         if key == STALE_PHASE2_WAIT:
             return c["status"] == S_PHASE2_WAIT
+        if key == STALE_NOTICE:
+            return c["status"] == S_NOTICE_DRAFT
         return c["status"] == S_PHASE2_HOLD and not c["facts"].get("phase2_decision") and self._hold_task(c["id"]) is not None
 
     @staticmethod
@@ -2074,7 +2313,7 @@ class Engine:
         role = self.role_of(person)
         out: dict = {"person": person, "role": role, "승인 대기": [], "기한 임박": [], "회신 대기": [],
                      "작업": [], "권한 이동": [], "알림": []}
-        cases = {c["id"]: c for c in self.store.list_cases()}
+        cases = {c["id"]: c for c in self._cases()}
         for c in cases.values():
             if c["status"] in APPROVAL_STATES and role in _pending_roles(c["facts"]):
                 out["승인 대기"].append({**self._item(c), **self._ups_for(c["facts"], "1차", role)})
@@ -2094,6 +2333,10 @@ class Engine:
                         and self._warn_target(c["facts"], "2차") == role):
                     out["기한 임박"].append({**self._item(c), "stage": "2차", "deadline": c["facts"]["phase2_deadline"],
                                          "text": e["detail"]["text"]})
+                continue
+            if e["detail"].get("notice_overdue"):  # 통보 기한이 지났는데 통보가 안 나간 계약 건: 아직 통보 초안일 때만 보인다
+                if c and e["detail"]["target"] == role and c["status"] == S_NOTICE_DRAFT:
+                    out["기한 임박"].append({**self._item(c), "text": e["detail"]["text"]})
                 continue
             if e["detail"].get("scm_human"):  # 승인은 모였고 SCM 회신 사람 확인만 남은 건: 아직 사람 확인 중일 때만 보인다
                 if (c and e["detail"]["target"] == role and c["status"] in OPEN[c["kind"]] and
@@ -2231,7 +2474,7 @@ class Engine:
         for w in self._windows():
             add(w.start.isoformat(), "하회 구간", f"현금 하회 구간 {_md(w.start)}~{_md(w.end)}", end=w.end.isoformat())
         with_case = set()
-        for c in self.store.list_cases():
+        for c in self._cases():
             f = c["facts"]
             pending = _pending_roles(f) if c["status"] in OPEN[c["kind"]] else []
             if c["kind"] == KIND_PLAN:
@@ -2250,8 +2493,9 @@ class Engine:
             if k["id"] not in with_case:
                 add(k["notice_deadline"], "통보 기한", f"{k['influencer_code']} 해지·조건변경 통보 기한", None, [CONTRACT_OWNER])
                 add(k["expiry_date"], "계약 만료", f"{k['influencer_code']} 계약 만료", None, [CONTRACT_OWNER])
+        shown = {c["id"] for c in self._cases()}
         for t in self.store.all_tasks():
-            if t["status"] == "대기":
+            if t["status"] == "대기" and t["case_id"] in shown:
                 add(t["due"], "작업", t["title"], t["case_id"], [t["dept"]])
         out.sort(key=lambda e: (e["date"], e["kind"]))
         return out

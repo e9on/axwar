@@ -41,9 +41,14 @@ _SCHEMA: dict[str, type] = {
     "admin.policy_editors": str,
     "admin.review_inputters": str,
     "admin.return_inputters": str,
+    "admin.registry_editors": str,
     "phase2.prep_days": int,
     "phase2.min_approval_days": int,
 }
+
+# 0 초과 1 이하여야 하는 비율 항목(1.5 같은 값이 들어가면 규칙이 거꾸로 동작한다)
+_RATIO_KEYS = ("split.sellthrough_hold_ratio", "allocate.capacity_fallback_ratio", "volume.low_confidence_share",
+               "scm.stockout_loss_pct")
 
 # 배정 모델 항목: 값이 모델 단가표에 있어야 한다
 _MODEL_KEYS = [k for k in _SCHEMA if k.startswith("ai.") and (k.endswith("_model") or k.endswith("_backup"))]
@@ -77,6 +82,8 @@ def _check_value(key: str, typ: type, value):
         raise ValueError(f"정책 항목 {key}의 값 형식 오류: {value!r}")
     if value <= 0:
         raise ValueError(f"정책 항목 {key}의 값은 양수여야 함: {value!r}")
+    if key in _RATIO_KEYS and value > 1:
+        raise ValueError(f"정책 항목 {key}는 비율이라 1 이하여야 함: {value!r}")
     return typ(value)
 
 

@@ -299,15 +299,15 @@ def test_취소_뒤에도_두_번째_판단은_거부(store, monkeypatch):
         eng.continue_phase2(cid, ACTOR, 300, "재개")
 
 
-def test_반품_보류_건에는_거부(store, monkeypatch):
+def test_반품_보류_건에는_2차_계속을_거부하고_2차_취소만_허용한다(store, monkeypatch):
+    """최종 수정 H3: 반품 보류는 캠페인 담당이 2차 취소만 할 수 있다(2차 계속은 판매율 보류 전용, 계속하려면 예외 승인)."""
     monkeypatch.setattr(inventory, "line_spare", lambda category, day: 10**9)
     eng, cid = locked(store, monkeypatch)
     store.set_status(cid, "2차 보류", "시험", "반품이 기준을 넘어 2차 보류")
     with pytest.raises(ValueError):
         eng.continue_phase2(cid, ACTOR, 300, "사유")
-    with pytest.raises(ValueError):
-        eng.cancel_phase2(cid, ACTOR, "사유")
     assert store.get_case(cid)["status"] == "2차 보류" and facts(store, cid)["phase2"]["qty"] == P2_QTY
+    assert eng.cancel_phase2(cid, ACTOR, "사유")["status"] == "완료"
 
 
 def test_보류가_아닌_상태에는_거부(store, monkeypatch):

@@ -31,6 +31,7 @@ def store(tmp_path):
 def ops_case(store, *responses):
     """운영 모드에서 화면 등록 기안으로 연 운영 사건."""
     eng = Engine(store, provider=FakeProvider(list(responses)))
+    store._today = lambda: date(2026, 9, 1)  # 운영 모드의 오늘을 기안 기한(9/11) 앞으로 고정(최종 수정 H5: 기한이 지나면 결정이 기본 거부)
     store.set_mode("운영")
     store.add_plan(PLAN, "캠페인 담당자")
     return eng, eng.open_plan("PLAN-운영")
@@ -215,6 +216,8 @@ def test_2차_거절이면_2차_없이_완료되고_통보는_만들지_않는�
 def test_2차_기한까지_승인이_없으면_기본_거부로_완료(store):
     eng, cid = to_wait(store)
     eng.advance(date(2026, 8, 25))
+    assert status(store, cid) == WAIT  # 최종 수정 M4: 기한 당일까지는 승인할 수 있으니 기본 거부는 다음 날
+    eng.advance(date(2026, 8, 26))
     assert status(store, cid) == "완료"
     res = facts(store, cid)["phase2_result"]
     assert res["result"] == "기본 거부" and "기본 거부" in res["text"] and "8/25" in res["text"]
@@ -226,8 +229,10 @@ def test_2차_기한까지_승인이_없으면_기본_거부로_완료(store):
 
 def test_기한이_지난_뒤_결정하려_해도_기본_거부(store):
     eng, cid = to_wait(store)
-    store.set_clock(date(2026, 8, 25))  # 기준일만 옮김(기한 점검 없이)
-    r = eng.decide_phase2(cid, "Masil 대표", "승인")
+    store.set_clock(date(2026, 8, 25))  # 기준일만 옮김(기한 점검 없이): 기한 당일까지는 승인할 수 있다(최종 수정 M4)
+    assert eng.decide_phase2(cid, "Masil 대표", "승인")["changed"] is True
+    store.set_clock(date(2026, 8, 26))
+    r = eng.decide_phase2(cid, "그룹 재무", "승인")
     assert r["changed"] is False and r["status"] == "완료" and "기본 거부" in r["message"]
 
 
@@ -292,6 +297,8 @@ def test_2차_기한_조기_경고와_방치_올림과_기본_거부(store, monk
     assert status(store, cid) == WAIT
     assert [i["case_id"] for i in eng.todo(stale[0]["detail"]["target"])["알림"]] == [cid]
     eng.advance(deadline)
+    assert status(store, cid) == WAIT  # 최종 수정 M4: 기한 당일까지 승인 가능
+    eng.advance(deadline + timedelta(days=1))
     assert status(store, cid) == "완료"
     assert facts(store, cid)["phase2_result"]["result"] == "기본 거부"
     assert eng.todo(stale[0]["detail"]["target"])["알림"] == []  # 끝난 건의 올림 알림은 내려감

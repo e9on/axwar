@@ -253,12 +253,32 @@ class Store:
         with self._lock:
             return self._mode(self._db)
 
-    def set_mode(self, mode: str) -> None:
+    def has_mode_setting(self) -> bool:
+        """모드가 저장돼 있는지(없으면 기본값 시연으로 동작 중)."""
+        with self._lock:
+            return self._setting(self._db, "mode") is not None
+
+    def set_mode(self, mode: str, actor: str = "시스템") -> None:
+        """실행 모드를 바꾼다. 바뀌었으면 누가·이전→이후를 이벤트(모드전환)로 남긴다."""
         if mode not in MODES:
             raise ValueError(f"알 수 없는 실행 모드: {mode!r} ({' 또는 '.join(MODES)})")
         with self._tx() as db:
+            before = self._mode(db)
             db.execute("INSERT INTO settings (key, value) VALUES ('mode', ?) "
                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (mode,))
+            if before != mode:
+                self._event(db, None, "모드전환", actor, {"before": before, "after": mode, "actor": actor})
+
+    def last_daily_check(self) -> date | None:
+        """운영 모드의 일일 점검을 마지막으로 돌린 날(없으면 None)."""
+        with self._lock:
+            saved = self._setting(self._db, "last_daily_check")
+        return date.fromisoformat(saved) if saved else None
+
+    def set_last_daily_check(self, d: date) -> None:
+        with self._tx() as db:
+            db.execute("INSERT INTO settings (key, value) VALUES ('last_daily_check', ?) "
+                       "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (d.isoformat(),))
 
     def _clock(self, db) -> date:
         if self._mode(db) == MODE_OPERATION:
@@ -304,6 +324,11 @@ class Store:
             row = db.execute("SELECT origin FROM contracts WHERE influencer_code=? "
                              "ORDER BY expiry_date DESC, id DESC LIMIT 1", (ref_id,)).fetchone()
         return CASE_DEMO if row is not None and row[0] == "시연" else CASE_OPERATION
+
+    def case_origin(self, kind: str, ref_id: str) -> str:
+        """지금 모드에서 이 기안·계약으로 사건을 열면 붙을 출처."""
+        with self._lock:
+            return self._case_origin(self._db, kind, ref_id)
 
     def create_case(self, kind: str, ref_id: str, facts: dict, status: str) -> int:
         with self._tx() as db:

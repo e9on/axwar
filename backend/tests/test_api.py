@@ -409,7 +409,7 @@ def test_화면_등록_기안은_바로_판정된다(store):
     r = ok(c.post("/api/plans", json={"actor": "캠페인 담당자", "fields": PLAN}), 201)
     assert r["plan_id"] == "PLAN-화면" and r["case_id"] and r["open_error"] is None
     plan = ok(c.get("/api/plans/PLAN-화면"))
-    assert plan["origin"] == "화면" and plan["requested_budget_krw"] == 5_000_000
+    assert plan["origin"] == "시연" and plan["requested_budget_krw"] == 5_000_000  # 최종 수정 M6: 시연 모드에서 등록한 행은 시연 출처
     d = ok(c.get(f"/api/cases/{r['case_id']}"))
     assert d["case"]["status"] == "회신 대기" and d["rule"]["approvers"]
     assert d["facts"]["volume"]["units"] is None  # 원본 표본이 없어 담당자 입력 필요
@@ -464,7 +464,7 @@ def test_화면_등록_계약은_갱신_검토_건이_열린다_수정하면_재
     r = ok(c.post("/api/contracts", json={"actor": "계약 담당자", "fields": CONTRACT}), 201)
     assert r["contract_id"] and r["case_id"] and r["open_error"] is None
     row = ok(c.get(f"/api/contracts/{r['contract_id']}"))
-    assert row["origin"] == "화면" and row["auto_renew"] is True and len(ok(c.get("/api/contracts"))) == 1
+    assert row["origin"] == "시연" and row["auto_renew"] is True  # 최종 수정 M6: 시연 모드에서 등록한 행은 시연 출처 and len(ok(c.get("/api/contracts"))) == 1
     d = ok(c.get(f"/api/cases/{r['case_id']}"))
     assert d["case"]["kind"] == "계약" and d["case"]["status"] == "승인 대기"
     assert d["rule"]["approvers"][0] == "Masil 대표"  # 연 고정 피가 한도 이하
@@ -493,6 +493,7 @@ def test_가져오기_실행은_결과_개수를_준다(store):
 def test_화면에서_고친_기안은_가져오기가_건너뛰고_이유를_준다(store):
     c, _, _ = client(store)
     ok(c.post("/api/import/plans", json={"actor": "캠페인 담당자"}))
+    store.set_mode("운영")  # 최종 수정 M6: 시연 모드에서는 가져온 행을 고칠 수 없으므로 운영 모드에서 고친다
     ok(c.put("/api/plans/PLAN-001", json={"actor": "캠페인 담당자", "fields": {"requested_budget_krw": 1_234_567}}))
     r = ok(c.post("/api/import/plans", json={"actor": "캠페인 담당자"}))
     assert [x["plan_id"] for x in r["skipped"]] == ["PLAN-001"] and "덮어쓰지 않음" in r["skipped"][0]["reason"]

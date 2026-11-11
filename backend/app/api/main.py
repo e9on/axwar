@@ -8,17 +8,19 @@
 """
 from __future__ import annotations
 
+import logging
 import sqlite3
 from dataclasses import asdict
 from datetime import date
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, StrictInt
+from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app import config, policy
@@ -29,6 +31,7 @@ from app.engine.flow import R_HUMAN, Engine
 from app.store.db import Store, open_db
 
 PEOPLE_FILE = "people"  # 시연 폴더에서 장면이 아닌 파일(사람 목록)
+logger = logging.getLogger(__name__)
 CALL_LIMIT = 50  # AI 호출 내역 기본 표시 개수(화면 목록 길이 — 정책 기준 아님)
 
 
@@ -187,6 +190,16 @@ def create_app(store: Store, engine: Engine, static_dir: str | Path | None = Non
         text = {404: "찾을 수 없는 주소", 405: "허용되지 않는 요청 방식"}.get(e.status_code)
         return JSONResponse({"detail": text or str(e.detail)}, e.status_code)
 
+    @app.middleware("http")
+    async def _daily_check(request: Request, call_next):
+        """운영 모드에서는 API 요청이 들어올 때 오늘의 일일 점검이 아직 안 돌았으면 먼저 한 번 돌린다(멱등, H5)."""
+        if request.url.path.startswith("/api/"):
+            try:
+                await run_in_threadpool(engine.ensure_daily_check)
+            except Exception:  # 점검이 실패해도 요청은 받는다(다음 요청에서 다시 시도, 로그로 남김)
+                logger.exception("일일 점검 실패")
+        return await call_next(request)
+
     # ------------------------------------------------------------ 기본·읽기
     @app.get("/healthz")
     def healthz():
@@ -224,7 +237,7 @@ def create_app(store: Store, engine: Engine, static_dir: str | Path | None = Non
         return engine.phase2_view(case_id)
 
     @app.get("/api/events")
-    def events(case_id: int | None = None, kind: str | None = None, limit: int | None = None):
+    def events(case_id: int | None = None, kind: str | None = None, limit: int | None = Query(None, ge=1)):
         rows = store.events(case_id, kind)
         return rows[-limit:] if limit else rows
 
@@ -310,6 +323,11 @@ def create_app(store: Store, engine: Engine, static_dir: str | Path | None = Non
     def phase2_continue(case_id: int, body: Continue):
         return engine.continue_phase2(case_id, body.actor, body.qty, body.reason)
 
+    @app.post("/api/cases/{case_id}/phase2/exception")
+    def phase2_exception(case_id: int, body: Continue):
+        """반품 자동 보류 건의 예외 승인(2차 승인권자 중 최고 역할이 이유를 적어 수량은 계획 2차 이하로)."""
+        return engine.approve_phase2_exception(case_id, body.actor, body.qty, body.reason)
+
     @app.post("/api/cases/{case_id}/phase2/cancel")
     def phase2_cancel(case_id: int, body: Cancel):
         return engine.cancel_phase2(case_id, body.actor, body.reason)
@@ -355,7 +373,7 @@ def create_app(store: Store, engine: Engine, static_dir: str | Path | None = Non
 
     @app.post("/api/sync")
     def sync(body: Who):
-        engine.role_of(body.actor)
+        engine.require_registry_editor(body.actor)
         return {"actions": engine.sync(body.actor)}
 
     @app.get("/api/mode")
@@ -398,20 +416,18 @@ def create_app(store: Store, engine: Engine, static_dir: str | Path | None = Non
 
     @app.post("/api/plans", status_code=201)
     def plan_add(body: Register):
-        engine.role_of(body.actor)
-        _bad_input(lambda: store.add_plan(body.fields, body.actor))
+        _bad_input(lambda: engine.add_plan(body.fields, body.actor))
         plan_id = body.fields["plan_id"]
         case_id, err = open_result(engine.open_plan, plan_id, body.actor) if body.open_case else (None, None)
         return {"plan_id": plan_id, "case_id": case_id, "open_error": err}
 
     @app.put("/api/plans/{plan_id}")
     def plan_edit(plan_id: str, body: Edit):
-        engine.role_of(body.actor)
         return {"plan_id": plan_id, "actions": _bad_input(lambda: engine.update_plan(plan_id, body.fields, body.actor))}
 
     @app.post("/api/plans/{plan_id}/open")
     def plan_open(plan_id: str, body: Who):
-        engine.role_of(body.actor)
+        engine.require_registry_editor(body.actor)
         return {"plan_id": plan_id, "case_id": engine.open_plan(plan_id, body.actor)}
 
     # ------------------------------------------------------------ 등록부: 계약
@@ -425,33 +441,31 @@ def create_app(store: Store, engine: Engine, static_dir: str | Path | None = Non
 
     @app.post("/api/contracts", status_code=201)
     def contract_add(body: Register):
-        engine.role_of(body.actor)
-        contract_id = _bad_input(lambda: store.add_contract(body.fields, body.actor))
+        contract_id = _bad_input(lambda: engine.add_contract(body.fields, body.actor))
         code = body.fields["influencer_code"]
         case_id, err = open_result(engine.open_contract, code, body.actor) if body.open_case else (None, None)
         return {"contract_id": contract_id, "influencer_code": code, "case_id": case_id, "open_error": err}
 
     @app.put("/api/contracts/{contract_id}")
     def contract_edit(contract_id: int, body: Edit):
-        engine.role_of(body.actor)
         return {"contract_id": contract_id,
                 "actions": _bad_input(lambda: engine.update_contract(contract_id, body.fields, body.actor))}
 
     @app.post("/api/contracts/{influencer_code}/open")
     def contract_open(influencer_code: str, body: Who):
-        engine.role_of(body.actor)
+        engine.require_registry_editor(body.actor)
         return {"influencer_code": influencer_code, "case_id": engine.open_contract(influencer_code, body.actor)}
 
     # ------------------------------------------------------------ 가져오기
     @app.post("/api/import/plans")
     def import_plans(body: Who):
-        engine.role_of(body.actor)
+        engine.require_registry_editor(body.actor)
         r = store.import_plans_from_source()
         return {**asdict(r), "actions": engine.sync(body.actor)}
 
     @app.post("/api/import/contracts")
     def import_contracts(body: Who):
-        engine.role_of(body.actor)
+        engine.require_registry_editor(body.actor)
         ids = store.import_all_contract_notices()
         return {"count": len(ids), "contract_ids": ids, "actions": engine.sync(body.actor)}
 
@@ -498,5 +512,12 @@ def create_app(store: Store, engine: Engine, static_dir: str | Path | None = Non
 def build_app() -> FastAPI:
     """환경변수로 구성한 실제 앱. uvicorn app.api.main:build_app --factory"""
     store = open_db()
+    wanted = config.default_mode()
+    if wanted is not None and not store.has_mode_setting():
+        store.set_mode(wanted)  # 배포(AXWAR_MODE=운영)에서 처음 한 번만. 저장된 모드가 있으면 그대로 둔다
     engine = Engine(store, demo_dir=config.demo_dir(), people=scenarios.load_people())
+    try:
+        engine.ensure_daily_check()  # 서버를 켤 때 오늘 점검이 안 돌았으면 한 번
+    except Exception:
+        logger.exception("서버 시작 점검 실패")
     return create_app(store, engine)

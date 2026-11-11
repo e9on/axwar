@@ -293,7 +293,8 @@ def test_회신대기_중에는_승인할_수_없고_거절은_가능(store):
         eng.decide(cid, "Masil 대표", "승인")
     assert store.get_case(cid)["status"] == "회신 대기"
     r = eng.decide(cid, "Masil 대표", "거절", "보류 판단")
-    assert r["status"] == "거절" and store.list_tasks(cid) == []
+    # 최종 수정 L2: 거절된 기안도 기본 거부와 같이 캠페인 담당의 '확정 보류(철회) 처리' 작업이 생긴다(상대측에 알릴 일이 같음)
+    assert r["status"] == "거절" and [(t["dept"], t["title"]) for t in store.list_tasks(cid)] == [("캠페인 담당", "확정 보류(철회) 처리")]
 
 
 def test_분할승인은_분할안이_있어야_하고_있으면_2차_잠금(store):
