@@ -777,3 +777,130 @@ def test_승인이_모자라면_SCM_회신을_받아도_기한에_기본거부�
     eng.play(st[0]); eng.play(st[1])  # 이사회 승인 없음
     eng.advance(date(2026, 7, 17))
     assert store.get_case(cid)["status"] == "확정 보류"
+
+
+# ============================================================== 수정 회차 2 (검토 발견·사용자 결정 7)
+
+def _ample_plan2(store, reply_text, *responses):
+    """색조 라인(재고 여유 충분) PLAN-002에 물류가 reply_text로 답한 상태."""
+    fake = FakeProvider(list(responses))
+    eng = Engine(store, provider=fake)
+    eng.seed("scenario_2")
+    scenarios.register_plan(store, "PLAN-002")
+    cid = eng.open_plan("PLAN-002")
+    eng.reply(store.list_requests(cid)[0]["id"], reply_text)
+    return eng, cid
+
+
+def test_재고가_충분해도_물류_몫이_하루_수량보다_작으면_분할안이_생기고_1차는_물류_몫(store):
+    """검토 높음 1: 비분할 승인도 1차 수량이 물류 몫을 넘으면 안 된다."""
+    eng, cid = _ample_plan2(store, "평소 하루 100개, 최대 120개", _j())
+    f = store.get_case(cid)["facts"]
+    s = f["stock"]
+    assert s["shortage"] is False and 0 < s["share"] < s["day_qty"]
+    assert f["split"] is not None and f["scm"] is None
+    assert (f["split"]["phase1_qty"], f["split"]["phase2_qty"]) == (s["share"], s["day_qty"] - s["share"])
+    # 일반 승인 경로: 1차 수량은 물류 몫(하루 수량 전체가 아님)
+    for role in _required_roles(f):
+        eng.decide(cid, role, "승인")
+    done = store.get_case(cid)["facts"]
+    assert done["phase1"]["qty"] == s["share"] and store.get_case(cid)["status"] == "1차 집행"
+    out = [t for t in store.list_tasks(cid) if t["title"] == "물류 출고"]
+    assert f"{s['share']:,}개" in out[0]["detail"]
+
+
+def test_승인이_다_모인_건의_SCM_무응답_처리는_중간에_1차_집행이나_출고를_만들지_않는다(store, monkeypatch):
+    """검토 높음 2: 새 분할안은 재승인을 받기 전에 확정되면 안 된다(중간 상태 이력·작업·보고까지 확인)."""
+    eng, _, cid, st = scene2(store, ACCEPT)
+    fake_spare(monkeypatch, (SHIFT_DAY, 20000))
+    eng.play(st[0]); eng.play(st[1]); eng.play(st[2])
+    eng.advance(store.get_clock() + timedelta(days=3))
+    seq = statuses(store, cid)
+    assert store.get_case(cid)["status"] == "재승인 대기"
+    assert not {"승인", "분할 승인", "1차 집행"} & set(seq)
+    assert store.get_case(cid)["facts"]["phase1"] is None
+    assert [t for t in tasks(store, cid) if t[0] in ("물류", "CS")] == []
+    assert store.events(cid, kind="그룹보고") == []
+
+
+def test_물류가_숫자_이름표_없이_조건부수용하면_수량_제한을_처리_능력으로_쓴다(store):
+    """검토 중간 3: 제한이 무시되어 몫이 하루 수량 전체가 되면 안 된다."""
+    eng, cid = _ample_plan2(store, "5개까지만 가능합니다.", _j(stance="조건부수용", qty_limit=5))
+    s = store.get_case(cid)["facts"]["stock"]
+    assert s["capacity"] == 5 and s["share"] <= 5 < s["day_qty"]
+    assert "수량 제한" in s["capacity_hits"][0]["text"]
+    assert store.get_case(cid)["facts"]["allocation"] == "조건부"
+
+
+def test_SCM_회신이_사람확인에_머물러_기한이_다가오면_경고를_낸다_자동_거절은_하지_않는다(store):
+    """검토 중간 4: 승인이 다 모였어도 SCM 사람 확인 요청이 풀리지 않으면 기한 경고 경로로 알린다."""
+    eng, _, cid, st = scene2(store, ACCEPT, SCM_VAGUE)
+    to_scm_reply(eng, store, cid, st, "검토해 보고 알려드릴게요.")
+    assert scm_request(store, cid)["status"] == "사람 확인"
+    deadline = date.fromisoformat(store.get_case(cid)["facts"]["deadline"])
+    acts = eng.advance(deadline)
+    warn = [a for a in acts if a["action"] == "조기경고" and "SCM 회신 사람 확인 미처리" in a["text"]]
+    assert len(warn) == 1
+    assert store.get_case(cid)["status"] == "승인 대기" and store.get_case(cid)["facts"]["scm"]["state"] == "요청"
+    assert any("SCM 회신 사람 확인 미처리" in x["text"] for x in eng.todo("캠페인 담당자")["기한 임박"])
+    again = eng.advance(deadline + timedelta(days=2))
+    assert [a for a in again if "SCM 회신 사람 확인 미처리" in a.get("text", "")] == []  # 한 번만
+
+
+def test_차단된_기안도_등록부_집행일을_고치면_재점검해_풀린다(store):
+    """사용자 결정 7: 새 날짜에서 SCM 요청이 생기면 차단을 풀고 SCM 대기(승인 대기)로 돌아간다."""
+    eng, _, cid, st = scene2(store, ACCEPT, SCM_REFUSE, name="scenario_2_reject")
+    for i in range(4):
+        eng.play(st[i])
+    assert store.get_case(cid)["status"] == "1차 차단"
+    eng.update_plan("PLAN-001", {"settlement_date": "2026-08-05", "contract_deadline": "2026-07-30"}, "캠페인 담당자")
+    case = store.get_case(cid)
+    f = case["facts"]
+    assert case["status"] == "재승인 대기"  # 받은 승인은 11a 경로대로 무효
+    assert f["phase1_blocked"] is None and f["stock"]["day"] == "2026-08-05" and f["scm"]["state"] == "요청"
+    assert f["approved_roles"] == []
+    assert [r["status"] for r in store.list_requests(cid) if r["purpose"] == "안전재고 사용" and "8/5" in r["text"]] == ["대기"]
+    seq = statuses(store, cid)
+    assert seq.index("1차 차단") < len(seq) - 1 and "1차 집행" not in seq
+    ev = store.events(cid, kind="차단해제")
+    assert ev and "차단 해제" in ev[0]["detail"]["text"]
+    assert any("차단 해제" in a["text"] for a in eng.todo("그룹 CEO")["알림"])
+
+
+def test_차단된_기안이_새_날짜에서_재고가_충분하면_차단만_풀리고_승인_대기(store, monkeypatch):
+    eng, _, cid, st = scene2(store, ACCEPT, SCM_REFUSE, name="scenario_2_reject")
+    for i in range(4):
+        eng.play(st[i])
+    monkeypatch.setattr(inventory, "line_spare", lambda category, day: 10**9)
+    eng.update_plan("PLAN-001", {"settlement_date": "2026-08-05", "contract_deadline": "2026-07-30"}, "캠페인 담당자")
+    f = store.get_case(cid)["facts"]
+    assert store.get_case(cid)["status"] in ("승인 대기", "재승인 대기") and f["phase1_blocked"] is None
+    assert f["stock"]["shortage"] is False and f["scm"] is None
+
+
+def test_차단된_기안은_새_날짜가_계약_만료_뒤면_차단을_유지하고_이유를_갱신한다(store):
+    eng, _, cid, st = scene2(store, ACCEPT, SCM_REFUSE, name="scenario_2_reject")
+    for i in range(4):
+        eng.play(st[i])
+    old = store.get_case(cid)["facts"]["phase1_blocked"]["reason"]
+    eng.update_plan("PLAN-001", {"settlement_date": "2026-09-05", "contract_deadline": "2026-08-30"}, "캠페인 담당자")
+    f = store.get_case(cid)["facts"]
+    assert store.get_case(cid)["status"] == "1차 차단"
+    assert f["phase1_blocked"]["reason"] != old and "9/5" in f["phase1_blocked"]["reason"] and "계약 만료" in f["phase1_blocked"]["reason"]
+    assert store.events(cid, kind="차단해제") == []
+
+
+def test_차단된_기안은_집행일이_그대로면_되살아나지_않는다(store):
+    eng, _, cid, st = scene2(store, ACCEPT, SCM_REFUSE, name="scenario_2_reject")
+    for i in range(4):
+        eng.play(st[i])
+    eng.sync()
+    eng.update_plan("PLAN-001", {"contract_deadline": "2026-07-16"}, "캠페인 담당자")
+    assert store.get_case(cid)["status"] == "1차 차단" and store.events(cid, kind="차단해제") == []
+
+
+def test_SCM이_전량_허용해_분할안이_그대로면_분할안변경_이벤트를_남기지_않는다(store):
+    """검토 낮음 5."""
+    eng, _, cid, st = scene2(store, ACCEPT, SCM_FULL)
+    to_scm_reply(eng, store, cid, st, "전량 허용합니다.")
+    assert store.events(cid, kind="분할안변경") == []

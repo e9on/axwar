@@ -83,6 +83,7 @@ NO_VOLUME = "추정 불가 — 담당자 입력 필요"
 ALLOC_HOLD, ALLOC_FULL, ALLOC_PARTIAL = "보류", "전량", "조건부"
 EV_WARN, EV_REPORT, EV_REAPPROVE, EV_DRIFT = "조기경고", "그룹보고", "재승인알림", "등록부변경경고"
 EV_SPLIT, EV_STOCK, EV_ANNOUNCE, EV_BLOCK = "분할안변경", "재고부족", "공지", "1차차단"
+EV_UNBLOCK = "차단해제"  # 등록부 집행일을 고쳐 1차 차단이 풀림(사용자 결정 2026-11-11)
 SCM_ASKED, SCM_FULL, SCM_PARTIAL, SCM_REFUSED = "요청", "전량 허용", "일부 허용", "거절"
 ORDER_ADJUST, MEASURE = "발주 조정 요청", "측정 요청"
 # 사건 사실 ← 등록부 열(등록부가 원천). 바뀌면 사실을 새로 읽고 다시 판정한다.
@@ -419,6 +420,10 @@ class Engine:
             # 필요한 승인이 모두 있는데 다른 부서 회신(SCM)만 기다리는 건은 승인된 건이다
             approved = bool(case["facts"].get(STAGES["1차"][2])) and not _pending_roles(case["facts"])
             acts = deadline_actions(_d(case["facts"]["deadline"]), d, approved=approved)
+            if approved:
+                w = self._warn_scm_human(case, d)
+                if w:
+                    out.append(w)
             if "기본거부" in acts:
                 out.append(self._default_deny(case, d))
             elif "조기경고" in acts:
@@ -497,6 +502,14 @@ class Engine:
         f = case["facts"]
         changes = {k: {"before": f.get(k), "after": v} for k, v in vals.items() if f.get(k) != v}
         out: list[dict] = []
+        reopened = None
+        if case["kind"] == KIND_PLAN and case["status"] == S_PHASE1_BLOCKED and "settlement_date" in changes and f.get("logistics"):
+            reopened = self._reopen_blocked(case, vals, changes, actor)  # 사용자 결정 7: 집행일을 고치면 재점검
+            if reopened is not None and not reopened:
+                return []  # 새 날짜에서도 막혀 차단 유지(이유만 갱신)
+            case = self.store.get_case(case_id)
+            f = case["facts"]
+            changes = {k: {"before": f.get(k), "after": v} for k, v in vals.items() if f.get(k) != v}
         if case["status"] not in OPEN[case["kind"]]:
             data = {k: c for k, c in changes.items() if k in SYNC_FIELDS[case["kind"]] or k == "plan_total_krw"}
             last = self.store.events(case_id, kind=EV_DRIFT)
@@ -527,7 +540,47 @@ class Engine:
         material = [k for k in MATERIAL[case["kind"]] if k in changes]
         if f.get(ok_key) and (material or change is not None):
             out += self._invalidate(case_id, material, changes, change, actor)
+        if reopened:
+            out += self._announce_unblock(case_id, reopened, actor)
         return out + self._maybe_finalize(case_id, actor)
+
+    def _reopen_blocked(self, case: dict, vals: dict, changes: dict, actor: str) -> str | None | list:
+        """1차 차단된 기안의 등록부 집행일이 바뀌었을 때. 새 날짜가 계약 만료(갱신 미확정) 뒤라 여전히 막히면 차단을 유지하고
+        이유 문장만 갱신한다(빈 목록 반환). 아니면 차단을 풀고 승인 대기로 되돌려 지난 날짜(문자열)를 돌려준다.
+        뒤의 재점검(재고 장부·SCM)과 받은 승인 무효는 _refresh의 일반 경로가 한다."""
+        f = case["facts"]
+        old_day = changes["settlement_date"]["before"]
+        new_day = _d(vals["phase1_date"])
+        end = self._split_end(f)
+        if new_day > end:
+            reason = (f"등록부 집행일이 {_md(_d(old_day))}→{_md(new_day)}로 바뀌었으나 새 집행일이 계약 만료({_md(end)}) 뒤"
+                      "(갱신 미확정)라 1차 차단 유지")
+            f.update(vals)
+            f["shift"] = None
+            f["phase1_blocked"] = {"reason": reason, "at": self._today().isoformat()}
+            self.store.update_facts(case["id"], f, actor, f"1차 차단 유지: {reason}")
+            text = f"{case['ref_id']} {reason}"
+            for role in _required_roles(f):
+                self.store.add_event(case["id"], EV_BLOCK, actor, {"target": role, "text": text})
+            self._task_once(case["id"], CAMPAIGN, "1차 차단 확인", self._today(), text)
+            return []
+        f["phase1_blocked"] = None
+        self.store.update_facts(case["id"], f, actor, "집행일 변경: 1차 차단 해제")
+        self.store.set_status(case["id"], S_WAIT_APPROVAL, actor, "등록부 집행일 변경으로 1차 차단 해제, 재점검")
+        return old_day
+
+    def _announce_unblock(self, case_id: int, old_day: str, actor: str) -> list[dict]:
+        case = self.store.get_case(case_id)
+        f = case["facts"]
+        new = _md(_d(f["phase1_date"]))
+        if f.get("scm"):
+            result = f"안전재고 여유가 모자라 SCM에 다시 요청함(분할안 1차 {f['split']['phase1_qty']:,}개)"
+        else:
+            result = "재고 장부 여유 충분"
+        text = f"{case['ref_id']} 1차 차단 해제: 등록부 집행일 {_md(_d(old_day))}→{new}, 새 날짜로 재점검 — {result}"
+        for role in _required_roles(f):
+            self.store.add_event(case_id, EV_UNBLOCK, actor, {"target": role, "text": text})
+        return [{"date": self._today().isoformat(), "case_id": case_id, "action": "차단해제", "text": text}]
 
     def _invalidate(self, case_id: int, material: list[str], changes: dict, change, actor: str,
                     extra: tuple[str, ...] = ()) -> list[dict]:
@@ -584,6 +637,23 @@ class Engine:
         f["warned_targets"] = [*f.get("warned_targets", []), target]
         self.store.update_facts(case["id"], f, "시스템", "조기 경고")
         return {"date": d.isoformat(), "case_id": case["id"], "action": "조기경고", "target": target, "text": text}
+
+    def _warn_scm_human(self, case: dict, d: date) -> dict | None:
+        """필요한 승인은 모였는데 SCM 회신이 '사람 확인'에 머물러 있으면, 미승인 건과 같은 기한 창(조기 경고일~)에 한 번 경고한다.
+        자동 거절은 하지 않는다: 답은 했으나 해석이 애매한 건이라 사람이 처리해야 한다."""
+        f = case["facts"]
+        if case["kind"] != KIND_PLAN or f.get("scm_human_warned"):
+            return None
+        if not any(r["purpose"] == P_STOCK and r["status"] == R_HUMAN for r in self.store.list_requests(case["id"])):
+            return None
+        if not deadline_actions(_d(f["deadline"]), d, approved=False):
+            return None
+        text = f"{case['ref_id']} 확정 기한 {_md(_d(f['deadline']))} 전 SCM 회신 사람 확인 미처리(승인은 모였으나 SCM 회신 해석을 사람이 확인해야 확정됨)"
+        self.store.add_event(case["id"], EV_WARN, "시스템", {"target": CAMPAIGN, "pending": [], "text": text,
+                                                         "deadline": f["deadline"], "scm_human": True})
+        f["scm_human_warned"] = True
+        self.store.update_facts(case["id"], f, "시스템", "SCM 사람 확인 미처리 경고")
+        return {"date": d.isoformat(), "case_id": case["id"], "action": "조기경고", "target": CAMPAIGN, "text": text}
 
     def _default_deny(self, case: dict, d: date) -> dict:
         """기한까지 승인 없음 → 기본 거부(설계 3장 2번·4.3). 기안은 확정 보류(철회)."""
@@ -725,6 +795,12 @@ class Engine:
         stable, maximum = lg["stable"], lg["maximum"]
         line, units, d1 = f["volume"]["product_line"], f["volume"]["units"], _d(f["phase1_date"])
         cap, cap_hits = usable_capacity(stable, maximum)  # 숫자가 없으면 None = 처리 능력 제한 없음(회신 수용 = 요청 수량)
+        limit = lg.get("qty_limit")
+        if cap is None and lg["stance"] == "조건부수용" and isinstance(limit, int) and not isinstance(limit, bool) and limit >= 0:
+            # 물류가 이름표 없이 "N개까지"만 답한 조건부 수용: AI가 읽은 수량 제한을 처리 능력으로 쓴다
+            cap = limit
+            cap_hits = (RuleHit("logistics_qty_limit", f"물류 회신의 수량 제한 {limit:,}개를 처리 능력으로 쓴다(평소·최대 이름표 없음)",
+                                "물류 회신(AI 해석)", "가정"),)
         demand, line_of = self._active_loads(d1)
         want = demand.get(ref, 0)
         room = {ln: sum(demand.values()) + 1 for ln in set(line_of.values())}  # 재고 제약 없이 물류 몫만 본다
@@ -745,6 +821,9 @@ class Engine:
         if share < want:
             f["allocation"] = ALLOC_PARTIAL
         if need <= 0:
+            if share < day_qty:  # 재고는 충분하지만 물류 몫이 하루 수량보다 작다: 1차 = 물류 몫, 2차 = 나머지
+                f["split"] = self._split_dict(make_split(day_qty, share, spare, d1, restock, self._windows(),
+                                                         self._split_end(f)))
             self.store.update_facts(case_id, f, "시스템", "재고 장부 점검: 여유 충분")
             return
         sp = make_split(day_qty, share, spare + need, d1, restock, self._windows(), self._split_end(f))
@@ -866,8 +945,9 @@ class Engine:
         if no_reply_days:
             f["scm"]["no_reply_days"] = no_reply_days
         self.store.update_facts(case_id, f, actor, f"SCM 응답 반영: {reason}")
-        self._refresh(case_id, {"windows": windows})  # 날짜가 바뀌었으면 승인권자를 등록부 길로 다시 판정
+        # 받은 승인이 새 분할안과 맞지 않으면 먼저 무효로 한다. 확정(_refresh 끝)이 먼저 돌면 옛 승인으로 새 분할안을 확정해 버린다.
         self._reapprove_if_changed(case_id, old, reason, actor)
+        self._refresh(case_id, {"windows": windows})  # 날짜가 바뀌었으면 승인권자를 등록부 길로 다시 판정
 
     def _block_phase1(self, case_id: int, f: dict, reason: str, actor: str) -> None:
         """1차 차단: 승인권자·캠페인 담당에게 이유를 알린다. 다시 풀려면 집행일·물량을 바꿔 새 기안으로."""
@@ -900,6 +980,8 @@ class Engine:
         """분할안이 바뀌었는데 받은 승인이 있으면 무효로 하고 재승인을 받는다(설계 4.5: 처음 승인한 분할안과 달라지면)."""
         f = self.store.get_case(case_id)["facts"]
         new, seen = f["split"], f.get("approved_split") or old
+        if new == seen:
+            return []  # 분할안이 그대로면 변경 이벤트를 남기지 않는다(SCM 전량 허용 등)
         text = f"분할안 변경: 1차 {seen['phase1_qty']:,}→{new['phase1_qty']:,}개"
         if seen["phase1_date"] != new["phase1_date"]:
             text += f", 1차 날짜 {_md(_d(seen['phase1_date']))}→{_md(_d(new['phase1_date']))}"
@@ -1102,7 +1184,9 @@ class Engine:
         else:
             first = S_APPROVED
             # 비분할 경로도 분할 경로와 같은 단위(집행일 하루 수량). 하루 수량을 모르면(물량 곡선 밖) 기안 물량 전체.
-            f["phase1"] = {"qty": (f.get("stock") or {}).get("day_qty") or f["volume"]["units"],
+            st = f.get("stock") or {}
+            day_qty = st.get("day_qty") or f["volume"]["units"]
+            f["phase1"] = {"qty": min(day_qty, st["share"]) if st.get("share") else day_qty,
                            "date": f.get("phase1_date") or f["settlement_date"]}
             f["phase2"] = None
         self.store.update_facts(case_id, f, "시스템", "집행 수량 확정")
@@ -1282,10 +1366,15 @@ class Engine:
         for e in self.store.events(kind=EV_WARN):
             c = cases.get(e["case_id"])
             # 지금도 경고 대상인 역할에게만 보인다(승인권자가 바뀌어 대상이 달라지면 지난 경고는 내려감)
+            if e["detail"].get("scm_human"):  # 승인은 모였고 SCM 회신 사람 확인만 남은 건: 아직 사람 확인 중일 때만 보인다
+                if (c and e["detail"]["target"] == role and c["status"] in OPEN[c["kind"]] and
+                        any(r["purpose"] == P_STOCK and r["status"] == R_HUMAN for r in self.store.list_requests(c["id"]))):
+                    out["기한 임박"].append({**self._item(c), "text": e["detail"]["text"]})
+                continue
             if (c and e["detail"]["target"] == role and c["status"] in OPEN[c["kind"]]
                     and self._warn_target(c["facts"]) == role):
                 out["기한 임박"].append({**self._item(c), "text": e["detail"]["text"]})
-        for kind in (EV_REPORT, EV_REAPPROVE, EV_BLOCK):
+        for kind in (EV_REPORT, EV_REAPPROVE, EV_BLOCK, EV_UNBLOCK):
             for e in self.store.events(kind=kind):
                 c = cases.get(e["case_id"])
                 if c and e["detail"]["target"] == role:
