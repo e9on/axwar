@@ -96,3 +96,10 @@ def test_fake_모드_글쓰기는_키없이_돈다(monkeypatch):
     from app.ai.providers import make_provider
     monkeypatch.delenv("AXWAR_AI", raising=False)
     assert briefing(make_provider("writer"), FACTS).ok is True
+
+
+def test_소수_사실은_반올림하지_않고_그대로_넘긴다():
+    p = FakeProvider(["요약"])
+    briefing(p, {"재구매율": 0.085, "손익분기 숨은 매출 비율": 0.247})
+    user = p.calls[0][1]
+    assert "0.085" in user and "0.247" in user

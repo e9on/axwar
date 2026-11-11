@@ -29,7 +29,7 @@ def _fmt(v) -> str:
     if isinstance(v, int):
         return f"{v:,}"
     if isinstance(v, float):
-        return f"{v:,.2f}".rstrip("0").rstrip(".")
+        return f"{v:,}"  # 반올림하지 않는다(사실 왜곡 방지)
     if isinstance(v, (list, tuple)):
         return ", ".join(_fmt(x) for x in v)
     if isinstance(v, dict):
