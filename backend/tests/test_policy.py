@@ -164,3 +164,36 @@ def test_배정_모델이_단가표에_없으면_오류(monkeypatch, tmp_path):
     use_file(monkeypatch, tmp_path, text)
     with pytest.raises(ValueError, match="없는모델"):
         policy.get("ai.review_backup")
+
+
+# ---- 설정 화면 덮어쓰기 ----
+
+def test_덮어쓰기는_파일_값_위에_적용되고_출처가_바뀐다():
+    base = policy.get("deadline.early_warning_days")
+    policy.set_overrides({"deadline.early_warning_days": (base + 3, "담당자", "2030-01-02T00:00")})
+    value, source, desc = policy.entry("deadline.early_warning_days")
+    assert value == base + 3 and "설정 화면 변경" in source and "담당자" in source
+    assert desc.strip()
+    policy.clear_overrides()
+    assert policy.get("deadline.early_warning_days") == base
+
+
+def test_덮어쓰기는_다시_읽어도_남는다(monkeypatch):
+    base = policy.get("deadline.early_warning_days")
+    policy.set_overrides({"deadline.early_warning_days": (base + 1, "a", "t")})
+    policy.reload()
+    assert policy.get("deadline.early_warning_days") == base + 1
+    policy.clear_overrides()
+
+
+def test_값_검증은_자료형_양수_빈문자열을_본다():
+    assert policy.validate("deadline.early_warning_days", 7) == 7
+    assert policy.validate("split.stop_z", 2) == 2.0 and isinstance(policy.validate("split.stop_z", 2), float)
+    for key, bad in (("deadline.early_warning_days", 0), ("deadline.early_warning_days", -1),
+                     ("deadline.early_warning_days", 2.5), ("deadline.early_warning_days", True),
+                     ("deadline.early_warning_days", "7"), ("split.stop_z", "x"), ("ai.effort", ""),
+                     ("ai.effort", 3), ("ai.writer_model", "없는모델")):
+        with pytest.raises(ValueError):
+            policy.validate(key, bad)
+    with pytest.raises(ValueError, match="알 수 없는 정책 항목"):
+        policy.validate("없는.항목", 1)

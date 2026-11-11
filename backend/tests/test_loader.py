@@ -63,3 +63,38 @@ def test_계산에서_읽는_모든_파일이_등록되어_있다():
         for m in re.finditer(r'^(_\w+)\s*=\s*"([^"]+\.csv)"', src, re.M):
             used.add(m.group(2))
     assert used and used <= set(loader.REQUIRED_COLUMNS)
+
+
+# ---- 전속계약 통보문 ----
+
+def test_전속계약_통보문에서_고정피_만료_통보기한을_읽는다():
+    notices = loader.contract_notices()
+    n = notices["INF-001"]
+    assert n.annual_fixed_krw == 2_800_000_000
+    assert n.expiry == date(2026, 8, 31)
+    assert n.notice_deadline == date(2026, 7, 17)
+    assert n.auto_renew is True
+    assert n.influencer_name == "혜인"
+    assert "성과 피" in n.performance_fee_text
+    assert n.source_file.endswith("inf001_exclusive_contract_notice.md")
+
+
+def test_통보문_항목이_없으면_파일과_항목_이름을_담은_오류(tmp_path):
+    f = tmp_path / "x_exclusive_contract_notice.md"
+    f.write_text("당사 **혜인(INF-001)**\n\n| 항목 | 내용 |\n|---|---|\n| 현 계약 만료 | 2026-08-31 |\n", encoding="utf-8")
+    with pytest.raises(DataFormatError, match="x_exclusive_contract_notice.md.*보수"):
+        loader.parse_contract_notice(f)
+
+
+def test_고정피_단위를_읽는다(tmp_path):
+    f = tmp_path / "y_exclusive_contract_notice.md"
+    f.write_text("당사 **지수(INF-009)**\n\n| 항목 | 내용 |\n|---|---|\n| 보수 구조 | **고정 피 연 1억 2,000만원** + 성과 피 |\n"
+                 "| 현 계약 만료 | 2030-03-31 |\n| **해지·조건변경 통보 기한** | **2030-02-01** |\n| 미통보 시 | 계약 종료 |\n",
+                 encoding="utf-8")
+    n = loader.parse_contract_notice(f)
+    assert n.annual_fixed_krw == 120_000_000 and n.auto_renew is False and n.influencer_code == "INF-009"
+
+
+def test_기안_원본을_읽는다():
+    rows = loader.plan_rows()
+    assert len(rows) == 25 and rows[0]["plan_id"] == "PLAN-001"

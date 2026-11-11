@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 from datetime import date
 from functools import lru_cache
+from pathlib import Path
 
 from app.config import data_root
 
@@ -50,7 +51,7 @@ REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
     _INV + "sku_inventory_ms.csv": ("sku_id", "snapshot_date", "on_hand_qty"),
     _INV + "sku_weekly_sales_ms.csv": ("week", "sku_id", "sold_qty"),
     _MKT + "mkt_ad_spend_ms.csv": ("campaign_id", "media", "ad_cost_krw"),
-    _MKT + "mkt_budget_plan_ms.csv": ("plan_id", "campaign_id", "requested_budget_krw", "expected_gmv_krw", "settlement_date"),
+    _MKT + "mkt_budget_plan_ms.csv": ("plan_id", "campaign_id", "requested_budget_krw", "expected_gmv_krw", "settlement_date", "contract_deadline"),
     _MKT + "mkt_cost_master_ms.csv": ("sku_id", "channel_id", "product_cost_krw", "channel_fee_pct", "shipping_cost_krw", "return_logistics_cost_krw"),
     _MKT + "mkt_coupons_ms.csv": ("order_id", "stacked_flag"),
     _MKT + "mkt_orders_ms.csv": ("order_id", "order_date", "customer_ref", "channel_id", "sku_id", "campaign_id", "gmv_krw"),
@@ -148,4 +149,100 @@ def payment_term_notices() -> dict[str, PaymentTermNotice]:
         cur = best.get(n.partner_code)
         if cur is None or (n.effective, n.source_file) > (cur.effective, cur.source_file):
             best[n.partner_code] = n
+    return best
+
+
+# ---------------------------------------------------------------- 캠페인 기안 원본
+
+PLAN_SOURCE = _MKT + "mkt_budget_plan_ms.csv"  # 캠페인 확대 기안이 든 원본 파일
+
+
+def plan_rows() -> list[dict]:
+    """캠페인 기안 원본 행(필수 열 검사 포함)."""
+    return read_table(PLAN_SOURCE)
+
+
+# ---------------------------------------------------------------- 전속계약 통보문
+
+
+@dataclass(frozen=True)
+class ContractNotice:
+    influencer_code: str
+    influencer_name: str
+    annual_fixed_krw: int
+    performance_fee_text: str  # 성과 피 조건 원문
+    notice_deadline: date  # 해지·조건변경 통보 기한
+    expiry: date  # 현 계약 만료일
+    auto_renew: bool  # 미통보 시 자동 갱신 여부
+    source_file: str
+
+
+_CONTRACT_DIR = "02_masil/marketing"
+_CONTRACT_GLOB = "*exclusive_contract_notice*.md"
+_WHO = re.compile(r"([가-힣A-Za-z]+)\(([A-Za-z]+-\d+)\)")
+_FIXED_FEE = re.compile(r"고정\s*피\s*(?:연\s*)?([0-9][0-9,\s조억만원]*)")
+_MONEY_PART = re.compile(r"(\d[\d,]*)\s*(조|억|만)?")
+_UNIT = {"조": 10**12, "억": 10**8, "만": 10**4, None: 1}  # 한글 금액 단위 변환
+
+
+def _money_krw(text: str) -> int:
+    """'28억원', '1억 2,000만원' 같은 금액 표기를 원 단위 정수로."""
+    total = 0
+    for num, unit in _MONEY_PART.findall(text):
+        total += int(num.replace(",", "")) * _UNIT[unit]
+    return total
+
+
+def _table_rows(text: str) -> list[list[str]]:
+    rows = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("|"):
+            rows.append([c.strip() for c in line.strip("|").split("|")])
+    return rows
+
+
+def parse_contract_notice(path) -> ContractNotice:
+    """전속계약 통보문의 표·문장에서 연 고정 피·만료일·통보 기한·자동 연장을 읽는다. 못 찾으면 파일·항목 이름을 담은 오류."""
+    path = Path(path)
+    text = path.read_text(encoding="utf-8").replace("*", "")
+    rows = _table_rows(text)
+
+    def cell(*keys: str) -> str:
+        for r in rows:
+            if len(r) >= 2 and any(k in r[0] for k in keys):
+                return r[1]
+        raise DataFormatError(f"{path.name}에서 '{keys[0]}' 항목을 찾지 못함")
+
+    who = _WHO.search(text)
+    if not who:
+        raise DataFormatError(f"{path.name}에서 인플루언서 이름(코드)을 찾지 못함")
+    pay = cell("보수")
+    fee = _FIXED_FEE.search(pay)
+    if not fee:
+        raise DataFormatError(f"{path.name}에서 고정 피 금액 문구를 찾지 못함")
+
+    def day(*keys: str) -> date:
+        m = _DATE.search(cell(*keys))
+        if not m:
+            raise DataFormatError(f"{path.name}의 '{keys[0]}' 항목에서 날짜를 찾지 못함")
+        return date.fromisoformat(m.group(0))
+
+    return ContractNotice(
+        who.group(2), who.group(1), _money_krw(fee.group(1)),
+        pay.split("+", 1)[1].strip() if "+" in pay else "",
+        day("통보 기한"), day("만료"), "자동 갱신" in cell("미통보"), path.name)
+
+
+def contract_notices() -> dict[str, ContractNotice]:
+    """전속계약 통보문을 모두 읽어 인플루언서 코드별로 만료일이 가장 늦은 통보를 돌려준다."""
+    files = sorted((data_root() / _CONTRACT_DIR).glob(_CONTRACT_GLOB))
+    if not files:
+        raise DataFormatError(f"{_CONTRACT_DIR}/{_CONTRACT_GLOB} 통보문이 없음")
+    best: dict[str, ContractNotice] = {}
+    for f in files:
+        n = parse_contract_notice(f)
+        cur = best.get(n.influencer_code)
+        if cur is None or (n.expiry, n.source_file) > (cur.expiry, cur.source_file):
+            best[n.influencer_code] = n
     return best

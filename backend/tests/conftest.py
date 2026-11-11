@@ -16,3 +16,11 @@ def data_copy(tmp_path, monkeypatch):
     yield dst
     monkeypatch.undo()
     loader._read.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _clear_policy_overrides():
+    """설정 화면 덮어쓰기는 전역 상태라 시험 사이에 새지 않게 비운다."""
+    from app import policy
+    yield
+    policy.clear_overrides()
