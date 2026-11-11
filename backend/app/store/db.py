@@ -24,7 +24,7 @@ from app.calc.cash import sim_start
 from app.data import loader
 from app.rules.models import ApproverChange, RuleHit
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MODE_OPERATION, MODE_DEMO = "운영", "시연"
 MODES = (MODE_OPERATION, MODE_DEMO)
 ORIGINS = ("가져오기", "화면", "시연")
@@ -79,8 +79,22 @@ CREATE TABLE policy_changes (
   actor TEXT NOT NULL, at TEXT NOT NULL, reason TEXT NOT NULL);
 """
 
-# 단순 마이그레이션 자리: 버전 N을 N+1로 올리는 함수를 여기에 둔다. 지금은 버전 1뿐이라 비어 있다.
-_MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {}
+
+
+def _migrate_1_to_2(db: sqlite3.Connection) -> None:
+    """버전 2: AI 판정 기록(ai_judgments), 요청의 목적·상태, 작업 상세."""
+    db.execute("CREATE TABLE ai_judgments ("
+               "id INTEGER PRIMARY KEY, ts TEXT NOT NULL, sim_date TEXT NOT NULL, "
+               "case_id INTEGER NOT NULL REFERENCES cases(id) ON DELETE CASCADE, "
+               "kind TEXT NOT NULL, model TEXT NOT NULL, input_summary TEXT NOT NULL, result TEXT NOT NULL, "
+               "needs_human INTEGER NOT NULL, confidence REAL)")
+    db.execute("ALTER TABLE requests ADD COLUMN purpose TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE requests ADD COLUMN status TEXT NOT NULL DEFAULT '대기'")
+    db.execute("ALTER TABLE tasks ADD COLUMN detail TEXT NOT NULL DEFAULT ''")
+
+
+# 마이그레이션: 버전 N을 N+1로 올리는 함수. 새 DB도 버전 1 스키마를 만든 뒤 차례로 올린다(길을 하나만 둔다).
+_MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {1: _migrate_1_to_2}
 
 _CONTRACT_FIELDS = ("influencer_code", "influencer_name", "annual_fixed_krw", "performance_fee_text",
                     "notice_deadline", "expiry_date", "auto_renew", "source_doc")
@@ -202,8 +216,7 @@ class Store:
                 for stmt in _SCHEMA.split(";\n"):
                     if stmt.strip():
                         db.execute(stmt)
-                db.execute("INSERT INTO schema_version VALUES (?)", (SCHEMA_VERSION,))
-                return
+                db.execute("INSERT INTO schema_version VALUES (1)")
             version = db.execute("SELECT version FROM schema_version").fetchone()[0]
             if version > SCHEMA_VERSION:
                 raise RuntimeError(f"DB 스키마 버전 {version}이 이 프로그램({SCHEMA_VERSION})보다 새로움")
@@ -265,7 +278,7 @@ class Store:
         with self._tx() as db:
             if self._mode(db) == MODE_OPERATION:
                 raise PermissionError(CLOCK_LOCKED)
-            db.execute("DELETE FROM cases")  # 딸린 작업·요청·회신·리뷰·승인·권한이동·사건 이벤트는 CASCADE
+            db.execute("DELETE FROM cases")  # 딸린 작업·요청·회신·리뷰·승인·권한이동·AI 판정·사건 이벤트는 CASCADE
             db.execute("DELETE FROM contracts WHERE origin='시연'")
             db.execute("DELETE FROM plans WHERE origin='시연'")
             db.execute("DELETE FROM settings WHERE key='demo_clock'")
@@ -302,19 +315,90 @@ class Store:
             self._event(db, case_id, "승인기록", actor, {"decision": decision, "approvers": list(approvers)})
             return cur.lastrowid
 
-    def add_task(self, case_id: int, dept: str, title: str, due: date) -> int:
+    def add_task(self, case_id: int, dept: str, title: str, due: date, detail: str = "") -> int:
         with self._tx() as db:
-            cur = db.execute("INSERT INTO tasks (case_id, dept, title, due, status, created_at) VALUES (?,?,?,?,?,?)",
-                             (case_id, dept, title, due.isoformat(), "대기", _now()))
-            self._event(db, case_id, "작업생성", "시스템", {"dept": dept, "title": title, "due": due.isoformat()})
+            cur = db.execute("INSERT INTO tasks (case_id, dept, title, due, status, created_at, detail) "
+                             "VALUES (?,?,?,?,?,?,?)", (case_id, dept, title, due.isoformat(), "대기", _now(), detail))
+            self._event(db, case_id, "작업생성", "시스템",
+                        {"dept": dept, "title": title, "due": due.isoformat(), "detail": detail})
             return cur.lastrowid
 
-    def add_request(self, case_id: int, dept: str, text: str, attach_required: bool) -> int:
+    def all_tasks(self, dept: str | None = None) -> list[dict]:
+        """모든 사건의 작업(dept가 있으면 그 부서만)."""
+        rows = (self._all("SELECT * FROM tasks ORDER BY id") if dept is None
+                else self._all("SELECT * FROM tasks WHERE dept=? ORDER BY id", dept))
+        return [dict(r) for r in rows]
+
+    def add_request(self, case_id: int, dept: str, text: str, attach_required: bool, purpose: str = "") -> int:
         with self._tx() as db:
-            cur = db.execute("INSERT INTO requests (case_id, dept, text, attach_required, created_at) VALUES (?,?,?,?,?)",
-                             (case_id, dept, text, int(attach_required), _now()))
-            self._event(db, case_id, "요청생성", "시스템", {"dept": dept, "attach_required": attach_required})
+            cur = db.execute("INSERT INTO requests (case_id, dept, text, attach_required, created_at, purpose) "
+                             "VALUES (?,?,?,?,?,?)", (case_id, dept, text, int(attach_required), _now(), purpose))
+            self._event(db, case_id, "요청생성", "시스템",
+                        {"dept": dept, "attach_required": attach_required, "purpose": purpose})
             return cur.lastrowid
+
+    @staticmethod
+    def _request_dict(row) -> dict:
+        return {**dict(row), "attach_required": bool(row["attach_required"])}
+
+    def get_request(self, request_id: int) -> dict:
+        row = self._one("SELECT * FROM requests WHERE id=?", request_id)
+        if row is None:
+            raise KeyError(f"없는 요청: {request_id}")
+        return self._request_dict(row)
+
+    def all_requests(self, dept: str | None = None) -> list[dict]:
+        rows = (self._all("SELECT * FROM requests ORDER BY id") if dept is None
+                else self._all("SELECT * FROM requests WHERE dept=? ORDER BY id", dept))
+        return [self._request_dict(r) for r in rows]
+
+    def set_request_status(self, request_id: int, status: str, actor: str, note: str) -> None:
+        with self._tx() as db:
+            row = db.execute("SELECT case_id, status FROM requests WHERE id=?", (request_id,)).fetchone()
+            if row is None:
+                raise KeyError(f"없는 요청: {request_id}")
+            db.execute("UPDATE requests SET status=? WHERE id=?", (status, request_id))
+            self._event(db, row["case_id"], "요청상태", actor,
+                        {"request_id": request_id, "from": row["status"], "to": status, "note": note})
+
+    def update_facts(self, case_id: int, facts: dict, actor: str, note: str) -> None:
+        """사건 사실을 통째로 바꾼다. 바뀐 키를 이벤트로 남긴다."""
+        with self._tx() as db:
+            row = db.execute("SELECT facts FROM cases WHERE id=?", (case_id,)).fetchone()
+            if row is None:
+                raise KeyError(f"없는 사건: {case_id}")
+            old = json.loads(row[0])
+            new = json.loads(_json(facts))
+            keys = sorted(k for k in set(old) | set(new) if old.get(k) != new.get(k))
+            db.execute("UPDATE cases SET facts=?, updated_at=? WHERE id=?", (_json(new), _now(), case_id))
+            self._event(db, case_id, "사실변경", actor, {"keys": keys, "note": note})
+
+    def list_cases(self, kind: str | None = None) -> list[dict]:
+        rows = (self._all("SELECT * FROM cases ORDER BY id") if kind is None
+                else self._all("SELECT * FROM cases WHERE kind=? ORDER BY id", kind))
+        return [{**dict(r), "facts": json.loads(r["facts"])} for r in rows]
+
+    def list_approvals(self, case_id: int) -> list[dict]:
+        return [{**dict(r), "approvers": json.loads(r["approvers"])}
+                for r in self._all("SELECT * FROM approvals WHERE case_id=? ORDER BY id", case_id)]
+
+    # ---- AI 판정 기록(비용 장부 ai_calls와 별개) ----
+
+    def add_judgment(self, case_id: int, kind: str, model: str, input_summary: str, result: dict,
+                     needs_human: bool, confidence: float | None) -> int:
+        with self._tx() as db:
+            cur = db.execute("INSERT INTO ai_judgments (ts, sim_date, case_id, kind, model, input_summary, result, "
+                             "needs_human, confidence) VALUES (?,?,?,?,?,?,?,?,?)",
+                             (_now(), self._clock(db).isoformat(), case_id, kind, model, input_summary, _json(result),
+                              int(needs_human), confidence))
+            self._event(db, case_id, "AI판정", "AI",
+                        {"judgment_id": cur.lastrowid, "kind": kind, "model": model, "needs_human": needs_human})
+            return cur.lastrowid
+
+    def list_judgments(self, case_id: int | None = None) -> list[dict]:
+        rows = (self._all("SELECT * FROM ai_judgments ORDER BY id") if case_id is None
+                else self._all("SELECT * FROM ai_judgments WHERE case_id=? ORDER BY id", case_id))
+        return [{**dict(r), "result": json.loads(r["result"]), "needs_human": bool(r["needs_human"])} for r in rows]
 
     def add_reply(self, request_id: int, text: str, attachments: int) -> int:
         with self._tx() as db:
@@ -351,8 +435,7 @@ class Store:
         return [dict(r) for r in self._all("SELECT * FROM tasks WHERE case_id=? ORDER BY id", case_id)]
 
     def list_requests(self, case_id: int) -> list[dict]:
-        return [{**dict(r), "attach_required": bool(r["attach_required"])}
-                for r in self._all("SELECT * FROM requests WHERE case_id=? ORDER BY id", case_id)]
+        return [self._request_dict(r) for r in self._all("SELECT * FROM requests WHERE case_id=? ORDER BY id", case_id)]
 
     def list_replies(self, request_id: int) -> list[dict]:
         return [dict(r) for r in self._all("SELECT * FROM replies WHERE request_id=? ORDER BY id", request_id)]

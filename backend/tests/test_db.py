@@ -7,7 +7,7 @@ import pytest
 from app import config, policy
 from app.calc.cash import sim_start
 from app.rules.models import ApproverChange, RuleHit
-from app.store.db import Store, open_db
+from app.store.db import SCHEMA_VERSION, Store, open_db
 
 
 @pytest.fixture
@@ -73,7 +73,7 @@ def test_스키마_버전과_열린_DB_다시_열기(tmp_path):
     s.create_case("k", "r", {}, "접수")
     s.close()
     s2 = open_db(p)
-    assert s2.schema_version() == 1 and s2.get_case(1)["ref_id"] == "r"
+    assert s2.schema_version() == SCHEMA_VERSION and s2.get_case(1)["ref_id"] == "r"
     s2.close()
 
 
@@ -641,3 +641,103 @@ def test_무효_정책_덮어쓰기_경고는_같은_이력당_한_번만(tmp_pa
     s3 = open_db(p)
     assert len([e for e in s3.events(None) if e["kind"] == "정책덮어쓰기무시"]) == 1
     s3.close()
+
+
+# ---- 스키마 2: AI 판정 기록·요청 상태·작업 상세 (Task 11a) ----
+
+def test_스키마_버전은_2(store):
+    assert SCHEMA_VERSION == 2 and store.schema_version() == 2
+
+
+def test_스키마_1_DB를_2로_올린다(tmp_path):
+    """버전 1 DB(ai_judgments 없음, requests에 status·purpose 없음)를 열면 자료를 지키며 2로 올린다."""
+    from app.store import db as dbmod
+    p = tmp_path / "old.db"
+    con = sqlite3.connect(p)
+    for stmt in dbmod._SCHEMA.split(";\n"):
+        if stmt.strip():
+            con.execute(stmt)
+    con.execute("INSERT INTO schema_version VALUES (1)")
+    con.execute("INSERT INTO cases (kind, ref_id, facts, status, created_at, updated_at) "
+                "VALUES ('k', 'r', '{}', '접수', 't', 't')")
+    con.execute("INSERT INTO requests (case_id, dept, text, attach_required, created_at) VALUES (1, '물류', '요청', 0, 't')")
+    con.execute("INSERT INTO tasks (case_id, dept, title, due, status, created_at) VALUES (1, '물류', '출고', '2030-01-01', '대기', 't')")
+    con.commit()
+    con.close()
+    s = open_db(p)
+    assert s.schema_version() == 2
+    req = s.list_requests(1)[0]
+    assert req["status"] == "대기" and req["purpose"] == ""
+    assert s.list_tasks(1)[0]["detail"] == ""
+    s.add_judgment(1, "회신해석", "fake", "요약", {"stance": "수용"}, False, 0.9)
+    assert len(s.list_judgments(1)) == 1
+    s.close()
+
+
+def test_AI_판정은_별도_표에_남는다(store):
+    cid = store.create_case("k", "r", {}, "접수")
+    jid = store.add_judgment(cid, "회신해석", "claude-haiku-5-5", "물류 회신: 전량 가능", {"stance": "수용", "qty_limit": None},
+                             False, 0.9)
+    rows = store.list_judgments(cid)
+    assert [r["id"] for r in rows] == [jid]
+    r = rows[0]
+    assert r["kind"] == "회신해석" and r["model"] == "claude-haiku-5-5" and r["input_summary"] == "물류 회신: 전량 가능"
+    assert r["result"] == {"stance": "수용", "qty_limit": None} and r["needs_human"] is False and r["confidence"] == 0.9
+    assert r["sim_date"] == store.get_clock().isoformat() and r["ts"]
+    assert store.ai_calls() == []  # 판정 결과는 비용 장부에 넣지 않는다
+    assert [e["kind"] for e in store.events(cid)][-1] == "AI판정"
+
+
+def test_요청_목적과_상태를_바꾸면_이벤트가_남는다(store):
+    cid = store.create_case("k", "r", {}, "접수")
+    rid = store.add_request(cid, "물류", "처리 능력 회신 요청", False, purpose="물류 처리 능력")
+    req = store.get_request(rid)
+    assert req["purpose"] == "물류 처리 능력" and req["status"] == "대기" and req["case_id"] == cid
+    store.set_request_status(rid, "처리됨", "시스템", "AI 수용 해석")
+    assert store.get_request(rid)["status"] == "처리됨"
+    ev = store.events(cid)[-1]
+    assert ev["kind"] == "요청상태" and ev["detail"] == {"request_id": rid, "from": "대기", "to": "처리됨", "note": "AI 수용 해석"}
+    with pytest.raises(KeyError):
+        store.get_request(999)
+
+
+def test_작업에_상세를_남긴다(store):
+    cid = store.create_case("k", "r", {}, "접수")
+    tid = store.add_task(cid, "물류", "물류 출고", date(2030, 1, 2), detail="9/14부터 출고")
+    assert store.list_tasks(cid)[0]["detail"] == "9/14부터 출고"
+    assert [t["id"] for t in store.all_tasks(dept="물류")] == [tid] and store.all_tasks(dept="CS") == []
+
+
+def test_사실을_바꾸면_이벤트가_남는다(store):
+    cid = store.create_case("k", "r", {"a": 1}, "접수")
+    store.update_facts(cid, {"a": 2, "b": [1]}, "시스템", "회신 반영")
+    assert store.get_case(cid)["facts"] == {"a": 2, "b": [1]}
+    ev = store.events(cid)[-1]
+    assert ev["kind"] == "사실변경" and ev["detail"]["note"] == "회신 반영" and ev["detail"]["keys"] == ["a", "b"]
+    with pytest.raises(KeyError):
+        store.update_facts(999, {}, "a", "")
+
+
+def test_사건_목록과_승인_기록(store):
+    a = store.create_case("기안", "P1", {}, "회신 대기")
+    b = store.create_case("계약", "C1", {}, "승인 대기")
+    assert [c["id"] for c in store.list_cases()] == [a, b]
+    assert [c["id"] for c in store.list_cases(kind="계약")] == [b]
+    store.add_approval(a, ("Masil 대표",), "승인", "Masil 대표", "좋음")
+    ap = store.list_approvals(a)
+    assert len(ap) == 1 and ap[0]["approvers"] == ["Masil 대표"] and ap[0]["decision"] == "승인" and ap[0]["actor"] == "Masil 대표"
+
+
+def test_요청을_부서별로_모은다(store):
+    a = store.create_case("기안", "P1", {}, "회신 대기")
+    r1 = store.add_request(a, "물류", "x", False)
+    store.add_request(a, "CS", "y", False)
+    assert [r["id"] for r in store.all_requests(dept="물류")] == [r1]
+    assert len(store.all_requests()) == 2
+
+
+def test_초기화하면_AI_판정도_지워진다(store):
+    cid = store.create_case("k", "r", {}, "접수")
+    store.add_judgment(cid, "회신해석", "fake", "", {}, True, None)
+    store.reset()
+    assert store.list_judgments() == []
