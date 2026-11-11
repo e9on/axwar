@@ -1,6 +1,6 @@
 """승인권자 판정(설계 4.1). 순수 함수, 원본 데이터를 읽지 않는다."""
 # hardcode-allow: 100_000_000 10_000 (억·만 단위 표기 변환, 정책 값 아님)
-from datetime import date
+from datetime import date, timedelta
 
 from app import policy
 from app.calc.cash import Window
@@ -37,12 +37,12 @@ def _limit_text(n: int) -> str:
     return "".join(parts) + "원"
 
 
-def _covenant_hit(day: date, windows: list[Window]) -> RuleHit | None:
+def _covenant_hit(day: date, windows: list[Window], label: str = "집행일") -> RuleHit | None:
     for w in windows:
         if w.start <= day <= w.end:
             return RuleHit(
                 "covenant_window",
-                f"집행일 {_md(day)}이 하회 구간({_md(w.start)}~{_md(w.end)}) 안이라 "
+                f"{label} {_md(day)}이 하회 구간({_md(w.start)}~{_md(w.end)}) 안이라 "
                 "covenant 규정에 따라 CEO·이사회 승인",
                 POLICY, "원본")
     return None
@@ -101,7 +101,8 @@ def decide_contract(c: ContractFacts, windows: list[Window]) -> ApproverDecision
     contract_limit = policy.get("approval.contract_limit_krw")
     limit_txt = _limit_text(contract_limit)
     hits: list[RuleHit] = []
-    cov = _covenant_hit(c.deadline, windows)
+    # 현금이 나가기 시작하는 재계약 시작일(만료 다음 날) 기준 — 사용자 지정(2026-11-11)
+    cov = _covenant_hit(c.expiry + timedelta(days=1), windows, "재계약 시작일")
     if cov:
         approvers: tuple[str, ...] = ("CEO", "이사회")
         hits.append(cov)
