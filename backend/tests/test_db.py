@@ -767,4 +767,4 @@ def test_시연_행을_고쳐도_출처는_시연이라_초기화하면_지워�
     store.update_contract(cid, {"annual_fixed_krw": 2}, "담당자")
     assert store.get_contract(cid)["origin"] == "시연"
     store.reset()
-    assert all(c["influencer_code"] != "INF-T" for c in store.contracts())
+    assert all(c["influencer_code"] != "INF-T" for c in store.list_contracts())
