@@ -208,3 +208,30 @@ def test_parse는_앞뒤_글이_있어도_JSON을_찾는다():
     assert judge.parse("없음") is None
     assert judge.parse("{깨진") is None
     assert judge.parse(None) is None
+
+
+# ---- 수정 회차 1 ----
+
+@pytest.mark.parametrize("raw_qty", ["Infinity", "-Infinity", "NaN", "1e999", '"inf"', '"nan"'])
+def test_수량이_무한대나_NaN이어도_예외없이_사람확인(raw_qty):
+    text = '{"stance":"조건부수용","qty_limit":%s,"next_date":null,"needs_human":false}' % raw_qty
+    j = reply(text)
+    assert j.needs_human is True and j.qty_limit is None
+
+
+@pytest.mark.parametrize("bad", ['"가끔"', "1", "null", '"maybe"'])
+def test_content_gap이_불리언이_아니면_사람확인(bad):
+    text = '{"reason":"만족","sentiment":"긍정","content_gap":%s}' % bad
+    assert interpret_review(FakeProvider([text]), "p", "t").needs_human is True
+
+
+def test_content_gap이_없어도_사람확인():
+    text = '{"reason":"만족","sentiment":"긍정"}'
+    assert interpret_review(FakeProvider([text]), "p", "t").needs_human is True
+
+
+def test_content_gap_문자열_true_false는_받아들인다():
+    for s, want in (('"true"', True), ('"false"', False), ("false", False)):
+        text = '{"reason":"만족","sentiment":"긍정","content_gap":%s}' % s
+        j = interpret_review(FakeProvider([text]), "p", "t")
+        assert j.content_gap is want and j.needs_human is False

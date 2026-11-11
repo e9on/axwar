@@ -33,7 +33,7 @@ def norm(field: str, v):
     if field == "qty_limit":
         try:
             return int(float(str(v).replace(",", "")))
-        except ValueError:
+        except (ValueError, OverflowError):  # 숫자가 아님, NaN, 무한대
             return str(v)
     if field in ("content_gap", "needs_human"):
         return v is True or v == "true"
@@ -95,10 +95,12 @@ def interpret_review(p: Provider, product: str, text: str) -> ReviewJudgment:
     if out is None:
         return ReviewJudgment(FALLBACK_REASON, FALLBACK_SENTIMENT, False, None, True, model, raw)
     reason, sentiment = norm("reason", out.get("reason")), norm("sentiment", out.get("sentiment"))
-    valid = reason in ALLOWED["reason"] and sentiment in ALLOWED["sentiment"]
+    gap = out.get("content_gap")
+    valid = (reason in ALLOWED["reason"] and sentiment in ALLOWED["sentiment"]
+             and (isinstance(gap, bool) or gap in ("true", "false")))  # 불리언이 아니면 허용값 밖
     return ReviewJudgment(reason if reason in ALLOWED["reason"] else FALLBACK_REASON,
                           sentiment if sentiment in ALLOWED["sentiment"] else FALLBACK_SENTIMENT,
-                          norm("content_gap", out.get("content_gap")) is True, _confidence(out),
+                          norm("content_gap", gap) is True, _confidence(out),
                           not valid, model, raw)
 
 
