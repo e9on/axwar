@@ -69,7 +69,7 @@ def test_eval이_backend_지시문을_쓴다():
     from app.ai import prompts
     mod = load_eval_run("eval_run_for_test")
     assert mod.REVIEW_SYSTEM is prompts.REVIEW_SYSTEM
-    assert mod.REPLY_SYSTEM is prompts.REPLY_SYSTEM
+    assert mod.reply_system is prompts.reply_system
     assert not (REPO / "eval" / "prompts.py").exists()
 
 
@@ -301,6 +301,10 @@ def test_예비_호출_비용도_기록된다():
 
 
 # ---- 만들기 ----
+
+def test_AI_모드_상수는_없고_함수만_있다():
+    assert not hasattr(config, "AI_MODE")
+
 
 def test_기본_모드는_fake(monkeypatch):
     monkeypatch.delenv("AXWAR_AI", raising=False)

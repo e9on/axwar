@@ -14,7 +14,8 @@ import threading
 import time
 from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from collections import Counter
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 DIR = Path(__file__).parent
@@ -22,8 +23,9 @@ sys.path.insert(0, str(DIR))
 sys.path.insert(0, str(DIR.parent / "backend"))
 from app import policy  # noqa: E402
 from app.ai import providers  # noqa: E402
-from app.ai.prompts import REPLY_SYSTEM, REVIEW_SYSTEM, reply_user, review_user  # noqa: E402
-from score import norm, score_row, summarize  # noqa: E402,F401
+from app.ai.judge import norm, parse  # noqa: E402,F401  앱과 같은 파싱 규칙
+from app.ai.prompts import REVIEW_SYSTEM, reply_system, reply_user, review_user  # noqa: E402
+from score import score_row, summarize  # noqa: E402
 
 
 def job_key(row: dict) -> tuple:
@@ -66,9 +68,33 @@ MODELS = {name: policy.model_price(name) for name in policy.model_names()}
 CONCURRENCY = {"anthropic": 4, "upstage": 4, "gemini": 1}
 
 
+DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def request_date(item: dict) -> date | None:
+    """문제의 요청문에 적힌 첫 날짜(요청일). 없으면 None."""
+    m = DATE_RE.search(item.get("request", ""))
+    return date.fromisoformat(m.group(0)) if m else None
+
+
+def default_base_date(items: list[dict]) -> date | None:
+    """요청문에 날짜가 없는 문제에 쓸 기준일: 같은 데이터에서 가장 많이 나온 요청일."""
+    c = Counter(d for d in map(request_date, items) if d)
+    return c.most_common(1)[0][0] if c else None
+
+
+def base_date(item: dict, default: date | None) -> date | None:
+    return request_date(item) or default
+
+
+def reply_system_for(item: dict) -> str:
+    """회신 지시문. 기준일은 문제 데이터에서 정한다(item["_today"], run이 채움)."""
+    return reply_system(item["_today"])
+
+
 TASKS = {
-    "reviews": ("reviews.jsonl", REVIEW_SYSTEM, review_user, ["reason", "sentiment", "content_gap"]),
-    "replies": ("replies.jsonl", REPLY_SYSTEM, reply_user, ["stance", "qty_limit", "next_date", "needs_human"]),
+    "reviews": ("reviews.jsonl", lambda it: REVIEW_SYSTEM, review_user, ["reason", "sentiment", "content_gap"]),
+    "replies": ("replies.jsonl", reply_system_for, reply_user, ["stance", "qty_limit", "next_date", "needs_human"]),
 }
 
 
@@ -118,16 +144,6 @@ def run_pool(jobs: list, work, budget: Budget, workers: int) -> int:
     return skipped
 
 
-def parse(text: str) -> dict | None:
-    m = re.search(r"\{[\s\S]*\}", text or "")
-    if not m:
-        return None
-    try:
-        return json.loads(m.group(0))
-    except json.JSONDecodeError:
-        return None
-
-
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--models", default=",".join(MODELS))
@@ -150,14 +166,18 @@ def main() -> None:
 
     jobs: dict[str, list] = {}
     for t in tasks:
-        fname, system, user_fn, fields = TASKS[t]
+        fname, system_fn, user_fn, fields = TASKS[t]
         items = [json.loads(l) for l in (DIR / "data" / fname).read_text(encoding="utf-8").splitlines() if l.strip()]
+        if t == "replies":
+            default = default_base_date(items)
+            for it in items:
+                it["_today"] = base_date(it, default)
         if a.limit:
             items = items[: a.limit]
         for model in models:
             for rep in range(a.reps):
                 for it in items:
-                    jobs.setdefault(MODELS[model][0], []).append((t, system, user_fn, fields, model, rep, it))
+                    jobs.setdefault(MODELS[model][0], []).append((t, system_fn, user_fn, fields, model, rep, it))
 
     skipped = 0
     for p in list(jobs):
@@ -173,18 +193,18 @@ def main() -> None:
     finished = 0
     total = sum(len(v) for v in jobs.values())
     # 예상 비용: 한글 약 1.5자=1토큰, 출력은 Anthropic 150·그 외 80토큰으로 어림한다(실제와 다를 수 있음).
-    est = sum(estimate_cost(j[4], len(j[1] + j[2](j[6])) / 1.5, 150 if MODELS[j[4]][0] == "anthropic" else 80)
+    est = sum(estimate_cost(j[4], len(j[1](j[6]) + j[2](j[6])) / 1.5, 150 if MODELS[j[4]][0] == "anthropic" else 80)
               for v in jobs.values() for j in v)
     budget = Budget(a.budget)
     print(f"예상 비용 약 ${est:.2f} ({total}건)" + (f", 예산 ${a.budget:.2f}" if a.budget else ""),
           file=sys.stderr, flush=True)
 
     def run(job):
-        t, system, user_fn, fields, model, rep, it = job
+        t, system_fn, user_fn, fields, model, rep, it = job
         t0 = time.time()
         text, in_tok, out_tok, err, stop, think = "", 0, 0, None, None, None
         try:
-            text, in_tok, out_tok, stop, think = call_model(model, system, user_fn(it))
+            text, in_tok, out_tok, stop, think = call_model(model, system_fn(it), user_fn(it))
         except Exception as e:  # noqa: BLE001 - 실패도 결과로 기록한다
             err = str(e)
         budget.add(estimate_cost(model, in_tok, out_tok))

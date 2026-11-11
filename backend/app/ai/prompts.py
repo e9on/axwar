@@ -1,4 +1,7 @@
 """AI 판정 지시문. 시험(eval)과 앱이 같은 규칙을 쓴다. eval/run.py가 여기서 가져간다."""
+from __future__ import annotations
+
+from datetime import date
 
 REVIEW_SYSTEM = """너는 화장품 캠페인 리뷰를 분류하는 담당자다. 리뷰 하나를 읽고 JSON 하나만 출력한다.
 
@@ -21,7 +24,7 @@ def review_user(it: dict) -> str:
     return f"상품: {it['product']}\n리뷰: {it['text']}"
 
 
-REPLY_SYSTEM = """너는 부서 간 요청에 대한 회신을 해석하는 담당자다. 요청과 회신을 읽고 JSON 하나만 출력한다. 연도는 2026년이다.
+REPLY_SYSTEM_TEMPLATE = """너는 부서 간 요청에 대한 회신을 해석하는 담당자다. 요청과 회신을 읽고 JSON 하나만 출력한다. 기준일은 {today}다.
 
 필드
 - stance: 다음 중 하나
@@ -34,9 +37,15 @@ REPLY_SYSTEM = """너는 부서 간 요청에 대한 회신을 해석하는 담�
 - needs_human: 아래 중 하나면 true, 아니면 false
   - stance가 "거절" 또는 "정보부족"
   - stance가 "조건부수용"인데 조건이 qty_limit과 next_date만으로 다 담기지 않음(비용, 예산, 범위 제한, 역제안, 위험 경고 등)
+  - 위험 경고만 붙은 "전량 가능"은 stance를 "조건부수용"으로 하고 needs_human을 true로 한다
 - confidence: 0~1 사이 숫자, 너의 판단 확신도
 
 출력 예: {"stance":"조건부수용","qty_limit":1500,"next_date":"YYYY-MM-DD","needs_human":false,"confidence":0.85}"""
+
+
+def reply_system(today: date) -> str:
+    """회신 해석 지시문. 기준일(오늘 또는 요청일)을 받아 넣는다. 지시문에 날짜를 박아 두지 않는다."""
+    return REPLY_SYSTEM_TEMPLATE.replace("{today}", today.isoformat())
 
 
 def reply_user(it: dict) -> str:

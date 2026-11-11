@@ -15,10 +15,6 @@ def data_root() -> Path:
     return Path(env) if env else DATA_ROOT
 
 
-# AI 모드: "fake"(기본, 키 없이 규칙 기반 고정 응답) | "real"(실제 모델 호출)
-AI_MODE: str = os.environ.get("AXWAR_AI", "fake")
-
-
 def ai_mode() -> str:
-    """AI 모드. 호출할 때마다 환경변수를 다시 읽는다."""
+    """AI 모드: "fake"(기본, 키 없이 규칙 기반 고정 응답) | "real"(실제 모델 호출). 호출할 때마다 환경변수를 다시 읽는다."""
     return os.environ.get("AXWAR_AI", "fake")

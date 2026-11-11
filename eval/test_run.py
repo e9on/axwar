@@ -121,3 +121,27 @@ def test_잘리거나_오류난_건은_완료가_아니다(monkeypatch, tmp_path
 def test_예상_비용은_모델_단가로_계산한다(monkeypatch, tmp_path):
     run = load_run(monkeypatch, tmp_path)
     assert run.estimate_cost("claude-sonnet-5-5", 1_000_000, 1_000_000) == 12.0
+
+
+def test_회신_기준일은_요청문의_날짜_없으면_데이터의_대표_요청일(monkeypatch, tmp_path):
+    from datetime import date
+    run = load_run(monkeypatch, tmp_path)
+    items = [{"request": "2031-02-03 출고 가능?"}, {"request": "2031-02-03 확대"}, {"request": "자료 제출"},
+             {"request": "2031-05-06 다른 날"}]
+    default = run.default_base_date(items)
+    assert default == date(2031, 2, 3)
+    assert run.base_date(items[3], default) == date(2031, 5, 6)
+    assert run.base_date(items[2], default) == date(2031, 2, 3)
+
+
+def test_회신_지시문은_문항의_기준일을_넣는다(monkeypatch, tmp_path):
+    from datetime import date
+    run = load_run(monkeypatch, tmp_path)
+    s = run.TASKS["replies"][1]({"_today": date(2031, 2, 3)})
+    assert "기준일은 2031-02-03다" in s
+
+
+def test_eval의_파싱_규칙은_앱과_같다(monkeypatch, tmp_path):
+    run = load_run(monkeypatch, tmp_path)
+    from app.ai import judge
+    assert run.parse is judge.parse and run.norm is judge.norm
