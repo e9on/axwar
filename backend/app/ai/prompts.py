@@ -1,4 +1,4 @@
-"""AI 판정 지시문. 시험과 앱이 같은 규칙을 쓴다."""
+"""AI 판정 지시문. 시험(eval)과 앱이 같은 규칙을 쓴다. eval/run.py가 여기서 가져간다."""
 
 REVIEW_SYSTEM = """너는 화장품 캠페인 리뷰를 분류하는 담당자다. 리뷰 하나를 읽고 JSON 하나만 출력한다.
 
@@ -36,7 +36,7 @@ REPLY_SYSTEM = """너는 부서 간 요청에 대한 회신을 해석하는 담�
   - stance가 "조건부수용"인데 조건이 qty_limit과 next_date만으로 다 담기지 않음(비용, 예산, 범위 제한, 역제안, 위험 경고 등)
 - confidence: 0~1 사이 숫자, 너의 판단 확신도
 
-출력 예: {"stance":"조건부수용","qty_limit":1500,"next_date":"2026-07-28","needs_human":false,"confidence":0.85}"""
+출력 예: {"stance":"조건부수용","qty_limit":1500,"next_date":"YYYY-MM-DD","needs_human":false,"confidence":0.85}"""
 
 
 def reply_user(it: dict) -> str:

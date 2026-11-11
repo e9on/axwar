@@ -68,71 +68,22 @@ def test_없는_결과_파일은_빈_완료로_본다(monkeypatch, tmp_path):
 
 # ---- 보완 작업: Anthropic 요청 본문, 오류 기록, 예산, 잘림 ----
 
-def _fake_anthropic_response(stop="end_turn", thinking=None):
-    usage = {"input_tokens": 10, "output_tokens": 20}
-    if thinking is not None:
-        usage["output_tokens_details"] = {"thinking_tokens": thinking}
-    return {"content": [{"type": "text", "text": '{"a":1}'}], "stop_reason": stop, "usage": usage}
-
-
-def test_Anthropic_요청은_effort_low와_max_tokens_2048이고_thinking_temperature가_없다(monkeypatch, tmp_path):
+# call_model의 요청 본문·재시도·키 읽기는 backend/tests/test_providers.py에서 시험한다.
+def test_call_model은_앱_제공자를_부르고_평가용_결과로_바꾼다(monkeypatch, tmp_path):
     run = load_run(monkeypatch, tmp_path)
-    monkeypatch.setitem(run._KEYS, "ANTHROPIC_API_KEY", "가짜")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "가짜")
     seen = {}
 
     def fake_post(url, headers, body):
         seen["body"] = body
-        return _fake_anthropic_response(thinking=5)
+        usage = {"input_tokens": 10, "output_tokens": 20, "output_tokens_details": {"thinking_tokens": 5}}
+        return {"content": [{"type": "text", "text": '{"a":1}'}], "stop_reason": "end_turn", "usage": usage}
 
-    monkeypatch.setattr(run, "post", fake_post)
+    monkeypatch.setattr(run.providers, "post", fake_post)
     r = run.call_model("claude-sonnet-5-5", "sys", "usr")
-    body = seen["body"]
-    assert body["max_tokens"] == 2048
-    assert body["output_config"] == {"effort": "low"}
-    assert "thinking" not in body and "temperature" not in body
-    assert r.stop_reason == "end_turn" and r.thinking_tokens == 5
+    assert r == run.CallResult('{"a":1}', 10, 20, "end_turn", 5)
+    assert seen["body"]["max_tokens"] == run.policy.get("ai.max_tokens")
 
-
-def test_thinking_토큰이_없으면_None(monkeypatch, tmp_path):
-    run = load_run(monkeypatch, tmp_path)
-    monkeypatch.setitem(run._KEYS, "ANTHROPIC_API_KEY", "가짜")
-    monkeypatch.setattr(run, "post", lambda *a: _fake_anthropic_response())
-    assert run.call_model("claude-haiku-5-5", "s", "u").thinking_tokens is None
-
-
-def test_HTTP_오류는_상태코드와_본문_300자를_남긴다(monkeypatch, tmp_path):
-    import io
-    import urllib.error
-    run = load_run(monkeypatch, tmp_path)
-    body = ("x" * 400).encode()
-
-    def fake_urlopen(req, timeout=0):
-        raise urllib.error.HTTPError(req.full_url, 400, "bad", {}, io.BytesIO(body))
-
-    monkeypatch.setattr(run.urllib.request, "urlopen", fake_urlopen)
-    try:
-        run.post("http://x", {}, {})
-        assert False, "예외가 나야 한다"
-    except RuntimeError as e:
-        msg = str(e)
-    assert msg.startswith("400 ") and "x" * 300 in msg and "x" * 301 not in msg
-
-
-def test_재시도_끝_실패도_마지막_상태코드와_본문을_포함한다(monkeypatch, tmp_path):
-    import io
-    import urllib.error
-    run = load_run(monkeypatch, tmp_path)
-    monkeypatch.setattr(run.time, "sleep", lambda s: None)
-
-    def fake_urlopen(req, timeout=0):
-        raise urllib.error.HTTPError(req.full_url, 529, "over", {}, io.BytesIO(b"overloaded"))
-
-    monkeypatch.setattr(run.urllib.request, "urlopen", fake_urlopen)
-    try:
-        run.post("http://x", {}, {})
-        assert False
-    except RuntimeError as e:
-        assert "재시도 한도 초과" in str(e) and "529" in str(e) and "overloaded" in str(e)
 
 
 def test_예산에_도달하면_새_호출을_멈춘다(monkeypatch, tmp_path):
