@@ -228,10 +228,10 @@ def test_판매율_조절_갈래를_API로_2차_승인_집행_완료까지(store
     cid = d["case"]["id"]
     assert "2차 승인권자" in detail_of(c.post(f"/api/cases/{cid}/phase2/decision", json={"actor": "그룹 CEO", "action": "승인"}))
     assert "승인 또는 거절" in detail_of(c.post(f"/api/cases/{cid}/phase2/decision", json={"actor": "Masil 대표", "action": "분할승인"}))
-    sc.run_from(sale + 1)  # 2차 승인 두 건 → 2차 집행 → 8/25 완료
+    sc.run_from(sale + 1)  # 2차 승인 두 건 → 2차 집행 → 8/27 완료
     d = sc.detail("PLAN-001")
     assert d["case"]["status"] == "완료" and d["phase2"]["result"]["result"] == "집행"
-    assert d["phase2"]["exec"]["qty"] == qty_b * 2550 // 3000 and d["phase2"]["exec"]["date"] == "2026-08-24"
+    assert d["phase2"]["exec"]["qty"] == qty_b * 2550 // 3000 and d["phase2"]["exec"]["date"] == "2026-08-26"
     assert {(t["dept"], t["title"]) for t in d["tasks"]} >= {("물류", "물류 출고(2차)"), ("CS", "CS 대비(2차)")}
     assert [a["decision"] for a in d["approvals"]][-2:] == ["2차 승인", "2차 승인"]
 
@@ -545,7 +545,7 @@ def test_판매율_보류는_담당이_2차_취소로_판단한다(store, monkey
     c, cid = hold_state(store, monkeypatch)
     assert "이유" in detail_of(c.post(f"/api/cases/{cid}/phase2/cancel", json={"actor": "캠페인 담당자", "reason": " "}))
     r = ok(c.post(f"/api/cases/{cid}/phase2/cancel", json={"actor": "캠페인 담당자", "reason": "수요 부족"}))
-    assert r["choice"] == "2차 취소" and r["status"] == "1차 집행"
+    assert r["choice"] == "2차 취소" and r["status"] == "완료"  # 수정 회차 2 C
     assert ok(c.get(f"/api/cases/{cid}"))["phase2"] is None
 
 
@@ -694,3 +694,41 @@ def test_시연_초기화는_운영에서_연_사건을_지우지_않는다(stor
     assert ops in cases and cases[ops]["origin"] == "운영" and cases[ops]["ref_id"] == "PLAN-화면"
     assert [x["origin"] for x in cases.values() if x["id"] != ops] == ["시연"]
     assert ok(c.get(f"/api/cases/{ops}"))["requests"]
+
+
+# ---------------------------------------------------------------- 수정 회차 2: 상부 상신
+
+def test_상신_API_1차와_2차(store):
+    c, _, _ = client(store, ACCEPT, SCM_PART)
+    sc = Scene(c, "scenario_2_sales")
+    sc.play(sc.steps[0])  # 물류 회신 -> 1차 승인 대기(CEO·이사회)
+    cid = sc.case_id("PLAN-001")
+    body = {"actor": "그룹 CEO", "stage": "1차", "opinion": "승인 권고", "reason": "금액이 커서 이사회 확인 요청"}
+    assert "승인권자" in detail_of(c.post(f"/api/cases/{cid}/escalate", json={**body, "actor": "물류 담당자"}))
+    detail_of(c.post(f"/api/cases/{cid}/escalate", json={**body, "opinion": "몰라요"}))
+    detail_of(c.post(f"/api/cases/{cid}/escalate", json={**body, "reason": " "}))
+    r = ok(c.post(f"/api/cases/{cid}/escalate", json=body))
+    assert r["to"] == "이사회" and r["required_roles"] == ["이사회"] and r["stage"] == "1차"
+    assert "승인권자가 아님" in detail_of(c.post(f"/api/cases/{cid}/decision", json={"actor": "그룹 CEO", "action": "승인"}))
+    d = ok(c.get(f"/api/cases/{cid}?viewer=이사회"))
+    assert d["escalations"][0]["reason"] == body["reason"] and d["viewer"]["can_escalate"] is False  # 맨 위
+    todo = ok(c.get("/api/todo/이사회"))["승인 대기"][0]
+    assert todo["상신"][0]["opinion"] == "승인 권고"
+    assert "맨 위" in detail_of(c.post(f"/api/cases/{cid}/escalate", json={**body, "actor": "이사회"}))
+    detail_of(c.post("/api/cases/9999/escalate", json=body), 404)
+
+
+def test_상신_API_2차_승인_단계(store):
+    c, _, _ = client(store, ACCEPT, SCM_PART)
+    sc = Scene(c, "scenario_2_sales")
+    sale = next(i for i, x in enumerate(sc.steps) if x["action"] == "판매")
+    sc.run(upto=sale + 1)
+    cid = sc.case_id("PLAN-001")
+    body = {"actor": "Masil 대표", "stage": "2차", "opinion": "반대 권고", "reason": "물량이 커서 CEO 확인 요청"}
+    r = ok(c.post(f"/api/cases/{cid}/escalate", json=body))
+    assert r["to"] == "CEO" and r["pending"] == ["CEO", "그룹"]
+    assert "2차 승인권자" in detail_of(c.post(f"/api/cases/{cid}/phase2/decision", json={"actor": "Masil 대표", "action": "승인"}))
+    assert "보고 체계" in detail_of(c.post(f"/api/cases/{cid}/escalate", json={**body, "actor": "그룹 재무"}))
+    d = ok(c.get(f"/api/cases/{cid}?viewer=그룹 CEO"))
+    assert d["viewer"]["can_decide_phase2"] is True and d["escalations"][0]["stage"] == "2차"
+    assert d["phase2"]["deadline"] == "2026-08-25" and d["phase2"]["plan"]["date"] == "2026-08-26"

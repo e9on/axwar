@@ -935,26 +935,27 @@ def test_장면2_판매율_변형_반품이_기준_이내면_판매율로_2차_�
     assert f["phase2"]["qty"] == qty_b * 2550 // 3000 == 11046
     assert f["phase2"]["amount_krw"] == amt_b * 2550 // 3000
     assert f["phase2_sellthrough"]["rate"] == 0.85 and f["phase2_sellthrough"]["outcome"] == "조절"
-    assert f["phase2"]["date"] == "2026-08-24" and f["phase2_approvers"] == approvers_b
+    assert f["phase2"]["date"] == "2026-08-26" and f["phase2_planned_date"] == "2026-08-24"  # 수정 회차 2 B: 승인 기간 확보로 연기
+    assert f["phase2_approvers"] == approvers_b
     assert any(h["rule_id"] == "sellthrough_adjust" for h in f["phase2_approver_hits"])
     ev = store.events(cid, kind="판매율조절")
     assert len(ev) == 1 and ev[0]["detail"]["qty_after"] == 11046 and "85.0%" in ev[0]["detail"]["text"]
 
 
 def test_장면2_판매율_변형_대본을_2차_승인_집행_완료까지_끝까지_재생(store):
-    """수정 회차 1 판정 3: 8/24 2차 승인 대기(기한 8/25) → Masil 대표·그룹 승인 → 2차 집행 → 8/25 완료."""
+    """수정 회차 1 판정 3: 8/24 2차 승인 대기(기한 8/25, 집행일 8/24→8/26 연기) → Masil 대표·그룹 승인 → 2차 집행 → 8/27 완료."""
     eng, fake, cid, st = scene2(store, ACCEPT, SCM_PART, name="scenario_2_sales")
     for step in st:
         eng.play(step)
     case = store.get_case(cid)
     f = case["facts"]
-    assert case["status"] == "완료" and store.get_clock() == date(2026, 8, 25)
+    assert case["status"] == "완료" and store.get_clock() == date(2026, 8, 27)
     assert f["phase2_deadline"] == "2026-08-25" and f["phase2_approved_roles"] == ["Masil 대표", "그룹"]
-    assert f["phase2_exec"] == {"qty": 11046, "date": "2026-08-24", "amount_krw": f["phase2"]["amount_krw"],
+    assert f["phase2_exec"] == {"qty": 11046, "date": "2026-08-26", "amount_krw": f["phase2"]["amount_krw"],
                                 "approved_at": "2026-08-24"}
     assert f["phase2_result"]["result"] == "집행"
     assert [e["detail"]["to"] for e in store.events(cid, kind="상태변경")][-4:] == [
         "2차 잠금", "2차 승인 대기", "2차 집행", "완료"]
     t = {(x["dept"], x["title"]): (x["due"], x["detail"]) for x in store.list_tasks(cid)}
-    assert t[("물류", "물류 출고(2차)")][0] == "2026-08-24" and "11,046개" in t[("물류", "물류 출고(2차)")][1]
-    assert t[("CS", "CS 대비(2차)")][0] == "2026-08-24"
+    assert t[("물류", "물류 출고(2차)")][0] == "2026-08-26" and "11,046개" in t[("물류", "물류 출고(2차)")][1]
+    assert t[("CS", "CS 대비(2차)")][0] == "2026-08-26"

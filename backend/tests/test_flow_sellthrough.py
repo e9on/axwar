@@ -290,11 +290,12 @@ def test_승인권자가_그대로면_권한_이동을_남기지_않는다(store
     assert len(store.get_approver_changes(cid)) == n_before
 
 
-def test_조절_결과_2차가_0개면_2차_없음으로_1차_집행에_둔다(store, monkeypatch):
+def test_조절_결과_2차가_0개면_2차_없음으로_관찰이_끝났으니_완료(store, monkeypatch):
     eng, cid = locked(store, monkeypatch, p1=10, p2=1, amount=100)
     eng.record_phase1_sales(cid, ACTOR, orders=5, returns=0)  # 5/10 = 0.5 -> 1*5//10 = 0
     f = facts(store, cid)
-    assert f["phase2"] is None and store.get_case(cid)["status"] == "1차 집행"
+    assert f["phase2"] is None and store.get_case(cid)["status"] == "완료"
+    assert f["phase2_result"]["result"] == "2차 없음"
     assert f["phase2_sellthrough"]["qty_after"] == 0
 
 

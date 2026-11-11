@@ -198,7 +198,7 @@ def test_올려_받은_사람은_2차_보류를_직접_판단한다(store, monke
     with pytest.raises(PermissionError):
         eng.cancel_phase2(cid, "물류 담당자", "사유")
     r = eng.cancel_phase2(cid, target, "판매가 너무 저조해 2차를 하지 않음")
-    assert r["status"] == "1차 집행"
+    assert r["status"] == "완료"  # 수정 회차 2 C: 2차 없는 건은 관찰이 끝났으면 바로 완료
     assert all(x["kind"] != "방치올림" for x in eng.todo(target)["알림"])
 
 
@@ -268,11 +268,12 @@ def test_2차_계속으로_금액이_줄면_승인권자를_다시_판정한다(
 
 # ---------------------------------------------------------------- 2차 취소
 
-def test_2차_취소는_2차_없음으로_1차_집행_상태에_둔다(store, monkeypatch):
+def test_2차_취소는_2차_없음으로_관찰이_끝났으니_바로_완료한다(store, monkeypatch):
     eng, cid, _ = hold_case(store, monkeypatch)
     r = eng.cancel_phase2(cid, ACTOR, "판매 부진으로 2차 중단")
     f = facts(store, cid)
-    assert f["phase2"] is None and store.get_case(cid)["status"] == "1차 집행" and r["status"] == "1차 집행"
+    assert f["phase2"] is None and store.get_case(cid)["status"] == "완료" and r["status"] == "완료"
+    assert f["phase2_result"]["result"] == "2차 없음"
     d = store.events(cid, kind="판매율판단")[0]["detail"]
     assert d["choice"] == "2차 취소" and d["rate"] == 0.4 and d["reason"] == "판매 부진으로 2차 중단"
     assert (d["qty_before"], d["qty_after"]) == (P2_QTY, 0)

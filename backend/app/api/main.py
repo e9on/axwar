@@ -43,6 +43,12 @@ class Decision(Who):
     comment: str = ""
 
 
+class Escalation(Who):
+    stage: str = "1차"
+    opinion: str
+    reason: str
+
+
 class Reply(Who):
     text: str
     attachments: StrictInt = Field(0, ge=0)
@@ -288,6 +294,12 @@ def create_app(store: Store, engine: Engine, static_dir: str | Path | None = Non
     @app.post("/api/cases/{case_id}/sales")
     def sales(case_id: int, body: Sales):
         return engine.record_phase1_sales(case_id, body.actor, body.orders, body.returns)
+
+    @app.post("/api/cases/{case_id}/escalate")
+    def escalate(case_id: int, body: Escalation):
+        """승인권자가 권한을 넘는다고 보고 상급자에게 올린다(상신). stage: 1차·2차, opinion: 승인 권고·반대 권고."""
+        store.get_case(case_id)
+        return engine.escalate(case_id, body.actor, body.stage, body.opinion, body.reason)
 
     @app.post("/api/cases/{case_id}/phase2/decision")
     def phase2_decision(case_id: int, body: Decision):

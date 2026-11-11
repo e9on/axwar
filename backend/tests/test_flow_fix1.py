@@ -172,12 +172,12 @@ def test_2차_승인권자가_모두_승인하면_2차_집행_그리고_집행�
     r = eng.decide_phase2(cid, "그룹 재무", "승인")
     assert r["status"] == EXEC
     t = {(x["dept"], x["title"]): x["due"] for x in store.list_tasks(cid)}
-    assert t[("물류", "물류 출고(2차)")] == "2026-08-24" and t[("CS", "CS 대비(2차)")] == "2026-08-24"
+    assert t[("물류", "물류 출고(2차)")] == "2026-08-26" and t[("CS", "CS 대비(2차)")] == "2026-08-26"
     assert any(e["detail"]["target"] == "그룹" and "2차" in e["detail"]["text"]
                for e in store.events(cid, kind="그룹보고"))
-    eng.advance(date(2026, 8, 24))  # 집행일 당일은 아직 집행 중
+    eng.advance(date(2026, 8, 26))  # 집행일(8/24에서 승인 기간 확보로 8/26) 당일은 아직 집행 중
     assert status(store, cid) == EXEC
-    eng.advance(date(2026, 8, 25))
+    eng.advance(date(2026, 8, 27))
     assert status(store, cid) == "완료"
     res = facts(store, cid)["phase2_result"]
     assert res["result"] == "집행" and "2차" in res["text"]

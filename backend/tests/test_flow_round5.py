@@ -44,7 +44,7 @@ def test_판매율_보류_중_반품이_기준을_넘으면_계속_판단을_거
 def test_반품_보류_사유가_있어도_2차_취소는_할_수_있다(store, monkeypatch):
     eng, cid, _ = hold_case(store, monkeypatch)
     eng.add_returns(cid, 0, 600)
-    assert eng.cancel_phase2(cid, ACTOR, "반품이 많아 중단")["status"] == "1차 집행"
+    assert eng.cancel_phase2(cid, ACTOR, "반품이 많아 중단")["status"] == "완료"
 
 
 def test_판매율_보류_중_리뷰_잠금이_생기면_계속_판단을_거부한다(store, monkeypatch):
