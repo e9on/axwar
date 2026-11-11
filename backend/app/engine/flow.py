@@ -16,6 +16,8 @@
 from __future__ import annotations
 
 import functools
+import hashlib
+import json
 import threading
 from dataclasses import asdict, replace
 from datetime import date, timedelta
@@ -361,7 +363,8 @@ class Engine:
         return (open_rows or rows)[-1]["id"]
 
     def play(self, step: dict) -> dict:
-        """대본 한 단계를 실행한다(시연 조작판과 테스트가 같이 쓴다)."""
+        """대본 한 단계를 실행한다(시연 조작판과 테스트가 같이 쓴다). 시연 모드에서만."""
+        self._demo_only("대본 재생")
         moved: list[dict] = []
         if "date" in step:
             moved = self.advance(_d(step["date"]))
@@ -387,9 +390,38 @@ class Engine:
             out = {"case_id": cid, "status": self.store.get_case(cid)["status"], "gate": asdict(g)}
         return {"action": action, "actions": moved, **out}
 
+    def _demo_only(self, what: str) -> None:
+        if self.store.get_mode() == MODE_OPERATION:
+            raise PermissionError(f"운영 모드에서는 {what}을(를) 할 수 없음")
+
     def run_script(self, scenario: str, upto: int | None = None) -> list[dict]:
+        self._demo_only("대본 재생")
         sc = scenarios.load(scenario, self.demo_dir)
         return [self.play(s) for s in sc.script[:upto]]
+
+    # ---------------------------------------------------------------- 정책·모드 (바꿀 수 있는 역할은 정책 admin.policy_editors)
+
+    def _require_policy_editor(self, actor: str, what: str) -> None:
+        role = self.role_of(actor)
+        editors = [r.strip() for r in policy.get("admin.policy_editors").split(",") if r.strip()]
+        if role not in editors:
+            raise PermissionError(f"{actor}({role})는 {what}을(를) 바꿀 수 없음 — {'·'.join(editors)}만")
+
+    @_locked
+    def change_policy(self, actor: str, key: str, value, reason: str) -> None:
+        """정책 값을 바꾼다(검증·이력은 저장소). 편집 역할 목록을 바꿀 때는 모르는 역할을 넣을 수 없다."""
+        self._require_policy_editor(actor, "정책")
+        if key == "admin.policy_editors":
+            names = [r.strip() for r in str(value).split(",") if r.strip()]
+            bad = [r for r in names if r not in scenarios.ROLES]
+            if not names or bad:
+                raise ValueError(f"편집 역할은 알려진 역할이어야 함: {bad or '(비어 있음)'}")
+        self.store.change_policy(key, value, actor, reason)
+
+    @_locked
+    def set_mode(self, actor: str, mode: str) -> None:
+        self._require_policy_editor(actor, "실행 모드")
+        self.store.set_mode(mode)
 
     # ---------------------------------------------------------------- 기준일·기한
 
@@ -760,6 +792,18 @@ class Engine:
         if not self._can_handle(case["facts"], key, role, OWNER[case["kind"]]):
             raise PermissionError(f"{actor}({role})는 이 사람 확인을 처리할 수 없음 — {OWNER[case['kind']]}"
                                   "(또는 방치로 올려 받은 사람)만")
+        return self.reply(request_id, text, attachments)
+
+    @_locked
+    def submit_reply(self, request_id: int, actor: str, text: str, attachments: int = 0) -> dict:
+        """사람이 부서 요청에 회신을 낸다(HTTP 입구). 그 요청의 대상 부서 역할만 낼 수 있다(아니면 PermissionError, 저장 안 함).
+        사람 확인에 머문 요청은 resolve_human_check로만 처리한다(ValueError)."""
+        req = self.store.get_request(request_id)
+        role = self.role_of(actor)
+        if role != req["dept"]:
+            raise PermissionError(f"{actor}({role})는 이 요청에 회신할 수 없음 — 회신 대상: {req['dept']}")
+        if req["status"] == R_HUMAN:
+            raise ValueError("사람 확인 상태인 요청은 회신이 아니라 사람 확인 처리로만 받을 수 있음")
         return self.reply(request_id, text, attachments)
 
     def _default_deny(self, case: dict, d: date) -> dict:
@@ -1701,6 +1745,98 @@ class Engine:
             if t["status"] == "대기" and t["case_id"] in cases:
                 out["작업"].append({**self._item(cases[t["case_id"]]), "task_id": t["id"], "title": t["title"],
                                   "detail": t["detail"], "due": t["due"]})
+        return out
+
+    BRIEFING, COUNTERPOINTS = "브리핑", "반대근거"  # ai_judgments 종류
+
+    def _brief_basis(self, case: dict) -> dict:
+        """AI 브리핑·반대 근거에 넘기는 사실(규칙 판정과 근거). 이 값이 바뀌면 저장된 브리핑은 낡은 것."""
+        f = case["facts"]
+        out: dict = {"건": case["ref_id"], "종류": case["kind"], "상태": case["status"],
+                     "승인권자": f["approvers"], "규칙 근거": [h["text"] for h in f["approver_hits"]],
+                     "지표 판정": "좋음" if f["indicator_good"] else "반대 근거 있음",
+                     "지표 근거": [h["text"] for h in f["indicator_hits"]], "기한": f["deadline"]}
+        if case["kind"] == KIND_PLAN:
+            out |= {"요청액": f["amount_krw"], "기안 총액": f["plan_total_krw"], "집행일": f.get("phase1_date")}
+            if f.get("split"):
+                sp = f["split"]
+                out["분할안"] = {"1차 수량": sp["phase1_qty"], "1차 날짜": sp["phase1_date"],
+                              "2차 수량": sp["phase2_qty"], "2차 날짜": sp["phase2_date"]}
+            if f.get("scm"):
+                out["SCM 응답"] = f["scm"]["state"]
+        else:
+            out |= {"연 고정 피": f["annual_fixed_krw"], "계약 만료": f["expiry"]}
+        return out
+
+    @staticmethod
+    def _fingerprint(basis: dict) -> str:
+        return hashlib.sha256(json.dumps(basis, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
+
+    def _stored_text(self, case_id: int, kind: str, fp: str) -> dict | None:
+        rows = [j for j in self.store.list_judgments(case_id) if j["kind"] == kind]
+        if not rows:
+            return None
+        j = rows[-1]
+        return {"text": j["result"]["text"], "ok": j["result"]["ok"], "model": j["model"], "sim_date": j["sim_date"],
+                "stale": j["result"]["fingerprint"] != fp}
+
+    @_locked
+    def write_briefing(self, case_id: int, actor: str) -> dict:
+        """결재권자 브리핑과 반대 근거를 AI로 만들어 판정 기록에 남긴다. 사실이 같고 이미 성공한 저장본이 있으면 다시 부르지 않는다."""
+        self.role_of(actor)
+        case = self.store.get_case(case_id)
+        basis = self._brief_basis(case)
+        fp = self._fingerprint(basis)
+        for kind, make in ((self.BRIEFING, writer.briefing), (self.COUNTERPOINTS, writer.counterpoints)):
+            have = self._stored_text(case_id, kind, fp)
+            if have and not have["stale"] and have["ok"]:
+                continue
+            t = make(self._provider("writer"), basis)
+            self.store.add_judgment(case_id, kind, t.model, f"{case['ref_id']} {kind}",
+                                    {"text": t.text, "ok": t.ok, "fingerprint": fp}, not t.ok, None, t.ledger_id)
+        return self._texts(case_id, fp)
+
+    def _texts(self, case_id: int, fp: str) -> dict:
+        return {"briefing": self._stored_text(case_id, self.BRIEFING, fp),
+                "counterpoints": self._stored_text(case_id, self.COUNTERPOINTS, fp)}
+
+    def case_detail(self, case_id: int, viewer: str | None = None) -> dict:
+        """건 상세(설계 6.3): 근거, 규칙 판정, 2차 정보, AI 브리핑(저장본만 — 읽기는 AI를 부르지 않음), 기록, 권한 이동.
+        viewer(보는 사람)를 주면 그 사람이 지금 결정할 수 있는지 함께 돌려준다."""
+        case = self.store.get_case(case_id)
+        f = case["facts"]
+        open_ = case["status"] in OPEN[case["kind"]]
+        pending = _pending_roles(f) if open_ else []
+        p2 = None
+        if case["kind"] == KIND_PLAN and f.get("phase2"):
+            has = bool(f.get(STAGES["2차"][0]))
+            p2 = {"plan": f["phase2"], "approvers": f.get(STAGES["2차"][0]), "hits": f.get(STAGES["2차"][1], []),
+                  "required_roles": _required_roles(f, "2차") if has else [],
+                  "pending_roles": _pending_roles(f, "2차") if has else [],
+                  "gate": asdict(self._gate(case)), "sales": f.get("sales"), "returns": f.get("returns"),
+                  "sellthrough": f.get("phase2_sellthrough"), "decision": f.get("phase2_decision")}
+        out = {
+            "case": {k: case[k] for k in ("id", "kind", "ref_id", "status", "created_at", "updated_at")},
+            "facts": f,
+            "evidence": {"indicators": {"good": f["indicator_good"], "hits": f["indicator_hits"],
+                                        "excluded": f["indicator_excluded"]}},
+            "rule": {"approvers": f["approvers"], "hits": f["approver_hits"], "required_roles": _required_roles(f),
+                     "approved_roles": f.get("approved_roles", []), "pending_roles": pending},
+            "phase2": p2,
+            **self._texts(case_id, self._fingerprint(self._brief_basis(case))),
+            "approver_changes": [{"before": list(c.before), "after": list(c.after), "reason": c.reason,
+                                  "hits": _hits(c.hits), "at": c.at.isoformat()}
+                                 for c in self.store.get_approver_changes(case_id)],
+            "approvals": self.store.list_approvals(case_id),
+            "requests": [{**r, "replies": self.store.list_replies(r["id"])} for r in self.store.list_requests(case_id)],
+            "tasks": self.store.list_tasks(case_id),
+            "reviews": self.store.list_reviews(case_id),
+            "judgments": self.store.list_judgments(case_id),
+            "history": self.store.events(case_id),
+        }
+        if viewer is not None:
+            role = self.role_of(viewer)
+            out["viewer"] = {"person": viewer, "role": role, "can_decide": open_ and role in pending}
         return out
 
     def calendar(self) -> list[dict]:

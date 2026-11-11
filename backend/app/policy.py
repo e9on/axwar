@@ -38,6 +38,7 @@ _SCHEMA: dict[str, type] = {
     "ai.reply_backup": str,
     "ai.writer_model": str,
     "ai.writer_backup": str,
+    "admin.policy_editors": str,
 }
 
 # 배정 모델 항목: 값이 모델 단가표에 있어야 한다
@@ -46,6 +47,7 @@ _MODEL_KEYS = [k for k in _SCHEMA if k.startswith("ai.") and (k.endswith("_model
 # 설정 화면 덮어쓰기: 키 -> (값, 바꾼 사람, 시각). 정책 파일은 고치지 않는다.
 _overrides: dict[str, tuple] = {}
 _cache: dict[str, tuple] | None = None
+_base: dict[str, tuple] | None = None  # 파일 값(덮어쓰기 적용 전): 출처·설명을 화면에 그대로 보이기 위해
 _models: dict[str, tuple] | None = None
 
 
@@ -129,16 +131,35 @@ def _apply(key: str, item: tuple) -> tuple:
 
 
 def _data() -> dict[str, tuple]:
-    global _cache, _models
+    global _cache, _models, _base
     if _cache is None:
         loaded, _models = _load()
+        _base = loaded
         _cache = {k: _apply(k, v) for k, v in loaded.items()}
     return _cache
 
 
 def reload() -> None:
-    global _cache, _models
-    _cache = _models = None
+    global _cache, _models, _base
+    _cache = _models = _base = None
+
+
+def keys() -> list[str]:
+    """정책 항목 키 전부(파일에 적힌 순서와 상관없이 스키마 순서)."""
+    return list(_data())
+
+
+def base_entry(key: str) -> tuple:
+    """덮어쓰기를 적용하기 전의 파일 항목 (값, 출처, 설명). 출처가 "가정"인지 보려면 이것을 쓴다."""
+    _data()
+    if key not in _base:
+        raise ValueError(f"알 수 없는 정책 항목: {key}")
+    return _base[key]
+
+
+def is_overridden(key: str) -> bool:
+    _data()
+    return key in _overrides
 
 
 def model_names() -> list[str]:
