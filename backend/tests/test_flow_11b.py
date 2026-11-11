@@ -916,21 +916,22 @@ def test_SCM이_전량_허용해_분할안이_그대로면_분할안변경_이�
 def test_장면2_판매율_변형_반품이_기준_이내면_판매율로_2차_수량과_금액이_줄고_승인권자를_다시_판정(store):
     """scenario_2_sales: 리뷰 없음, 8/24 반품 기준 이내 → 게이트가 열린 뒤 판매 실적(주문 2,600·반품 50 = 85%)으로 2차 조절."""
     eng, fake, cid, st = scene2(store, ACCEPT, SCM_PART, name="scenario_2_sales")
-    for step in st[:-2]:
+    sale = next(i for i, x in enumerate(st) if x["action"] == "판매")
+    for step in st[:sale - 1]:
         eng.play(step)
     f = store.get_case(cid)["facts"]
     qty_b, amt_b = f["phase2"]["qty"], f["phase2"]["amount_krw"]
     assert qty_b == 12996 and amt_b == f["amount_krw"] * 12996 // f["volume"]["units"]
     approvers_b = list(f["phase2_approvers"])
     # 8/24 모의 반품(기준 이내)만 들어온 상태: 판매 실적이 없어 2차를 열지 않고 캠페인 담당 작업
-    r = eng.play(st[-2])
+    r = eng.play(st[sale - 1])
     assert store.get_case(cid)["status"] == "2차 잠금" and r["gate"]["open"] is False
     assert "1차 판매 실적 미입력" in r["gate"]["reasons"]
     assert ("캠페인 담당", "1차 판매 실적 입력") in tasks(store, cid)
     # 판매 실적 입력 → 순판매 2,550 / 1차 3,000 = 85%
-    r = eng.play(st[-1])
+    r = eng.play(st[sale])
     f = store.get_case(cid)["facts"]
-    assert store.get_case(cid)["status"] == "2차 잠금" and r["gate"]["open"] is True
+    assert store.get_case(cid)["status"] == "2차 승인 대기" and r["gate"]["open"] is True  # 수정 회차 1: 승인 대기로 이어짐
     assert f["phase2"]["qty"] == qty_b * 2550 // 3000 == 11046
     assert f["phase2"]["amount_krw"] == amt_b * 2550 // 3000
     assert f["phase2_sellthrough"]["rate"] == 0.85 and f["phase2_sellthrough"]["outcome"] == "조절"
@@ -938,3 +939,22 @@ def test_장면2_판매율_변형_반품이_기준_이내면_판매율로_2차_�
     assert any(h["rule_id"] == "sellthrough_adjust" for h in f["phase2_approver_hits"])
     ev = store.events(cid, kind="판매율조절")
     assert len(ev) == 1 and ev[0]["detail"]["qty_after"] == 11046 and "85.0%" in ev[0]["detail"]["text"]
+
+
+def test_장면2_판매율_변형_대본을_2차_승인_집행_완료까지_끝까지_재생(store):
+    """수정 회차 1 판정 3: 8/24 2차 승인 대기(기한 8/25) → Masil 대표·그룹 승인 → 2차 집행 → 8/25 완료."""
+    eng, fake, cid, st = scene2(store, ACCEPT, SCM_PART, name="scenario_2_sales")
+    for step in st:
+        eng.play(step)
+    case = store.get_case(cid)
+    f = case["facts"]
+    assert case["status"] == "완료" and store.get_clock() == date(2026, 8, 25)
+    assert f["phase2_deadline"] == "2026-08-25" and f["phase2_approved_roles"] == ["Masil 대표", "그룹"]
+    assert f["phase2_exec"] == {"qty": 11046, "date": "2026-08-24", "amount_krw": f["phase2"]["amount_krw"],
+                                "approved_at": "2026-08-24"}
+    assert f["phase2_result"]["result"] == "집행"
+    assert [e["detail"]["to"] for e in store.events(cid, kind="상태변경")][-4:] == [
+        "2차 잠금", "2차 승인 대기", "2차 집행", "완료"]
+    t = {(x["dept"], x["title"]): (x["due"], x["detail"]) for x in store.list_tasks(cid)}
+    assert t[("물류", "물류 출고(2차)")][0] == "2026-08-24" and "11,046개" in t[("물류", "물류 출고(2차)")][1]
+    assert t[("CS", "CS 대비(2차)")][0] == "2026-08-24"

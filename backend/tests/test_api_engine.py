@@ -125,7 +125,8 @@ def test_건_상세는_근거_규칙판정_기록_권한이동을_담는다(stor
     assert {h["badge"] for h in d["rule"]["hits"]} and all("text" in h and "source" in h for h in d["rule"]["hits"])
     assert d["evidence"]["indicators"]["good"] is False and d["evidence"]["indicators"]["hits"]
     assert d["phase2"]["approvers"] == ["Masil 대표", "그룹 보고", "그룹 확인"]
-    assert len(d["approver_changes"]) == 1 and d["viewer"] == {"person": "그룹 CEO", "role": "CEO", "can_decide": False}
+    assert len(d["approver_changes"]) == 1 and d["viewer"] == {
+        "person": "그룹 CEO", "role": "CEO", "can_decide": False, "can_decide_phase2": False}
     assert [r["dept"] for r in d["requests"]] == ["물류", "SCM"] and d["requests"][0]["replies"]
     assert any(e["kind"] == "상태변경" for e in d["history"]) and d["judgments"]
     assert d["briefing"] is None and d["counterpoints"] is None  # 읽기만으로는 AI를 부르지 않는다

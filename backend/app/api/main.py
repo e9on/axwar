@@ -55,11 +55,13 @@ class ReviewItem(BaseModel):
 
 class Reviews(BaseModel):
     reviews: list[ReviewItem]
+    actor: str | None = None  # 없으면 시연 대본 재생: 시연 모드에서만. 운영에서는 입력 권한 역할의 사람이 필요
 
 
 class Returns(BaseModel):
     change_of_mind: StrictInt
     color: StrictInt
+    actor: str | None = None  # Reviews와 같음
 
 
 class Sales(Who):
@@ -203,7 +205,7 @@ def create_app(store: Store, engine: Engine, static_dir: str | Path | None = Non
     @app.get("/api/cases")
     def cases(kind: str | None = None, status: str | None = None):
         return [{"id": c["id"], "kind": c["kind"], "ref_id": c["ref_id"], "status": c["status"],
-                 "deadline": c["facts"].get("deadline")}
+                 "deadline": c["facts"].get("deadline"), "origin": c["origin"]}
                 for c in store.list_cases(kind) if status is None or c["status"] == status]
 
     @app.get("/api/cases/{case_id}")
@@ -274,18 +276,23 @@ def create_app(store: Store, engine: Engine, static_dir: str | Path | None = Non
     @app.post("/api/cases/{case_id}/reviews")
     def reviews(case_id: int, body: Reviews):
         store.get_case(case_id)
-        g = engine.add_reviews(case_id, [(r.product, r.text) for r in body.reviews])
+        g = engine.add_reviews(case_id, [(r.product, r.text) for r in body.reviews], body.actor)
         return {"case_id": case_id, "status": store.get_case(case_id)["status"], "gate": asdict(g)}
 
     @app.post("/api/cases/{case_id}/returns")
     def returns(case_id: int, body: Returns):
         store.get_case(case_id)
-        g = engine.add_returns(case_id, body.change_of_mind, body.color)
+        g = engine.add_returns(case_id, body.change_of_mind, body.color, body.actor)
         return {"case_id": case_id, "status": store.get_case(case_id)["status"], "gate": asdict(g)}
 
     @app.post("/api/cases/{case_id}/sales")
     def sales(case_id: int, body: Sales):
         return engine.record_phase1_sales(case_id, body.actor, body.orders, body.returns)
+
+    @app.post("/api/cases/{case_id}/phase2/decision")
+    def phase2_decision(case_id: int, body: Decision):
+        """2차 승인 대기 건의 2차 결정(action: 승인·거절)."""
+        return engine.decide_phase2(case_id, body.actor, body.action, body.comment)
 
     @app.post("/api/cases/{case_id}/phase2/continue")
     def phase2_continue(case_id: int, body: Continue):

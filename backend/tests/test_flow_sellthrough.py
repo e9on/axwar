@@ -61,7 +61,7 @@ def test_판매율이_100퍼센트_미만이면_2차_수량과_금액을_같은_
     f = facts(store, cid)
     assert f["sales"] == {"orders": 900, "returns": 100, "net": 800, "date": store.get_clock().isoformat()}
     assert f["phase2"]["qty"] == 800 and f["phase2"]["amount_krw"] == P2_AMOUNT * 800 // P1_QTY == 1_600_000
-    assert store.get_case(cid)["status"] == "2차 잠금" and r["status"] == "2차 잠금"
+    assert store.get_case(cid)["status"] == "2차 승인 대기" and r["status"] == "2차 승인 대기"  # 수정 회차 1: 판매율 조절로 게이트가 열린 2차는 승인 대기
     st = f["phase2_sellthrough"]
     assert st["outcome"] == "조절" and st["rate"] == 0.8
     assert (st["qty_before"], st["qty_after"]) == (1000, 800)
@@ -94,7 +94,7 @@ def test_판매율이_정확히_하한이면_보류가_아니라_비례_조절(s
     ratio = policy.get("split.sellthrough_hold_ratio")
     eng.record_phase1_sales(cid, ACTOR, orders=int(P1_QTY * ratio), returns=0)
     f = facts(store, cid)
-    assert store.get_case(cid)["status"] == "2차 잠금" and f["phase2"]["qty"] == int(P2_QTY * ratio)
+    assert store.get_case(cid)["status"] == "2차 승인 대기" and f["phase2"]["qty"] == int(P2_QTY * ratio)
     assert f["phase2_sellthrough"]["outcome"] == "조절"
 
 
@@ -134,7 +134,7 @@ def test_판매율이_정확히_100퍼센트면_계획_유지하고_품절을_�
     eng, cid = locked(store, monkeypatch)
     eng.record_phase1_sales(cid, ACTOR, orders=1000, returns=0)
     f = facts(store, cid)
-    assert store.get_case(cid)["status"] == "2차 잠금"
+    assert store.get_case(cid)["status"] == "2차 승인 대기"
     assert f["phase2"]["qty"] == P2_QTY and f["phase2"]["amount_krw"] == P2_AMOUNT
     assert f["phase2_sellthrough"]["outcome"] == "품절" and f["phase1_soldout"] is True
     ev = sell_events(store, cid)

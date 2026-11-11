@@ -646,7 +646,7 @@ def test_무효_정책_덮어쓰기_경고는_같은_이력당_한_번만(tmp_pa
 # ---- 스키마 2: AI 판정 기록·요청 상태·작업 상세 (Task 11a) ----
 
 def test_스키마_버전은_2(store):
-    assert SCHEMA_VERSION == 2 and store.schema_version() == 2
+    assert SCHEMA_VERSION >= 2 and store.schema_version() == SCHEMA_VERSION
 
 
 def test_스키마_1_DB를_2로_올린다(tmp_path):
@@ -665,7 +665,7 @@ def test_스키마_1_DB를_2로_올린다(tmp_path):
     con.commit()
     con.close()
     s = open_db(p)
-    assert s.schema_version() == 2
+    assert s.schema_version() == SCHEMA_VERSION
     req = s.list_requests(1)[0]
     assert req["status"] == "대기" and req["purpose"] == ""
     assert s.list_tasks(1)[0]["detail"] == ""
@@ -779,3 +779,75 @@ def test_작업을_끝내면_상태와_이벤트가_남고_할일에서_빠진�
     assert ev["actor"] == "계약 담당자" and ev["detail"] == {"task_id": tid, "title": "통보 발송", "status": "완료"}
     with pytest.raises(KeyError):
         store.set_task_status(999, "완료", "a")
+
+
+# ---- 스키마 3: 사건 출처(시연/운영) — Task 12 수정 회차 1 ----
+
+def test_스키마_버전은_3(store):
+    assert SCHEMA_VERSION == 3 and store.schema_version() == 3
+
+
+def test_운영_모드에서_연_사건은_운영_출처(tmp_path):
+    s = open_db(tmp_path / "o.db")
+    c1 = s.create_case("k", "시연모드", {}, "접수")
+    s.set_mode("운영")
+    c2 = s.create_case("k", "운영모드", {}, "접수")
+    assert s.get_case(c1)["origin"] == "시연" and s.get_case(c2)["origin"] == "운영"
+    s.close()
+
+
+def test_시연_등록부_행에서_연_사건은_운영_모드에서도_시연_출처(tmp_path):
+    s = open_db(tmp_path / "o.db")
+    s.add_plan({"plan_id": "P-시연", "campaign_id": "C", "influencer_id": "I", "channel": "라이브",
+                "requested_budget_krw": 1, "expected_gmv_krw": 1, "settlement_date": "2030-01-02",
+                "contract_deadline": "2030-01-01", "source_file": "x"}, "a", origin="시연")
+    s.add_plan({"plan_id": "P-화면", "campaign_id": "C", "influencer_id": "I", "channel": "라이브",
+                "requested_budget_krw": 1, "expected_gmv_krw": 1, "settlement_date": "2030-01-02",
+                "contract_deadline": "2030-01-01", "source_file": "x"}, "a", origin="화면")
+    s.set_mode("운영")
+    a = s.create_case("기안", "P-시연", {}, "접수")
+    b = s.create_case("기안", "P-화면", {}, "접수")
+    assert s.get_case(a)["origin"] == "시연" and s.get_case(b)["origin"] == "운영"
+    s.close()
+
+
+def test_초기화해도_운영_사건과_딸린_기록이_남는다(tmp_path):
+    s = open_db(tmp_path / "o.db")
+    demo = s.create_case("k", "시연건", {}, "접수")
+    s.set_mode("운영")
+    ops = s.create_case("k", "운영건", {}, "접수")
+    rid = s.add_request(ops, "CS", "요청", False)
+    s.add_reply(rid, "답", 0)
+    s.add_task(ops, "물류", "출고", date(2030, 1, 1))
+    s.add_review(ops, "p", "t")
+    s.add_judgment(ops, "회신해석", "fake", "", {}, False, None)
+    s.set_mode("시연")
+    s.reset()
+    with pytest.raises(KeyError):
+        s.get_case(demo)
+    assert s.get_case(ops)["ref_id"] == "운영건"
+    assert len(s.list_requests(ops)) == 1 and len(s.list_tasks(ops)) == 1 and len(s.list_reviews(ops)) == 1
+    assert len(s.list_judgments(ops)) == 1 and s.events(ops) != []
+    s.close()
+
+
+def test_스키마_2_DB를_3으로_올리면_기존_사건은_시연_출처(tmp_path):
+    from app.store import db as dbmod
+    p = tmp_path / "v2.db"
+    con = sqlite3.connect(p)
+    for stmt in dbmod._SCHEMA.split(";\n"):
+        if stmt.strip():
+            con.execute(stmt)
+    con.execute("INSERT INTO schema_version VALUES (1)")
+    dbmod._migrate_1_to_2(con)
+    con.execute("UPDATE schema_version SET version=2")
+    con.execute("INSERT INTO cases (kind, ref_id, facts, status, created_at, updated_at) "
+                "VALUES ('k', 'r', '{}', '접수', 't', 't')")
+    con.commit()
+    con.close()
+    s = open_db(p)
+    assert s.schema_version() == 3 and s.get_case(1)["origin"] == "시연"
+    s.reset()
+    with pytest.raises(KeyError):
+        s.get_case(1)
+    s.close()

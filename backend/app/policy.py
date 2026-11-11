@@ -39,6 +39,10 @@ _SCHEMA: dict[str, type] = {
     "ai.writer_model": str,
     "ai.writer_backup": str,
     "admin.policy_editors": str,
+    "admin.review_inputters": str,
+    "admin.return_inputters": str,
+    "phase2.prep_days": int,
+    "phase2.min_approval_days": int,
 }
 
 # 배정 모델 항목: 값이 모델 단가표에 있어야 한다

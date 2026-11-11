@@ -24,10 +24,11 @@ from app.calc.cash import sim_start
 from app.data import loader
 from app.rules.models import ApproverChange, RuleHit
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 MODE_OPERATION, MODE_DEMO = "운영", "시연"
 MODES = (MODE_OPERATION, MODE_DEMO)
 ORIGINS = ("가져오기", "화면", "시연")
+CASE_DEMO, CASE_OPERATION = "시연", "운영"  # 사건 출처: 초기화는 시연 사건만 지운다
 CLOCK_LOCKED = "운영 모드에서는 날짜를 바꿀 수 없음"
 logger = logging.getLogger(__name__)
 
@@ -94,8 +95,13 @@ def _migrate_1_to_2(db: sqlite3.Connection) -> None:
     db.execute("ALTER TABLE tasks ADD COLUMN detail TEXT NOT NULL DEFAULT ''")
 
 
+def _migrate_2_to_3(db: sqlite3.Connection) -> None:
+    """버전 3: 사건 출처(origin). 지금까지 쌓인 사건은 모두 시연이므로 기존 행은 '시연'으로 본다(수정 회차 1 판정 1)."""
+    db.execute("ALTER TABLE cases ADD COLUMN origin TEXT NOT NULL DEFAULT '시연'")
+
+
 # 마이그레이션: 버전 N을 N+1로 올리는 함수. 새 DB도 버전 1 스키마를 만든 뒤 차례로 올린다(길을 하나만 둔다).
-_MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {1: _migrate_1_to_2}
+_MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {1: _migrate_1_to_2, 2: _migrate_2_to_3}
 
 _CONTRACT_FIELDS = ("influencer_code", "influencer_name", "annual_fixed_krw", "performance_fee_text",
                     "notice_deadline", "expiry_date", "auto_renew", "source_doc")
@@ -275,11 +281,12 @@ class Store:
                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (d.isoformat(),))
 
     def reset(self, actor: str = "시스템") -> None:
-        """시연 데이터(사건·작업·회신·리뷰·사건 이벤트·시연 등록부 행)를 지우고 시계를 기준일로 되돌린다."""
+        """시연 데이터(출처가 시연인 사건과 딸린 작업·회신·리뷰·이벤트, 시연 등록부 행)를 지우고 시계를 기준일로 되돌린다.
+        운영 출처 사건은 남긴다."""
         with self._tx() as db:
             if self._mode(db) == MODE_OPERATION:
                 raise PermissionError(CLOCK_LOCKED)
-            db.execute("DELETE FROM cases")  # 딸린 작업·요청·회신·리뷰·승인·권한이동·AI 판정·사건 이벤트는 CASCADE
+            db.execute("DELETE FROM cases WHERE origin=?", (CASE_DEMO,))  # 딸린 작업·요청·회신·리뷰·승인·권한이동·AI 판정·사건 이벤트는 CASCADE
             db.execute("DELETE FROM contracts WHERE origin='시연'")
             db.execute("DELETE FROM plans WHERE origin='시연'")
             db.execute("DELETE FROM settings WHERE key='demo_clock'")
@@ -287,12 +294,25 @@ class Store:
 
     # ---- 사건 ----
 
+    def _case_origin(self, db, kind: str, ref_id: str) -> str:
+        """사건 출처: 시연 모드에서 열린 사건이나 시연 등록부 행에서 열린 사건은 시연, 그 밖은 운영."""
+        if self._mode(db) == MODE_DEMO:
+            return CASE_DEMO
+        if kind == "기안":
+            row = db.execute("SELECT origin FROM plans WHERE plan_id=?", (ref_id,)).fetchone()
+        else:
+            row = db.execute("SELECT origin FROM contracts WHERE influencer_code=? "
+                             "ORDER BY expiry_date DESC, id DESC LIMIT 1", (ref_id,)).fetchone()
+        return CASE_DEMO if row is not None and row[0] == "시연" else CASE_OPERATION
+
     def create_case(self, kind: str, ref_id: str, facts: dict, status: str) -> int:
         with self._tx() as db:
             now = _now()
-            cur = db.execute("INSERT INTO cases (kind, ref_id, facts, status, created_at, updated_at) VALUES (?,?,?,?,?,?)",
-                             (kind, ref_id, _json(facts), status, now, now))
-            self._event(db, cur.lastrowid, "사건생성", "시스템", {"kind": kind, "ref_id": ref_id, "status": status})
+            origin = self._case_origin(db, kind, ref_id)
+            cur = db.execute("INSERT INTO cases (kind, ref_id, facts, status, created_at, updated_at, origin) "
+                             "VALUES (?,?,?,?,?,?,?)", (kind, ref_id, _json(facts), status, now, now, origin))
+            self._event(db, cur.lastrowid, "사건생성", "시스템",
+                        {"kind": kind, "ref_id": ref_id, "status": status, "origin": origin})
             return cur.lastrowid
 
     def get_case(self, case_id: int) -> dict:

@@ -204,12 +204,13 @@ def test_올려_받은_사람은_2차_보류를_직접_판단한다(store, monke
 
 # ---------------------------------------------------------------- 2차 계속
 
-def test_2차_계속은_수량을_받고_금액을_같은_비율로_줄여_2차_잠금_경로로_보낸다(store, monkeypatch):
+def test_2차_계속은_수량을_받고_금액을_같은_비율로_줄여_2차_승인_대기로_보낸다(store, monkeypatch):
     eng, cid, _ = hold_case(store, monkeypatch)
     r = eng.continue_phase2(cid, ACTOR, 400, "인플루언서 재방송이 잡혀 있어 400개만 진행")
     f = facts(store, cid)
     assert f["phase2"]["qty"] == 400 and f["phase2"]["amount_krw"] == P2_AMOUNT * 400 // P2_QTY
-    assert store.get_case(cid)["status"] == "2차 잠금" and r["status"] == "2차 잠금"
+    # 수정 회차 1: 계속 판단으로 게이트가 열린 2차는 2차 잠금이 아니라 곧바로 2차 승인 대기로 간다
+    assert store.get_case(cid)["status"] == "2차 승인 대기" and r["status"] == "2차 승인 대기"
     dec = f["phase2_decision"]
     assert dec["choice"] == "2차 계속" and dec["reason"].startswith("인플루언서") and dec["actor"] == ACTOR
     ev = store.events(cid, kind="판매율판단")

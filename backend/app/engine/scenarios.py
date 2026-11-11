@@ -10,7 +10,7 @@
   requests: [{plan|contract, dept, text, attach_required?, purpose?}]
   script: [{action, plan|contract, date?, ...}]
     회신  dept, text, attachments?          (SCM 응답도 dept="SCM" 회신)
-    결정  actor(보는 사람 이름), decision(승인|분할승인|거절), comment?
+    결정  actor(보는 사람 이름), decision(승인|분할승인|거절), comment?, stage?("1차" 기본 | "2차": 2차 승인 대기 건의 결정, 승인|거절)
     리뷰  reviews: [[상품, 문장], ...]
     반품  change_of_mind, color(건수)
     공지  actor                              (캠페인 담당이 1차 수량을 소비자에게 공지: 재고·물류 예약)
@@ -148,6 +148,11 @@ def _check_step(name: str, i: int, s, plans: list, contracts: list) -> None:
             raise _fail(name, f"{where}의 decision은 {', '.join(DECISIONS)} 중 하나여야 함: {s['decision']!r}")
         if not isinstance(s["actor"], str):
             raise _fail(name, f"{where}의 actor가 잘못됨")
+        stage = s.get("stage", "1차")
+        if stage not in ("1차", "2차"):
+            raise _fail(name, f"{where}의 stage는 1차 또는 2차여야 함: {stage!r}")
+        if stage == "2차" and s["decision"] == "분할승인":
+            raise _fail(name, f"{where}: 2차 결정은 승인 또는 거절만 가능함")
     elif action == "리뷰":
         ok = isinstance(s["reviews"], list) and all(
             isinstance(r, list) and len(r) == 2 and all(isinstance(x, str) for x in r) for r in s["reviews"])

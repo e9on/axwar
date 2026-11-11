@@ -62,7 +62,7 @@ def test_리뷰_잠금이_풀리면_계속_판단을_받는다(store, monkeypatc
     f = facts(store, cid)
     f["color_review_flagged"], f["content_fix_confirmed"] = True, True
     store.update_facts(cid, f, "시험", "수정 확인")
-    assert eng.continue_phase2(cid, ACTOR, 300, "계속 진행")["status"] == "2차 잠금"
+    assert eng.continue_phase2(cid, ACTOR, 300, "계속 진행")["status"] == "2차 승인 대기"  # 수정 회차 1: 잠금 대신 승인 대기
 
 
 # ---------------------------------------------------------------- 낮음 2: 실적 입력 작업 완료

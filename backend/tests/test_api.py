@@ -78,6 +78,9 @@ class Scene:
             rid = next(r["id"] for r in self.detail(ref)["requests"] if r["dept"] == step["dept"] and r["status"] != "처리됨")
             return ok(c.post(f"/api/requests/{rid}/reply", json={
                 "actor": self.person(step["dept"]), "text": step["text"], "attachments": step.get("attachments", 0)}))
+        if a == "결정" and step.get("stage") == "2차":
+            return ok(c.post(f"/api/cases/{cid}/phase2/decision", json={
+                "actor": step["actor"], "action": step["decision"], "comment": step.get("comment", "")}))
         if a == "결정":
             return ok(c.post(f"/api/cases/{cid}/decision", json={
                 "actor": step["actor"], "action": step["decision"], "comment": step.get("comment", "")}))
@@ -96,6 +99,9 @@ class Scene:
 
     def run(self, upto=None):
         return [self.play(s) for s in self.steps[:upto]]
+
+    def run_from(self, start):
+        return [self.play(s) for s in self.steps[start:]]
 
 
 # ============================================================== 기본
@@ -201,17 +207,63 @@ def test_장면2_거절_갈래는_1차_차단(store):
     assert r["changed"] is False
 
 
-def test_판매율_조절_갈래를_API로_끝까지(store):
+def test_판매율_조절_갈래를_API로_2차_승인_집행_완료까지(store):
     c, _, _ = client(store, ACCEPT, SCM_PART)
     sc = Scene(c, "scenario_2_sales")
-    sc.run(upto=len(sc.steps) - 1)
+    sale = next(i for i, x in enumerate(sc.steps) if x["action"] == "판매")
+    sc.run(upto=sale)
     d = sc.detail("PLAN-001")
     qty_b = d["phase2"]["plan"]["qty"]
     assert d["case"]["status"] == "2차 잠금" and "1차 판매 실적 미입력" in d["phase2"]["gate"]["reasons"]
-    r = sc.play(sc.steps[-1])  # 주문 2,600·반품 50
+    r = sc.play(sc.steps[sale])  # 주문 2,600·반품 50
     d = sc.detail("PLAN-001")
     assert r["sales"]["net"] == 2550 and d["phase2"]["sellthrough"]["outcome"] == "조절"
     assert d["phase2"]["plan"]["qty"] == qty_b * 2550 // 3000 and d["phase2"]["gate"]["open"] is True
+    # 판매율로 조절한 2차가 2차 승인 대기로 들어간다: 승인권자는 Masil 대표·그룹, 기한은 8/25
+    assert d["case"]["status"] == "2차 승인 대기" and d["phase2"]["deadline"] == "2026-08-25"
+    assert d["phase2"]["pending_roles"] == ["Masil 대표", "그룹"]
+    assert ok(c.get("/api/todo/Masil 대표"))["승인 대기"][0]["stage"] == "2차"
+    assert ok(c.get(f"/api/cases/{d['case']['id']}", params={"viewer": "Masil 대표"}))["viewer"]["can_decide_phase2"] is True
+    assert ok(c.get(f"/api/cases/{d['case']['id']}", params={"viewer": "그룹 CEO"}))["viewer"]["can_decide_phase2"] is False
+    cid = d["case"]["id"]
+    assert "2차 승인권자" in detail_of(c.post(f"/api/cases/{cid}/phase2/decision", json={"actor": "그룹 CEO", "action": "승인"}))
+    assert "승인 또는 거절" in detail_of(c.post(f"/api/cases/{cid}/phase2/decision", json={"actor": "Masil 대표", "action": "분할승인"}))
+    sc.run_from(sale + 1)  # 2차 승인 두 건 → 2차 집행 → 8/25 완료
+    d = sc.detail("PLAN-001")
+    assert d["case"]["status"] == "완료" and d["phase2"]["result"]["result"] == "집행"
+    assert d["phase2"]["exec"]["qty"] == qty_b * 2550 // 3000 and d["phase2"]["exec"]["date"] == "2026-08-24"
+    assert {(t["dept"], t["title"]) for t in d["tasks"]} >= {("물류", "물류 출고(2차)"), ("CS", "CS 대비(2차)")}
+    assert [a["decision"] for a in d["approvals"]][-2:] == ["2차 승인", "2차 승인"]
+
+
+def test_2차_거절은_API로도_완료되고_통보가_없다(store):
+    c, _, _ = client(store, ACCEPT, SCM_PART)
+    sc = Scene(c, "scenario_2_sales")
+    sale = next(i for i, x in enumerate(sc.steps) if x["action"] == "판매")
+    sc.run(upto=sale + 1)
+    cid = sc.case_id("PLAN-001")
+    r = ok(c.post(f"/api/cases/{cid}/phase2/decision", json={"actor": "그룹 재무", "action": "거절", "comment": "부담"}))
+    assert r["status"] == "완료" and r["changed"] is True
+    d = sc.detail("PLAN-001")
+    assert d["phase2"]["result"]["result"] == "거절" and not [t for t in d["tasks"] if "(2차)" in t["title"]]
+    assert "2차 승인 대기" in detail_of(c.post(f"/api/cases/{cid}/phase2/decision", json={"actor": "Masil 대표", "action": "승인"}))
+
+
+def test_운영_모드에서_권한_없는_리뷰_반품_입력은_409(store):
+    c, fake, eng = client(store, ACCEPT)
+    sc = Scene(c, "scenario_2")
+    sc.play(sc.steps[0])
+    cid = sc.case_id("PLAN-001")
+    ok(c.put("/api/mode", json={"actor": "Masil 대표", "mode": "운영"}))
+    body = {"change_of_mind": 1, "color": 1}
+    assert "시연" in detail_of(c.post(f"/api/cases/{cid}/returns", json=body))  # 행위자 없음(대본 재생)
+    assert "CS" in detail_of(c.post(f"/api/cases/{cid}/returns", json={**body, "actor": "물류 담당자"}))
+    rev = {"reviews": [{"product": "립", "text": "색이 달라요"}]}
+    calls = len(fake.calls)
+    assert "캠페인 담당" in detail_of(c.post(f"/api/cases/{cid}/reviews", json={**rev, "actor": "물류 담당자"}))
+    assert len(fake.calls) == calls and ok(c.get(f"/api/cases/{cid}"))["reviews"] == []
+    r = ok(c.post(f"/api/cases/{cid}/returns", json={**body, "actor": "CS 담당자"}))
+    assert r["case_id"] == cid
 
 
 # ============================================================== 권한
@@ -472,7 +524,7 @@ def test_판매_실적_입력_검증과_권한(store, monkeypatch):
     assert "보다 클 수 없음" in detail_of(c.post(f"/api/cases/{cid}/sales", json={"actor": "캠페인 담당자", "orders": 5, "returns": 6}))
     assert "0 이상" in detail_of(c.post(f"/api/cases/{cid}/sales", json={"actor": "캠페인 담당자", "orders": -1, "returns": 0}))
     r = ok(c.post(f"/api/cases/{cid}/sales", json={"actor": "캠페인 담당자", "orders": 900, "returns": 100}))
-    assert r["sales"]["net"] == 800 and r["status"] == "2차 잠금"
+    assert r["sales"]["net"] == 800 and r["status"] == "2차 승인 대기"
     p = ok(c.get(f"/api/cases/{cid}/phase2"))
     assert p["gate"]["open"] is True and p["sales"]["net"] == 800 and p["sellthrough"]["outcome"] == "조절"
 
@@ -483,7 +535,7 @@ def test_판매율_보류는_담당이_2차_계속으로_판단한다(store, mon
     assert "판단" in detail_of(c.post(f"/api/cases/{cid}/phase2/continue", json=body))
     assert "1 이상" in detail_of(c.post(f"/api/cases/{cid}/phase2/continue", json={**body, "actor": "캠페인 담당자", "qty": 0}))
     r = ok(c.post(f"/api/cases/{cid}/phase2/continue", json={**body, "actor": "캠페인 담당자"}))
-    assert r["choice"] == "2차 계속" and r["status"] == "2차 잠금" and r["qty_after"] == 300
+    assert r["choice"] == "2차 계속" and r["status"] == "2차 승인 대기" and r["qty_after"] == 300
     assert "판단할 수 있음" in detail_of(c.post(f"/api/cases/{cid}/phase2/cancel", json={"actor": "캠페인 담당자", "reason": "취소"}))
     d = ok(c.get(f"/api/cases/{cid}"))
     assert d["phase2"]["decision"]["choice"] == "2차 계속" and d["phase2"]["sellthrough"]["outcome"] == "보류"
@@ -627,3 +679,18 @@ def test_기본_앱은_환경변수로_DB_사람_목록_시연_폴더를_정한�
     c = TestClient(app)
     assert ok(c.get("/healthz")) == "ok" and (tmp_path / "env.db").exists()
     assert {p["name"] for p in ok(c.get("/api/people"))} == set(scenarios.load_people().people)
+
+
+def test_시연_초기화는_운영에서_연_사건을_지우지_않는다(store):
+    c, _, _ = client(store, ACCEPT)
+    ok(c.put("/api/mode", json={"actor": "Masil 대표", "mode": "운영"}))
+    r = ok(c.post("/api/plans", json={"actor": "캠페인 담당자", "fields": PLAN}), 201)
+    ops = r["case_id"]
+    assert ok(c.get(f"/api/cases/{ops}"))["case"]["origin"] == "운영"
+    assert "시연 모드에서만" in detail_of(c.post("/api/demo/reset", json={"scenario": "scenario_1"}))
+    ok(c.put("/api/mode", json={"actor": "Masil 대표", "mode": "시연"}))
+    ok(c.post("/api/demo/reset", json={"scenario": "scenario_1"}))
+    cases = {x["id"]: x for x in ok(c.get("/api/cases"))}
+    assert ops in cases and cases[ops]["origin"] == "운영" and cases[ops]["ref_id"] == "PLAN-화면"
+    assert [x["origin"] for x in cases.values() if x["id"] != ops] == ["시연"]
+    assert ok(c.get(f"/api/cases/{ops}"))["requests"]
