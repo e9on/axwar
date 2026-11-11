@@ -23,6 +23,9 @@ from app.data.loader import payment_term_notices, read_raw_text, read_table
 
 _MKT = "02_masil/marketing/"
 Level = Literal["red", "yellow", "green", "unmeasurable"]
+# 신호 범위: 기안·인플루언서마다 달라지는 신호(지표 반대 판정에 씀) | 기안 문서 전체에 공통이라 기안을 가르지 못하는 신호
+# (화면 근거로만 보이고 지표 반대 판정에서는 뺀다)
+SCOPE_PLAN, SCOPE_COMMON = "기안", "공통"
 
 
 @dataclass(frozen=True)
@@ -45,6 +48,7 @@ class Signal:
     level: Level
     basis: str
     badge: Literal["계산", "가정"]
+    scope: Literal["기안", "공통"] = SCOPE_PLAN
 
 
 def _campaigns() -> dict[str, dict]:
@@ -178,7 +182,9 @@ def risk_signals(plan_id: str) -> list[Signal]:
     signals.append(Signal(
         "forecast_gap", "예상 ROAS 괴리", ratio, f"인플루언서 명목 ROAS 최대 {top_nominal:.2f}",
         "red" if ratio > top_nominal else "green",
-        "기안 예상 GMV ÷ 요청 예산이 표본 인플루언서별 명목 ROAS(GMV÷광고비) 최대값보다 크면 과대 예상", "계산",
+        "기안 예상 GMV ÷ 요청 예산이 표본 인플루언서별 명목 ROAS(GMV÷광고비) 최대값보다 크면 과대 예상. "
+        "기안 문서 전체가 같은 방식으로 예상을 적어 모든 기안이 같은 판정이 되므로 지표 반대 판정에는 쓰지 않음"
+        "(설계 4.5: 예상 GMV는 성과 판단에 쓰지 않는다)", "계산", SCOPE_COMMON,
     ))
 
     # 2) 쿠폰 중복

@@ -1,52 +1,61 @@
-"""핵심 지표 판정(설계 4.4) — 결정이 지표와 반대인지(4.1의 4번) 판단할 근거. 원본 CSV만 읽는다.
+"""지표 판정 — 결정이 지표와 반대인지(설계 4.1의 4번) 판단할 근거. 원본 CSV만 읽는다.
 
-지표가 좋다 = 실질 ROAS(공헌이익 ÷ 마케팅비)가 0 이상이고, 단순변심 반품률(금액 기준)이 나머지
-인플루언서보다 높지 않다. 둘 다 표본 계열이라 부호·비교 방향만 쓴다.
-실적이 없는 인플루언서(화면에서 새로 등록 등)는 판단 근거가 없으므로 나쁨으로 본다(손실 먼저 경계, 설계 3장 2번).
+설계 4.4: 위험 신호에 🔴가 있으면 '지표 반대 → 결재권자 추가'의 근거로 쓴다.
+- 기안: risk_signals 중 범위가 '기안'인 신호에 🔴가 하나라도 있으면 나쁨, 없으면 좋음.
+  범위가 '공통'인 신호(기안 문서 전체에 같은 판정)는 화면 근거로만 보이고 판정에서 뺀다.
+  🟡·⚪(측정 불가)는 판정 근거가 아니다. 측정 불가는 이유와 함께 근거에 남긴다.
+- 전속계약: 인플루언서별 미래 가치 신호(future_value_signals)로 같은 규칙.
+- 원본에 근거가 없으면(화면 등록 기안, 실적 없는 인플루언서) 나쁨으로 본다(손실 먼저 경계, 설계 3장 2번).
 """
 from dataclasses import dataclass
 
-from app.calc.campaign import influencer_ranking, return_rate
+from app.calc.campaign import influencer_ranking
+from app.calc.signals import SCOPE_PLAN, Signal, future_value_signals, risk_signals
+from app.data import loader
 from app.rules.models import RuleHit
 
-CHANGE_OF_MIND = "단순변심"  # 원본 반품 사유 값
-_SOURCE = "calculation_definitions 1.4·1.7"
+_SOURCE = "설계 4.4 위험 신호"
 
 
 @dataclass(frozen=True)
 class KeyIndicators:
-    influencer_id: str
+    subject: str
     good: bool
-    real_roas: float | None
-    rank: int | None
-    total: int
-    change_of_mind_rate: float
-    others_change_of_mind_rate: float
+    red: tuple[str, ...]  # 판정에 쓴 기안별 🔴 신호 키
+    excluded: tuple[str, ...]  # 🔴지만 공통 신호라 판정에서 뺀 키
+    unmeasurable: tuple[str, ...]
     hits: tuple[RuleHit, ...]
 
 
-def key_indicators(influencer_id: str) -> KeyIndicators:
-    ranking = influencer_ranking()
-    me = next((r for r in ranking if r.influencer_id == influencer_id), None)
-    mine = return_rate(influencer_id, CHANGE_OF_MIND)
-    others = return_rate(None, CHANGE_OF_MIND, exclude=influencer_id)
-    if me is None:
-        hit = RuleHit("no_performance", f"{influencer_id}의 캠페인 실적이 원본에 없어 지표를 판단할 수 없음(나쁨으로 봄)",
-                      _SOURCE, "계산")
-        return KeyIndicators(influencer_id, False, None, None, len(ranking), mine, others, (hit,))
-    hits: list[RuleHit] = []
-    if me.real_roas < 0:
-        hits.append(RuleHit("real_roas_negative",
-                            f"실질 ROAS {me.real_roas:.3f}(인플루언서 {len(ranking)}명 중 {me.rank}위)로 음수",
-                            _SOURCE, "계산"))
-    if mine > others:
-        hits.append(RuleHit("change_of_mind_high",
-                            f"단순변심 반품률 {mine:.2%}가 나머지 인플루언서 {others:.2%}보다 높음",
-                            _SOURCE, "계산"))
-    if not hits:
-        hits.append(RuleHit("indicators_good",
-                            f"실질 ROAS {me.real_roas:.3f}(인플루언서 {len(ranking)}명 중 {me.rank}위), "
-                            f"단순변심 반품률 {mine:.2%}(나머지 {others:.2%})로 지표 양호",
-                            _SOURCE, "계산"))
-    good = me.real_roas >= 0 and mine <= others
-    return KeyIndicators(influencer_id, good, me.real_roas, me.rank, len(ranking), mine, others, tuple(hits))
+def _judge(subject: str, signals: list[Signal]) -> KeyIndicators:
+    red = [s for s in signals if s.level == "red" and s.scope == SCOPE_PLAN]
+    excluded = [s for s in signals if s.level == "red" and s.scope != SCOPE_PLAN]
+    unmeasurable = [s for s in signals if s.level == "unmeasurable"]
+    if red:
+        hits = [RuleHit(s.key, f"{s.label} 🔴({s.compare}): {s.basis}", _SOURCE, s.badge) for s in red]
+    else:
+        text = f"{subject}: 기안별 위험 신호 🔴 없음"
+        if excluded:
+            text += f"(공통 신호 {', '.join(s.label for s in excluded)}는 판정에서 뺌)"
+        if unmeasurable:
+            text += "; 측정 불가: " + ", ".join(f"{s.label}({s.basis})" for s in unmeasurable)
+        hits = [RuleHit("indicators_good", text, _SOURCE, "계산")]
+    return KeyIndicators(subject, not red, tuple(s.key for s in red), tuple(s.key for s in excluded),
+                         tuple(s.key for s in unmeasurable), tuple(hits))
+
+
+def _no_basis(subject: str, why: str) -> KeyIndicators:
+    hit = RuleHit("no_signals", f"{subject}: {why}라 지표를 판단할 수 없음(나쁨으로 봄)", _SOURCE, "계산")
+    return KeyIndicators(subject, False, (), (), (), (hit,))
+
+
+def plan_indicators(plan_id: str) -> KeyIndicators:
+    if plan_id not in {r["plan_id"] for r in loader.plan_rows()}:
+        return _no_basis(plan_id, "원본 기안 파일에 없는 기안")
+    return _judge(plan_id, risk_signals(plan_id))
+
+
+def contract_indicators(influencer_id: str) -> KeyIndicators:
+    if influencer_id not in {r.influencer_id for r in influencer_ranking()}:
+        return _no_basis(influencer_id, "캠페인 실적이 원본에 없는 인플루언서")
+    return _judge(influencer_id, future_value_signals(influencer_id))

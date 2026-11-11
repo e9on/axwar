@@ -218,3 +218,12 @@ def test_형식이_깨진_통보는_파일명을_담은_오류(data_copy):
     with pytest.raises(DataFormatError) as e:
         payment_term_notices()
     assert "bb_payment_term_notice_bad.md" in str(e.value)
+
+
+def test_신호는_범위를_가진다_예상_ROAS_괴리만_공통():
+    """예상 ROAS 괴리는 기안 문서 전체가 같은 방식으로 부풀린 예상이라 25건 모두 빨강 — 기안별 성과를 가르지 못한다."""
+    from app.calc.signals import SCOPE_COMMON, SCOPE_PLAN, future_value_signals
+    scopes = {s.key: s.scope for s in risk_signals("PLAN-019")}
+    assert scopes["forecast_gap"] == SCOPE_COMMON
+    assert {k for k, v in scopes.items() if v == SCOPE_PLAN} == set(scopes) - {"forecast_gap"}
+    assert all(s.scope == SCOPE_PLAN for s in future_value_signals("INF-001"))

@@ -367,3 +367,15 @@ def test_가짜_AI면_비용_행이_없다(store):
     eng, _, cid = seeded(store, ACCEPT)
     eng.reply(store.list_requests(cid)[0]["id"], "전량 가능합니다")
     assert store.list_judgments(cid)[0]["ledger_id"] is None
+
+
+def test_지표_반대_판정은_기안별_빨강만_쓴다(store):
+    eng, _, cid = seeded(store, ACCEPT)
+    f = store.get_case(cid)["facts"]
+    assert f["indicator_good"] is True and f["indicator_excluded"] == ["forecast_gap"]
+    assert "forecast_gap" not in [h["rule_id"] for h in f["indicator_hits"]]
+    scenarios.register_plan(store, "PLAN-001")
+    f2 = store.get_case(eng.open_plan("PLAN-001"))["facts"]
+    assert f2["indicator_good"] is False and "indicator_opposite" in [h["rule_id"] for h in f2["approver_hits"]]
+    assert [h["rule_id"] for h in f2["indicator_hits"]] == ["coupon_stacking", "slow_payment_channel",
+                                                            "spend_concentration"]

@@ -18,7 +18,7 @@ from app.ai.providers import Provider, make_provider
 from app.calc import volume as volume_calc
 from app.calc.campaign import return_count_rate
 from app.calc.cash import Window, breach_windows, forecast_window, simulate_cash
-from app.calc.indicators import CHANGE_OF_MIND, key_indicators
+from app.calc.indicators import contract_indicators, plan_indicators
 from app.data import loader
 from app.engine import scenarios
 from app.rules.approver import decide_contract, decide_plan, diff_approver
@@ -52,7 +52,7 @@ REPORT_ONLY = {"그룹 보고": "그룹"}
 
 DECISIONS = scenarios.DECISIONS
 D_APPROVE, D_SPLIT, D_REJECT = DECISIONS
-COLOR_RETURN = "색상불만"  # 원본 반품 사유 값
+CHANGE_OF_MIND, COLOR_RETURN = "단순변심", "색상불만"  # 원본 반품 사유 값
 COLOR_REVIEW = "색상불일치"  # 리뷰 해석 사유 값
 NO_VOLUME = "추정 불가 — 담당자 입력 필요"
 ALLOC_HOLD, ALLOC_FULL, ALLOC_PARTIAL = "보류", "전량", "조건부"
@@ -171,7 +171,7 @@ class Engine:
         missing = [k for k in ("requested_budget_krw", "settlement_date", "contract_deadline") if plan[k] is None]
         if missing:
             raise ValueError(f"기안 {plan['plan_id']}에 비어 있는 항목: {missing}")
-        ind = key_indicators(plan["influencer_id"] or "")
+        ind = plan_indicators(plan["plan_id"])
         total = self._plan_total(plan)
         pf = PlanFacts(plan["plan_id"], plan["campaign_id"] or "", plan["influencer_id"] or "",
                        plan["requested_budget_krw"], total, _d(plan["settlement_date"]),
@@ -179,7 +179,7 @@ class Engine:
         return decide_plan(pf, windows), ind, total
 
     def _contract_decision(self, c: dict, windows: list[Window]):
-        ind = key_indicators(c["influencer_code"])
+        ind = contract_indicators(c["influencer_code"])
         cf = ContractFacts(c["influencer_code"], c["annual_fixed_krw"], _d(c["notice_deadline"]),
                            _d(c["expiry_date"]), "갱신", ind.good)
         return decide_contract(cf, windows), ind
@@ -208,7 +208,7 @@ class Engine:
             "channel": plan["channel"], "amount_krw": plan["requested_budget_krw"], "plan_total_krw": total,
             "expected_gmv_krw": plan["expected_gmv_krw"], "settlement_date": plan["settlement_date"],
             "deadline": plan["contract_deadline"], "direction": "확대",
-            "indicator_good": ind.good, "indicator_hits": _hits(ind.hits),
+            "indicator_good": ind.good, "indicator_hits": _hits(ind.hits), "indicator_excluded": list(ind.excluded),
             "approvers": list(dec.approvers), "approver_hits": _hits(dec.hits), "approved_roles": [],
             "volume": vol, "allocation": ALLOC_HOLD, "warned": False, "phase1": None, "phase2": None,
         }
@@ -233,7 +233,7 @@ class Engine:
             "contract_row_id": c["id"], "influencer_code": influencer_code, "influencer_name": c["influencer_name"],
             "annual_fixed_krw": c["annual_fixed_krw"], "deadline": c["notice_deadline"], "expiry": c["expiry_date"],
             "auto_renew": c["auto_renew"], "direction": "갱신",
-            "indicator_good": ind.good, "indicator_hits": _hits(ind.hits),
+            "indicator_good": ind.good, "indicator_hits": _hits(ind.hits), "indicator_excluded": list(ind.excluded),
             "approvers": list(dec.approvers), "approver_hits": _hits(dec.hits), "approved_roles": [], "warned": False,
         }
         cid = self.store.create_case(KIND_CONTRACT, influencer_code, facts, S_REVIEW)
