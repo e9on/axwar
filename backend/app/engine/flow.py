@@ -653,17 +653,19 @@ class Engine:
         """필요한 승인은 모였는데 SCM 회신이 '사람 확인'에 머물러 있으면, 미승인 건과 같은 기한 창(조기 경고일~)에 한 번 경고한다.
         자동 거절은 하지 않는다: 답은 했으나 해석이 애매한 건이라 사람이 처리해야 한다."""
         f = case["facts"]
-        if case["kind"] != KIND_PLAN or f.get("scm_human_warned"):
+        if case["kind"] != KIND_PLAN:
             return None
-        if not any(r["purpose"] == P_STOCK and r["status"] == R_HUMAN for r in self.store.list_requests(case["id"])):
+        warned = f.get("scm_human_warned_on") or {}
+        fresh = [rid for rid in self._human_stock_ids(case["id"]) if str(rid) not in warned]  # 경고는 요청마다 한 번
+        if not fresh:
             return None
         if not deadline_actions(_d(f["deadline"]), d, approved=False):
             return None
         text = f"{case['ref_id']} 확정 기한 {_md(_d(f['deadline']))} 전 SCM 회신 사람 확인 미처리(승인은 모였으나 SCM 회신 해석을 사람이 확인해야 확정됨)"
         self.store.add_event(case["id"], EV_WARN, "시스템", {"target": CAMPAIGN, "pending": [], "text": text,
-                                                         "deadline": f["deadline"], "scm_human": True})
-        f["scm_human_warned"] = True
-        f["scm_human_warned_on"] = d.isoformat()  # 방치 올림의 기준 시점
+                                                         "deadline": f["deadline"], "scm_human": True,
+                                                         "request_ids": fresh})
+        f["scm_human_warned_on"] = {**warned, **{str(rid): d.isoformat() for rid in fresh}}  # 요청별 방치 올림 기준 시점
         self.store.update_facts(case["id"], f, "시스템", "SCM 사람 확인 미처리 경고")
         return {"date": d.isoformat(), "case_id": case["id"], "action": "조기경고", "target": CAMPAIGN, "text": text}
 
@@ -672,9 +674,11 @@ class Engine:
     def _escalation_target(self, roles: list[str]) -> str:
         """올릴 곳 = 승인권자 역할 중 보고 체계에서 가장 높은 역할. 마케팅팀뿐이면 바로 위(Masil 대표).
         보고 체계 밖 역할(그룹 등)은 순서에 넣지 않고, 체계 안 역할이 하나도 없으면 마케팅팀으로 본다."""
-        chain = self.people.escalation
+        chain, skip = self.people.escalation, self.people.escalation_skip
         known = [r for r in roles if r in chain]
         top = max(known, key=chain.index) if known else chain[0]
+        while top in skip and chain.index(top) > 0:  # 회의체(이사회)는 올림 대상에서 빼고 그 아래 가장 가까운 역할로
+            top = chain[chain.index(top) - 1]
         return self.people.above(top) if top == chain[0] else top
 
     def _escalate_stale(self, case: dict, key: str, since: date, owner: str, roles: list[str], since_label: str,
@@ -702,17 +706,32 @@ class Engine:
         return role == owner or (f.get("escalated", {}).get(key) or {}).get("target") == role
 
     def _escalate_scm_human(self, case: dict, d: date) -> list[dict]:
-        """첫 경고(scm_human_warned_on) 뒤 정책 일수가 지나도 SCM 회신 사람 확인이 그대로면 올린다."""
+        """사람 확인 요청마다, 그 요청의 경고 뒤 정책 일수가 지나도 그대로면 올린다(올림 기록·처리 권한도 요청별)."""
         f = case["facts"]
-        if (case["kind"] != KIND_PLAN or case["status"] not in OPEN[KIND_PLAN] or not f.get("scm_human_warned_on")
-                or not self._human_open(case["id"])):
+        if case["kind"] != KIND_PLAN or case["status"] not in OPEN[KIND_PLAN]:
             return []
-        got = self._escalate_stale(case, STALE_SCM_HUMAN, _d(f["scm_human_warned_on"]), OWNER[KIND_PLAN],
-                                   _required_roles(f), "경고", d, "SCM 회신 사람 확인 방치")
-        return [got] if got else []
+        out = []
+        for rid in self._human_stock_ids(case["id"]):
+            on = (f.get("scm_human_warned_on") or {}).get(str(rid))
+            if not on:
+                continue
+            case = self.store.get_case(case["id"])  # 앞 요청의 올림 기록이 반영된 사실로
+            got = self._escalate_stale(case, self._human_key(rid), _d(on), OWNER[KIND_PLAN], _required_roles(f), "경고",
+                                       d, "SCM 회신 사람 확인 방치")
+            if got:
+                out.append(got)
+        return out
+
+    def _human_stock_ids(self, case_id: int) -> list[int]:
+        return [r["id"] for r in self.store.list_requests(case_id) if r["purpose"] == P_STOCK and r["status"] == R_HUMAN]
 
     def _human_open(self, case_id: int) -> bool:
-        return any(r["purpose"] == P_STOCK and r["status"] == R_HUMAN for r in self.store.list_requests(case_id))
+        return bool(self._human_stock_ids(case_id))
+
+    @staticmethod
+    def _human_key(request_id: int) -> str:
+        """SCM 사람 확인의 방치 올림 키: 사람 확인 요청마다 따로(올려 받은 처리 권한도 그 요청에만)."""
+        return f"{STALE_SCM_HUMAN}#{request_id}"
 
     def _hold_task(self, case_id: int) -> dict | None:
         pending = [t for t in self.store.list_tasks(case_id) if t["title"] == STALE_PHASE2_HOLD and t["status"] == "대기"]
@@ -737,7 +756,7 @@ class Engine:
         if req["status"] != R_HUMAN:
             raise ValueError("사람 확인 상태인 요청만 처리할 수 있음")
         role = self.role_of(actor)
-        key = STALE_SCM_HUMAN if req["purpose"] == P_STOCK else req["purpose"]
+        key = self._human_key(request_id) if req["purpose"] == P_STOCK else req["purpose"]
         if not self._can_handle(case["facts"], key, role, OWNER[case["kind"]]):
             raise PermissionError(f"{actor}({role})는 이 사람 확인을 처리할 수 없음 — {OWNER[case['kind']]}"
                                   "(또는 방치로 올려 받은 사람)만")
@@ -1235,6 +1254,9 @@ class Engine:
             return {**base, "changed": True, "status": S_REJECTED}
         if case["status"] == S_WAIT_REPLY:
             raise ValueError("부서 회신을 기다리는 중이라 아직 승인할 수 없음")
+        st = f.get("stock") or {}
+        if action in (D_APPROVE, D_SPLIT) and st.get("day_qty") and st.get("share") == 0:
+            raise ValueError("물류 몫이 0개라 1차 수량이 0이 됨 — 승인할 수 없음(물류와 다시 조율하거나 거절)")
         if action == D_SPLIT and not f.get("split"):
             raise ValueError("분할안이 없어 분할 승인할 수 없음")
         if action == D_APPROVE and (f.get("stock") or {}).get("shortage") and (f.get("scm") or {}).get("state") != SCM_FULL:
@@ -1276,7 +1298,8 @@ class Engine:
             # 비분할 경로도 분할 경로와 같은 단위(집행일 하루 수량). 하루 수량을 모르면(물량 곡선 밖) 기안 물량 전체.
             st = f.get("stock") or {}
             day_qty = st.get("day_qty") or f["volume"]["units"]
-            f["phase1"] = {"qty": min(day_qty, st["share"]) if st.get("share") else day_qty,
+            share = st.get("share")  # 0은 "몫 없음"이 아니라 몫 0개(decide가 막음). 하루 수량을 모르면(0) 물류 몫도 의미 없음
+            f["phase1"] = {"qty": min(day_qty, share) if share is not None and st.get("day_qty") else day_qty,
                            "date": f.get("phase1_date") or f["settlement_date"]}
             f["phase2"] = None
         self.store.update_facts(case_id, f, "시스템", "집행 수량 확정")
@@ -1486,6 +1509,9 @@ class Engine:
             raise ValueError("1차 수량이 없어 판매율을 낼 수 없음")
         f["sales"] = {"orders": orders, "returns": returns, "net": orders - returns, "date": self._today().isoformat()}
         self.store.update_facts(case_id, f, actor, f"1차 판매 실적 입력: 주문 {orders:,}, 반품 {returns:,}")
+        for t in self.store.list_tasks(case_id):
+            if t["title"] == "1차 판매 실적 입력" and t["status"] == "대기":
+                self.store.set_task_status(t["id"], "완료", actor)
         acts = self._phase2_judge(case_id)
         now = self.store.get_case(case_id)
         return {"case_id": case_id, "status": now["status"], "sales": now["facts"]["sales"], "actions": acts,
@@ -1544,6 +1570,12 @@ class Engine:
         """판매율 보류 건을 2차 계속으로 판단한다. 수량은 1 이상 계획 2차 이하, 금액은 같은 비율로 줄이고
         2차 승인권자를 다시 판정하며 2차 잠금(승인 대기) 경로로 보낸다."""
         case, f, rec = self._hold_guard(case_id, actor, reason)
+        blockers = [r for r in self._gate(case).reasons if r != NO_SALES]
+        if self._phase2_blocked(f) and not blockers:
+            blockers = ["갱신 미확정인데 2차 집행일이 계약 만료 뒤"]
+        if blockers:  # 보류 뒤에 생긴 반품 보류·리뷰 잠금이 우선: 계속은 막고(취소는 가능) 풀린 뒤 다시 판단한다
+            raise ValueError("2차를 계속할 수 없음 — 자동 보류 사유가 남아 있음: " + "; ".join(blockers) +
+                             " (사유가 풀린 뒤 다시 판단하거나 2차 취소)")
         qty_b, amt_b = rec["qty_before"], rec["amount_before"]
         if not isinstance(qty, int) or isinstance(qty, bool) or not 1 <= qty <= qty_b:
             raise ValueError(f"2차 수량은 1 이상 계획 2차({qty_b:,}개) 이하의 정수여야 함: {qty!r}")
@@ -1627,8 +1659,8 @@ class Engine:
 
     def _stale_open(self, c: dict, key: str) -> bool:
         """올림 알림은 그 일이 아직 미처리일 때만 보인다."""
-        if key == STALE_SCM_HUMAN:
-            return c["status"] in OPEN[c["kind"]] and self._human_open(c["id"])
+        if key.startswith(f"{STALE_SCM_HUMAN}#"):
+            return c["status"] in OPEN[c["kind"]] and int(key.rsplit("#", 1)[1]) in self._human_stock_ids(c["id"])
         return c["status"] == S_PHASE2_HOLD and not c["facts"].get("phase2_decision") and self._hold_task(c["id"]) is not None
 
     def todo(self, person: str) -> dict:
@@ -1650,7 +1682,7 @@ class Engine:
             # 지금도 경고 대상인 역할에게만 보인다(승인권자가 바뀌어 대상이 달라지면 지난 경고는 내려감)
             if e["detail"].get("scm_human"):  # 승인은 모였고 SCM 회신 사람 확인만 남은 건: 아직 사람 확인 중일 때만 보인다
                 if (c and e["detail"]["target"] == role and c["status"] in OPEN[c["kind"]] and
-                        any(r["purpose"] == P_STOCK and r["status"] == R_HUMAN for r in self.store.list_requests(c["id"]))):
+                        set(e["detail"].get("request_ids", [])) & set(self._human_stock_ids(c["id"]))):
                     out["기한 임박"].append({**self._item(c), "text": e["detail"]["text"]})
                 continue
             if (c and e["detail"]["target"] == role and c["status"] in OPEN[c["kind"]]

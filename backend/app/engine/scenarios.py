@@ -57,6 +57,7 @@ class Scenario:
 class People:
     people: dict[str, str]  # 이름 -> 역할
     escalation: tuple[str, ...]  # 아래에서 위로
+    escalation_skip: tuple[str, ...] = ()  # 회의체라 올림 대상에서 빼는 역할(그다음 높은 역할로 올린다)
 
     def role_of(self, who: str, allow_role_names: bool = True) -> str:
         """이름이면 그 역할, (허용할 때) 역할 이름이면 그대로. 모르면 PermissionError.
@@ -92,7 +93,10 @@ def load_people(path: str | Path | None = None) -> People:
     bad = [c for c in chain if c not in ROLES]
     if bad:
         raise ValueError(f"사람 목록 {p.name}: escalation에 모르는 역할 {bad}")
-    return People(people, tuple(chain))
+    skip = body.get("escalation_skip", [])
+    if not isinstance(skip, list) or [c for c in skip if c not in chain]:
+        raise ValueError(f"사람 목록 {p.name}: escalation_skip은 escalation 안의 역할 목록이어야 함: {skip!r}")
+    return People(people, tuple(chain), tuple(skip))
 
 
 def _fail(name: str, msg: str) -> ValueError:

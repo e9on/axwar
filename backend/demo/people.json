@@ -1,6 +1,7 @@
 {
   "description": "보는 사람과 역할(설계 6.1 + 개정 11-공통의 SCM·마케팅팀). 시연용. 운영에서는 같은 형식의 파일을 AXWAR_PEOPLE로 지정한다. 엔진의 권한 판정은 role로 한다.",
   "escalation": ["마케팅팀", "Masil 대표", "CEO", "이사회"],
+  "escalation_skip": ["이사회"],
   "people": [
     {"name": "캠페인 담당자", "role": "캠페인 담당"},
     {"name": "마케팅팀장", "role": "마케팅팀"},

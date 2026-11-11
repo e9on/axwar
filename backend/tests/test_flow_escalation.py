@@ -61,7 +61,7 @@ def test_경고_후_1일이면_올리지_않는다(store):
     eng, cid, warned = scm_human_case(store)
     eng.advance(warned + timedelta(days=after_days() - 1))
     assert stale_events(store, cid) == []
-    assert eng.todo("이사회")["알림"] == []
+    assert eng.todo("그룹 CEO")["알림"] == []
 
 
 def test_경고_후_정확히_정책_일수가_되면_최고_승인권자에게_올린다(store):
@@ -70,12 +70,12 @@ def test_경고_후_정확히_정책_일수가_되면_최고_승인권자에게_
     ev = stale_events(store, cid)
     assert len(ev) == 1
     d = ev[0]["detail"]
-    assert d["target"] == "이사회"  # 이 건의 승인권자는 CEO·이사회: 가장 높은 역할
+    assert d["target"] == "CEO"  # 승인권자 CEO·이사회: 이사회는 회의체라 올림 대상에서 빼고 CEO(추가 결정 11)
     assert f"방치 올림(경고 후 {after_days()}일)" in d["text"]
-    assert [a for a in acts if a["action"] == "방치올림" and a["target"] == "이사회"]
-    inbox = eng.todo("이사회")["알림"]
+    assert [a for a in acts if a["action"] == "방치올림" and a["target"] == "CEO"]
+    inbox = eng.todo("그룹 CEO")["알림"]
     assert [x for x in inbox if x["kind"] == "방치올림" and x["case_id"] == cid]
-    assert eng.todo("그룹 CEO")["알림"] == []
+    assert eng.todo("이사회")["알림"] == []
 
 
 def test_같은_단계는_한_번만_올린다(store):
@@ -126,11 +126,11 @@ def test_올려_받은_사람은_그_사람_확인을_직접_처리한다(store)
     eng, cid, warned = scm_human_case(store)
     eng.advance(warned + timedelta(days=after_days()))
     rid = scm_request(store, cid)["id"]
-    with pytest.raises(PermissionError):  # 올려 받지 않은 승인권자(CEO)는 여전히 불가
-        eng.resolve_human_check(rid, "그룹 CEO", "전량 허용합니다")
-    r = eng.resolve_human_check(rid, "이사회", "전량 허용합니다")
+    with pytest.raises(PermissionError):  # 올려 받지 않은 승인권자(이사회)는 여전히 불가
+        eng.resolve_human_check(rid, "이사회", "전량 허용합니다")
+    r = eng.resolve_human_check(rid, "그룹 CEO", "전량 허용합니다")
     assert r["needs_human"] is False and scm_request(store, cid)["status"] == "처리됨"
-    assert all(x["kind"] != "방치올림" for x in eng.todo("이사회")["알림"])  # 처리했으니 알림이 내려감
+    assert all(x["kind"] != "방치올림" for x in eng.todo("그룹 CEO")["알림"])  # 처리했으니 알림이 내려감
 
 
 def test_캠페인_담당은_올리기_전에도_처리한다(store):
@@ -153,7 +153,7 @@ def test_사람_확인_상태가_아닌_요청은_처리_거부(store):
     (["마케팅팀"], "Masil 대표"),                 # 마케팅팀뿐이면 바로 위
     (["Masil 대표"], "Masil 대표"),
     (["Masil 대표", "마케팅팀"], "Masil 대표"),
-    (["CEO", "이사회"], "이사회"),
+    (["CEO", "이사회"], "CEO"),
     (["그룹", "마케팅팀"], "Masil 대표"),           # 보고 체계 밖 역할은 순서에 넣지 않는다
 ])
 def test_올림_대상은_승인권자_중_최고_역할이고_마케팅팀뿐이면_Masil_대표(store, roles, expected):
