@@ -122,9 +122,9 @@ def test_H5_기한이_지난_뒤_1차_승인은_기본_거부로_처리된다(st
     assert status(store, cid) == "확정 보류" and not [t for t in store.list_tasks(cid) if t["title"] == "물류 출고"]
 
 
-def test_H5_기한_당일에는_1차_승인이_된다(store, day):
+def test_H5_승인_마감일에는_1차_승인이_된다(store, day):
     eng, cid = ops_wait(store)
-    day.d = date(2026, 9, 11)
+    day.d = date(2026, 9, 7)  # 기한 9/11의 기본 거부 실행일 9/8 전날(기한 여유 3일)
     assert eng.decide(cid, "마케팅팀장", "승인")["status"] == "1차 집행"
 
 

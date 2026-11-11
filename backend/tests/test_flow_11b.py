@@ -671,9 +671,9 @@ def test_장면3_무승인_기본거부(store):
     ceo = eng.todo("그룹 CEO")
     assert ceo["기한 임박"] == [] and [x["case_id"] for x in ceo["승인 대기"]] == [contract]
 
-    # ---- 7/17: 승인 없음 → 계약 기본 거부 + 통보 초안(AI, 순액 기준) + 계약 담당 '통보 발송' 작업, 기안 3건 확정 보류
+    # ---- 7/14(기한 7/17의 3일 전): 승인 없음 → 계약 기본 거부 + 통보 초안(AI, 순액 기준) + 계약 담당 '통보 발송' 작업, 기안 3건 확정 보류
     eng.play(st[1])
-    assert store.get_clock() == date(2026, 7, 17)
+    assert store.get_clock() == date(2026, 7, 14)
     c = store.get_case(contract)
     assert c["status"] == "통보 초안" and statuses(store, contract) == ["승인 대기", "기본 거부", "통보 초안"]
     assert c["facts"]["notice"]["ok"] is True and c["facts"]["notice"]["text"] == NOTICE
@@ -935,7 +935,7 @@ def test_장면2_판매율_변형_반품이_기준_이내면_판매율로_2차_�
     assert f["phase2"]["qty"] == qty_b * 2550 // 3000 == 11046
     assert f["phase2"]["amount_krw"] == amt_b * 2550 // 3000
     assert f["phase2_sellthrough"]["rate"] == 0.85 and f["phase2_sellthrough"]["outcome"] == "조절"
-    assert f["phase2"]["date"] == "2026-08-26" and f["phase2_planned_date"] == "2026-08-24"  # 수정 회차 2 B: 승인 기간 확보로 연기
+    assert f["phase2"]["date"] == "2026-08-28" and f["phase2_planned_date"] == "2026-08-24"  # 승인 기간 확보로 진입일 + 1일 + 여유 3일로 연기
     assert f["phase2_approvers"] == approvers_b
     assert any(h["rule_id"] == "sellthrough_adjust" for h in f["phase2_approver_hits"])
     ev = store.events(cid, kind="판매율조절")
@@ -943,19 +943,19 @@ def test_장면2_판매율_변형_반품이_기준_이내면_판매율로_2차_�
 
 
 def test_장면2_판매율_변형_대본을_2차_승인_집행_완료까지_끝까지_재생(store):
-    """수정 회차 1 판정 3: 8/24 2차 승인 대기(기한 8/25, 집행일 8/24→8/26 연기) → Masil 대표·그룹 승인 → 2차 집행 → 8/27 완료."""
+    """수정 회차 1 판정 3: 8/24 2차 승인 대기(승인 마감 8/24, 기본 거부 8/25, 집행일 8/24→8/28 연기) → Masil 대표·그룹 승인 → 2차 집행 → 8/29 완료."""
     eng, fake, cid, st = scene2(store, ACCEPT, SCM_PART, name="scenario_2_sales")
     for step in st:
         eng.play(step)
     case = store.get_case(cid)
     f = case["facts"]
-    assert case["status"] == "완료" and store.get_clock() == date(2026, 8, 27)
-    assert f["phase2_deadline"] == "2026-08-25" and f["phase2_approved_roles"] == ["Masil 대표", "그룹"]
-    assert f["phase2_exec"] == {"qty": 11046, "date": "2026-08-26", "amount_krw": f["phase2"]["amount_krw"],
+    assert case["status"] == "완료" and store.get_clock() == date(2026, 8, 29)
+    assert f["phase2_deadline"] == "2026-08-28" and f["phase2_approved_roles"] == ["Masil 대표", "그룹"]
+    assert f["phase2_exec"] == {"qty": 11046, "date": "2026-08-28", "amount_krw": f["phase2"]["amount_krw"],
                                 "approved_at": "2026-08-24"}
     assert f["phase2_result"]["result"] == "집행"
     assert [e["detail"]["to"] for e in store.events(cid, kind="상태변경")][-4:] == [
         "2차 잠금", "2차 승인 대기", "2차 집행", "완료"]
     t = {(x["dept"], x["title"]): (x["due"], x["detail"]) for x in store.list_tasks(cid)}
-    assert t[("물류", "물류 출고(2차)")][0] == "2026-08-26" and "11,046개" in t[("물류", "물류 출고(2차)")][1]
-    assert t[("CS", "CS 대비(2차)")][0] == "2026-08-26"
+    assert t[("물류", "물류 출고(2차)")][0] == "2026-08-28" and "11,046개" in t[("물류", "물류 출고(2차)")][1]
+    assert t[("CS", "CS 대비(2차)")][0] == "2026-08-28"

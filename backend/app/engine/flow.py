@@ -12,7 +12,7 @@
   SCM 거절·무응답(scm.no_reply_days)은 장부를 앞으로 돌려 여유가 1차 수량 이상 생기는 첫날로 연기하고, 없거나 계약 만료 뒤면 1차 차단.
   등록부 집행일이 바뀌면 재고 점검·분할안을 새 날짜로 다시 돌린다.
 - 2차 승인·집행(설계 7.3): 2차 게이트가 모두 풀리고 판매율 판정이 조절·유지(보류 아님)로 끝나면 2차 승인 대기. 승인 기한 =
-  max(2차 집행일 - phase2.prep_days, 진입일 + phase2.min_approval_days). 조기 경고·방치 올림·기본 거부는 1차와 같은 장치.
+  2차 집행일 - deadline.buffer_days에 기본 거부(승인은 그 전날까지). 진입일 + phase2.min_approval_days가 그보다 늦으면 집행일을 진입일 + 그 일수 + 여유일로 민다. 조기 경고·방치 올림·기본 거부는 1차와 같은 장치.
   모두 승인 → 2차 집행(물류 출고·CS 대비, 날짜 = 2차 집행일) → 집행일이 지나면 완료. 거절·기본 거부 → 2차 없이 완료(통보 없음).
 - 시연·운영 분리(최종 수정 H1): 기준일 이동·일일 점검·대본·할 일·캘린더·재고 장부·갱신 확정은 지금 모드의 사건(origin)만 본다.
   운영 모드는 API 요청이 들어올 때 오늘 점검이 안 돌았으면 먼저 돌린다(ensure_daily_check). 결정·상신도 확정 기한이 지났으면(당일까지 허용) 기본 거부.
@@ -42,7 +42,7 @@ from app.engine import scenarios
 from app.rules.allocate import allocate_day, can_announce, stock_alerts, stockout_days_earlier, usable_capacity
 from app.rules.approver import decide_contract, decide_plan, diff_approver
 from app.rules.capacity import parse_capacity
-from app.rules.deadline import deadline_actions
+from app.rules.deadline import approval_deadline, deadline_actions, deny_date, is_lapsed
 from app.rules.models import ApproverChange, ApproverDecision, ContractFacts, PlanFacts, RuleHit
 from app.rules.split import GateResult, make_split, phase2_gate
 from app.store.db import CASE_DEMO, CASE_OPERATION, CLOCK_LOCKED, MODE_OPERATION, Store
@@ -784,9 +784,11 @@ class Engine:
         if target is None or target in f.get(wkey, []):
             return None
         pending = _pending_roles(f, stage)
-        label = "확정 기한" if first else "2차 승인 기한"
-        text = f"{case['ref_id']} {label} {_md(_d(f[dkey]))} 전 미승인(승인권자 {'·'.join(pending)})"
-        detail = {"target": target, "pending": pending, "text": text, "deadline": f[dkey]}
+        label = "확정 기한" if first else "2차 집행일"
+        text = (f"{case['ref_id']} {label} {_md(_d(f[dkey]))} 전 미승인(승인 마감 {_md(approval_deadline(_d(f[dkey])))}, "
+                f"승인권자 {'·'.join(pending)})")
+        detail = {"target": target, "pending": pending, "text": text, "deadline": f[dkey],
+                  "approval_deadline": approval_deadline(_d(f[dkey])).isoformat()}
         if not first:
             detail["stage"] = stage
             f.setdefault("phase2_warned_on", d.isoformat())  # 방치 올림 기준 시점 = 첫 경고일
@@ -921,20 +923,24 @@ class Engine:
         return self.reply(request_id, text, attachments)
 
     def _lapsed_deny(self, case: dict, base: dict) -> dict | None:
-        """H5: 결정·상신이 들어왔는데 확정 기한이 이미 지났으면(기한 당일까지는 허용) 기본 거부로 처리하고 그 결과를 돌려준다.
+        """H5: 결정·상신이 들어왔는데 기본 거부 실행일(확정 기한 - deadline.buffer_days)이 되었거나 지났으면(승인은 그 전날까지)
+        기본 거부로 처리하고 그 결과를 돌려준다.
         지금 모드의 사건에만 적용한다(다른 모드의 사건에 이 모드의 시계를 대지 않는다)."""
         today = self._today()
-        if case["origin"] != self._mode_origin() or today <= _d(case["facts"]["deadline"]):
+        if case["origin"] != self._mode_origin() or not is_lapsed(_d(case["facts"]["deadline"]), today):
             return None
         res = self._default_deny(case, today)
-        deadline = _md(_d(case["facts"]["deadline"]))
+        deadline = _d(case["facts"]["deadline"])
         return {**base, "changed": False, "status": res["status"],
-                "message": f"확정 기한 {deadline}이 지나 기본 거부로 처리함 — 결정을 받지 않음"}
+                "message": f"기본 거부 실행일 {_md(deny_date(deadline))}(확정 기한 {_md(deadline)}의 "
+                           f"{policy.get('deadline.buffer_days')}일 전)이 되어 기본 거부로 처리함 — 결정을 받지 않음"}
 
     def _default_deny(self, case: dict, d: date) -> dict:
         """기한까지 승인 없음 → 기본 거부(설계 3장 2번·4.3). 기안은 확정 보류(철회)."""
         deadline = _md(_d(case["facts"]["deadline"]))
-        self.store.set_status(case["id"], S_DEFAULT_DENY, "시스템", f"확정 기한 {deadline}까지 승인 없음 — 기본 거부")
+        self.store.set_status(case["id"], S_DEFAULT_DENY, "시스템",
+                              f"승인 마감 {_md(approval_deadline(_d(case['facts']['deadline'])))}까지 승인 없음 — 확정 기한 {deadline}의 "
+                              f"{policy.get('deadline.buffer_days')}일 전 기본 거부")
         status = S_DEFAULT_DENY
         if case["kind"] == KIND_PLAN:
             self.store.set_status(case["id"], S_HOLD, "시스템", "확정 보류(철회)")
@@ -1799,7 +1805,7 @@ class Engine:
             lapsed = self._lapsed_deny(case, {"case_id": case_id, "actor": actor, "role": role, "stage": stage})
             if lapsed is not None:
                 return lapsed
-        if not first and today > _d(f["phase2_deadline"]):  # 2차 승인은 기한 당일까지 가능
+        if not first and is_lapsed(_d(f["phase2_deadline"]), today):  # 2차 승인도 기본 거부 실행일 전날까지
             res = self._phase2_default_deny(case, today)
             return {"case_id": case_id, "actor": actor, "role": role, "stage": stage, "changed": False,
                     "status": res["status"], "message": res["text"]}
@@ -2030,7 +2036,8 @@ class Engine:
 
     def _enter_phase2_wait(self, case_id: int) -> list[dict]:
         """2차 게이트가 모두 풀리고 판매율 판정이 조절·유지(보류 아님)로 끝난 2차 잠금 건을 2차 승인 대기로 보낸다.
-        승인 기한 = max(2차 집행일 - phase2.prep_days, 오늘 + phase2.min_approval_days). 필요한 2차 승인 역할이 없으면 바로 집행."""
+        2차 기한 = 2차 집행일. 기본 거부 실행일 = 집행일 - deadline.buffer_days(승인은 그 전날까지). 진입일 + phase2.min_approval_days가
+        그 실행일보다 늦으면 집행일을 (진입일 + phase2.min_approval_days + deadline.buffer_days)로 민다. 필요한 2차 승인 역할이 없으면 바로 집행."""
         case = self.store.get_case(case_id)
         f = case["facts"]
         p2 = f.get("phase2")
@@ -2038,12 +2045,13 @@ class Engine:
             return []
         today = self._today()
         planned = _d(p2["date"])
-        deadline = max(planned - timedelta(days=policy.get("phase2.prep_days")),
-                       today + timedelta(days=policy.get("phase2.min_approval_days")))
-        shifted = deadline >= planned  # 승인 기한이 집행일과 같거나 늦으면 집행일을 기한 다음 날로 민다(기한 < 집행일은 항상 성립)
+        min_days, buffer = policy.get("phase2.min_approval_days"), policy.get("deadline.buffer_days")
+        earliest = today + timedelta(days=min_days)  # 승인권자에게 보장하는 최소 기간이 끝나는 날
+        shifted = earliest > deny_date(planned)  # 기본 거부 실행일이 그보다 이르면 집행일을 민다
+        deadline = earliest + timedelta(days=buffer) if shifted else planned  # 2차 기한 = (밀린) 2차 집행일
         before = _decision(f, "2차") if f.get(STAGES["2차"][0]) else None
         if shifted:
-            new_day = deadline + timedelta(days=1)
+            new_day = deadline
             f.setdefault("phase2_planned_date", p2["date"])
             p2["date"] = new_day.isoformat()
             keep = [h for h in f.get(STAGES["2차"][1], []) if h["rule_id"] == "sellthrough_adjust"]
@@ -2054,8 +2062,9 @@ class Engine:
             self._phase2_approvers(f, case_id)
         ref = case["ref_id"]
         if shifted:
-            text = (f"{ref} 2차 집행일 연기(승인 기간 확보): {_md(planned)}→{_md(new_day)} — 2차 승인 기한 "
-                    f"{_md(deadline)}이 계획 집행일보다 늦거나 같아 기한 다음 날로 민다")
+            text = (f"{ref} 2차 집행일 연기(승인 기간 확보): {_md(planned)}→{_md(new_day)} — 기본 거부 실행일 "
+                    f"{_md(deny_date(planned))}이 승인 최소 기간({_md(earliest)}까지)보다 이르러 집행일을 "
+                    f"진입일 + {min_days}일 + 여유 {buffer}일로 민다")
             self.store.add_event(case_id, EV_P2_SHIFT, "시스템", {"from": planned.isoformat(), "to": new_day.isoformat(),
                                                                "deadline": deadline.isoformat(), "text": text})
             self.store.update_facts(case_id, f, "시스템", "2차 집행일 연기(승인 기간 확보)")
@@ -2075,9 +2084,11 @@ class Engine:
             return [*shift_act, {"date": today.isoformat(), "case_id": case_id, "action": "2차집행",
                                  "text": f"{ref} 2차 승인권자가 없어 바로 2차 집행"}]
         text = (f"{ref} 2차 {p2['qty']:,}개 — 2차 게이트가 열려 2차 승인 대기: 승인권자 {'·'.join(roles)}, "
-                f"승인 기한 {_md(deadline)}")
+                f"승인 마감 {_md(approval_deadline(deadline))}(2차 집행일 {_md(deadline)}의 {buffer}일 전 기본 거부)")
         self.store.set_status(case_id, S_PHASE2_WAIT, "시스템", text)
-        self.store.add_event(case_id, EV_P2_WAIT, "시스템", {"roles": roles, "deadline": deadline.isoformat(), "text": text})
+        self.store.add_event(case_id, EV_P2_WAIT, "시스템", {"roles": roles, "deadline": deadline.isoformat(),
+                                                          "approval_deadline": approval_deadline(deadline).isoformat(),
+                                                          "text": text})
         return [*shift_act, {"date": today.isoformat(), "case_id": case_id, "action": EV_P2_WAIT, "text": text}]
 
     def _phase2_end(self, case_id: int, actor: str, result: str, text: str) -> str:
@@ -2113,7 +2124,9 @@ class Engine:
     def _phase2_default_deny(self, case: dict, d: date) -> dict:
         """2차 승인 기한까지 승인이 없으면 기본 거부 → 2차 없음, 완료(이유 문장, 이벤트). 통보는 만들지 않는다."""
         f = case["facts"]
-        text = (f"{case['ref_id']} 2차 승인 기한 {_md(_d(f['phase2_deadline']))}까지 승인이 없어 기본 거부 — "
+        run = deny_date(_d(f["phase2_deadline"]))
+        text = (f"{case['ref_id']} 2차 승인 마감 {_md(approval_deadline(_d(f['phase2_deadline'])))}까지 승인이 없어 "
+                f"2차 집행일 {_md(_d(f['phase2_deadline']))}의 {policy.get('deadline.buffer_days')}일 전({_md(run)}) 기본 거부 — "
                 "2차 집행 없음, 완료")
         status = self._phase2_end(case["id"], "시스템", P2_DENY, text)
         return {"date": d.isoformat(), "case_id": case["id"], "action": "2차기본거부", "status": status, "text": text}
@@ -2165,7 +2178,7 @@ class Engine:
             raise PermissionError(f"{actor}({role})는 이 건의 2차 승인권자가 아님 — 2차 승인권자: {'·'.join(required)}")
         base = {"case_id": case_id, "actor": actor, "role": role, "action": action, "stage": "2차"}
         today = self._today()
-        if today > _d(f["phase2_deadline"]):  # 기한 당일까지 승인 가능, 지나면 기본 거부(M4)
+        if is_lapsed(_d(f["phase2_deadline"]), today):  # 승인은 2차 기본 거부 실행일 전날까지
             res = self._phase2_default_deny(case, today)
             return {**base, "changed": False, "status": res["status"], "message": res["text"]}
         ref, qty = case["ref_id"], f["phase2"]["qty"]
@@ -2203,10 +2216,9 @@ class Engine:
                      "status": self._phase2_end(case["id"], "시스템", P2_EXECUTED, text), "text": text}]
         if case["status"] != S_PHASE2_WAIT:
             return []
-        dl = _d(f["phase2_deadline"])
-        if d > dl:  # 기한 당일까지 승인 가능(M4): 지난 다음 날 점검에서 기본 거부
+        acts = deadline_actions(_d(f["phase2_deadline"]), d, approved=False)  # 1차와 같은 규칙(기본 거부 실행일 기준)
+        if "기본거부" in acts:
             return [self._phase2_default_deny(case, d)]
-        acts = ["조기경고"] if d >= dl - timedelta(days=policy.get("deadline.early_warning_days")) else []
         out: list[dict] = []
         if "조기경고" in acts:
             w = self._warn(case, d, "2차")
@@ -2287,9 +2299,18 @@ class Engine:
     # ---------------------------------------------------------------- 화면용 읽기
 
     @staticmethod
-    def _item(c: dict) -> dict:
+    def deadline_view(deadline: str | None) -> dict:
+        """화면용 기한 세 날짜: 기한(deadline), 기본 거부 실행일(deny_date = 기한 - 여유일), 승인 마감일(approval_deadline = 실행일 전날).
+        모두 rules/deadline.py의 같은 함수로 센다."""
+        if not deadline:
+            return {"deadline": deadline, "deny_date": None, "approval_deadline": None}
+        d = _d(deadline)
+        return {"deadline": deadline, "deny_date": deny_date(d).isoformat(), "approval_deadline": approval_deadline(d).isoformat()}
+
+    @classmethod
+    def _item(cls, c: dict) -> dict:
         return {"case_id": c["id"], "kind": c["kind"], "ref_id": c["ref_id"], "status": c["status"],
-                "deadline": c["facts"].get("deadline")}
+                **cls.deadline_view(c["facts"].get("deadline"))}
 
     def _stale_open(self, c: dict, key: str) -> bool:
         """올림 알림은 그 일이 아직 미처리일 때만 보인다."""
@@ -2318,7 +2339,7 @@ class Engine:
             if c["status"] in APPROVAL_STATES and role in _pending_roles(c["facts"]):
                 out["승인 대기"].append({**self._item(c), **self._ups_for(c["facts"], "1차", role)})
             if (c["status"] == S_PHASE2_WAIT and self._phase2_stand_in(c["facts"], role, _pending_roles(c["facts"], "2차"))):
-                out["승인 대기"].append({**self._item(c), "stage": "2차", "deadline": c["facts"]["phase2_deadline"],
+                out["승인 대기"].append({**self._item(c), "stage": "2차", **self.deadline_view(c["facts"]["phase2_deadline"]),
                                      **self._ups_for(c["facts"], "2차", role)})
             for ch in self.store.get_approver_changes(c["id"]):
                 before = {_role(x) for x in ch.before if x not in REPORT_ONLY}
@@ -2331,7 +2352,7 @@ class Engine:
             if e["detail"].get("stage") == "2차":  # 2차 승인 대기 건의 조기 경고
                 if (c and e["detail"]["target"] == role and c["status"] == S_PHASE2_WAIT
                         and self._warn_target(c["facts"], "2차") == role):
-                    out["기한 임박"].append({**self._item(c), "stage": "2차", "deadline": c["facts"]["phase2_deadline"],
+                    out["기한 임박"].append({**self._item(c), "stage": "2차", **self.deadline_view(c["facts"]["phase2_deadline"]),
                                          "text": e["detail"]["text"]})
                 continue
             if e["detail"].get("notice_overdue"):  # 통보 기한이 지났는데 통보가 안 나간 계약 건: 아직 통보 초안일 때만 보인다
@@ -2371,7 +2392,7 @@ class Engine:
                 "pending_roles": _pending_roles(f, "2차") if has else [],
                 "gate": asdict(self._gate(case)), "sales": f.get("sales"), "returns": f.get("returns"),
                 "sellthrough": f.get("phase2_sellthrough"), "decision": f.get("phase2_decision"),
-                "deadline": f.get("phase2_deadline"), "approved_roles": f.get(STAGES["2차"][2], []),
+                **self.deadline_view(f.get("phase2_deadline")), "approved_roles": f.get(STAGES["2차"][2], []),
                 "exec": f.get("phase2_exec"), "result": f.get("phase2_result")}
 
     BRIEFING, COUNTERPOINTS = "브리핑", "반대근거"  # ai_judgments 종류
@@ -2443,6 +2464,7 @@ class Engine:
             "rule": {"approvers": f["approvers"], "hits": f["approver_hits"], "required_roles": _required_roles(f),
                      "approved_roles": f.get("approved_roles", []), "pending_roles": pending},
             "phase2": p2,
+            **self.deadline_view(f.get("deadline")),
             "escalations": f.get("escalations", []),
             **self._texts(case_id, self._fingerprint(self._brief_basis(case))),
             "approver_changes": [{"before": list(c.before), "after": list(c.after), "reason": c.reason,
@@ -2478,15 +2500,19 @@ class Engine:
             f = c["facts"]
             pending = _pending_roles(f) if c["status"] in OPEN[c["kind"]] else []
             if c["kind"] == KIND_PLAN:
+                add(approval_deadline(_d(f["deadline"])).isoformat(), "승인 마감", f"{c['ref_id']} 승인 마감(다음 날 기본 거부)",
+                    c["id"], pending)
                 add(f["deadline"], "확정 기한", f"{c['ref_id']} 확정 기한", c["id"], pending)
                 add(f.get("phase1_date") or f["settlement_date"], "집행일", f"{c['ref_id']} 집행일", c["id"], [CAMPAIGN])
                 if f.get("phase2") and f["phase2"].get("date"):
                     add(f["phase2"]["date"], "2차 집행일", f"{c['ref_id']} 2차 집행일", c["id"], [CAMPAIGN])
                 if c["status"] == S_PHASE2_WAIT:
-                    add(f["phase2_deadline"], "2차 승인 기한", f"{c['ref_id']} 2차 승인 기한", c["id"],
-                        _pending_roles(f, "2차"))
+                    add(approval_deadline(_d(f["phase2_deadline"])).isoformat(), "2차 승인 마감",
+                        f"{c['ref_id']} 2차 승인 마감(다음 날 기본 거부)", c["id"], _pending_roles(f, "2차"))
             else:
                 with_case.add(f["contract_row_id"])
+                add(approval_deadline(_d(f["deadline"])).isoformat(), "승인 마감", f"{c['ref_id']} 승인 마감(다음 날 기본 거부)",
+                    c["id"], pending)
                 add(f["deadline"], "통보 기한", f"{c['ref_id']} 해지·조건변경 통보 기한", c["id"], pending)
                 add(f["expiry"], "계약 만료", f"{c['ref_id']} 계약 만료", c["id"], [CONTRACT_OWNER])
         for k in self.store.list_contracts():

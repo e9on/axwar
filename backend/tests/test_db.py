@@ -243,7 +243,7 @@ def test_화면에서_기안을_등록한다(store):
 def test_정책을_바꾸면_이력이_남고_규칙이_새값을_쓴다(store):
     from app.rules.deadline import deadline_actions
     dl = date(2030, 1, 20)
-    day = dl - timedelta(days=policy.get("deadline.early_warning_days") + 2)
+    day = dl - timedelta(days=policy.get("deadline.buffer_days") + policy.get("deadline.early_warning_days") + 2)  # 조기 경고 창은 기본 거부 실행일(기한 - 여유일)에서 센다
     assert deadline_actions(dl, day, approved=False) == []
     before = policy.get("deadline.early_warning_days")
     store.change_policy("deadline.early_warning_days", before + 5, "담당자", "여유 필요")

@@ -235,22 +235,22 @@ def test_2차_결재선_재판정이_일어나면_2차_상신은_무효가_된�
 
 # ---------------------------------------------------------------- B. 2차 기한 < 집행일
 
-def test_장면2는_2차_승인_기한_8_25_집행_8_26(store):
+def test_장면2는_2차_승인_마감_8_24_기본_거부_8_25_집행_8_28(store):
     eng, cid = to_wait(store)
     f = facts(store, cid)
-    assert f["phase2_deadline"] == "2026-08-25" and f["phase2"]["date"] == "2026-08-26"
-    assert f["phase2_date"] == "2026-08-26" and f["phase2_planned_date"] == "2026-08-24"
+    assert f["phase2_deadline"] == "2026-08-28" and f["phase2"]["date"] == "2026-08-28"
+    assert f["phase2_date"] == "2026-08-28" and f["phase2_planned_date"] == "2026-08-24"
     ev = store.events(cid, kind="2차집행일연기")
     assert len(ev) == 1 and "2차 집행일 연기(승인 기간 확보)" in ev[0]["detail"]["text"]
-    assert (ev[0]["detail"]["from"], ev[0]["detail"]["to"]) == ("2026-08-24", "2026-08-26")
+    assert (ev[0]["detail"]["from"], ev[0]["detail"]["to"]) == ("2026-08-24", "2026-08-28")
     eng.decide_phase2(cid, "Masil 대표", "승인")
     eng.decide_phase2(cid, "그룹 재무", "승인")
     due = {x["title"]: x["due"] for x in store.list_tasks(cid) if "(2차)" in x["title"]}
-    assert set(due.values()) == {"2026-08-26"}
-    assert any(c["date"] == "2026-08-26" and c["kind"] == "2차 집행일" for c in eng.calendar())
-    eng.advance(date(2026, 8, 26))
+    assert set(due.values()) == {"2026-08-28"}
+    assert any(c["date"] == "2026-08-28" and c["kind"] == "2차 집행일" for c in eng.calendar())
+    eng.advance(date(2026, 8, 28))
     assert status(store, cid) == EXEC
-    eng.advance(date(2026, 8, 27))
+    eng.advance(date(2026, 8, 29))
     assert status(store, cid) == "완료"
 
 
@@ -272,18 +272,19 @@ def make_open(store, monkeypatch, days_ahead, p2_qty=1000, orders=950, returns=5
     return eng, cid, today
 
 
-def test_기한은_어떤_경우에도_집행일보다_앞선다(store, monkeypatch, ample, tmp_path):
+def test_기본_거부_실행일은_진입일_더하기_최소_승인_일수_이후다(store, monkeypatch, ample, tmp_path):
     from app import policy
-    prep, mn = policy.get("phase2.prep_days"), policy.get("phase2.min_approval_days")
-    for i, ahead in enumerate((0, 1, 2, 3, 10)):
+    from app.rules.deadline import approval_deadline, deny_date
+    buf, mn = policy.get("deadline.buffer_days"), policy.get("phase2.min_approval_days")
+    for i, ahead in enumerate((0, 1, 2, 3, 4, 10)):
         s = open_db(tmp_path / f"b{i}.db")
         eng, cid, today = make_open(s, monkeypatch, ahead)
         f = facts(s, cid)
         dl, ex = date.fromisoformat(f["phase2_deadline"]), date.fromisoformat(f["phase2"]["date"])
         planned = today + timedelta(days=ahead)
-        assert dl == max(planned - timedelta(days=prep), today + timedelta(days=mn))
-        assert ex == max(planned, dl + timedelta(days=1)) and dl < ex
-        assert (ex != planned) == (ahead < prep + mn)
+        assert dl == ex == max(planned, today + timedelta(days=mn + buf))
+        assert deny_date(dl) >= today + timedelta(days=mn) and approval_deadline(dl) >= today
+        assert (ex != planned) == (ahead < mn + buf)
         s.close()
 
 
@@ -298,7 +299,7 @@ def test_집행일이_밀리면_2차_승인권자를_다시_판정한다(store, 
     win = [Window(store.get_clock() - timedelta(days=5), store.get_clock() + timedelta(days=1))]
     eng, cid, t = make_open(store, monkeypatch, 0, windows=win)
     f = facts(store, cid)
-    assert f["phase2"]["date"] == (t + timedelta(days=2)).isoformat()  # 창(t+1까지) 밖으로 밀림
+    assert f["phase2"]["date"] == (t + timedelta(days=4)).isoformat()  # 창(t+1까지) 밖으로 밀림(진입일 + 1 + 3)
     assert "CEO" not in f["phase2_approvers"]  # 하회 구간 밖이라 covenant 승인권자가 빠짐
     last = store.get_approver_changes(cid)[-1]
     assert "CEO" in last.before and "CEO" not in last.after
@@ -314,7 +315,7 @@ def test_집행일이_밀려_계약_만료_뒤가_되면_2차_차단(store, monk
     eng.advance(store.get_clock() + timedelta(days=1))
     assert status(store, cid) == WAIT
     f = facts(store, cid)
-    assert date.fromisoformat(f["phase2_deadline"]) < date.fromisoformat(f["phase2"]["date"])
+    assert f["phase2_deadline"] == f["phase2"]["date"]  # 2차 기한 = 2차 집행일(기본 거부는 그 3일 전)
 
 
 # ---------------------------------------------------------------- C. 2차 없는 건은 완료

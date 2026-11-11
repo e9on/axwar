@@ -10,7 +10,7 @@ from app.rules.models import PlanFacts
 POLICY_DOC = config.data_root() / "00_common" / "approval_authority_policy.md"
 KEYS = [
     "approval.item_limit_krw", "approval.total_limit_krw", "approval.contract_limit_krw",
-    "deadline.early_warning_days", "split.return_observe_days", "split.stop_z",
+    "deadline.early_warning_days", "deadline.buffer_days", "split.return_observe_days", "split.stop_z",
     "allocate.capacity_fallback_ratio", "cash.horizon_days",
     "signals.return_ratio_red", "signals.hhi_limit", "volume.low_confidence_share",
 ]
@@ -68,11 +68,11 @@ def test_건별_기준을_바꾸면_판정이_바뀐다(monkeypatch, tmp_path):
 
 
 def test_조기경고_일수를_바꾸면_판정이_바뀐다(monkeypatch, tmp_path):
-    dl = date(2030, 1, 10)
-    assert deadline_actions(dl, date(2030, 1, 6), approved=False) == ["조기경고"]
+    dl = date(2030, 1, 10)  # 기본 거부 실행일 1/7(기한 - 여유 3일), 조기 경고는 거기서 센다
+    assert deadline_actions(dl, date(2030, 1, 3), approved=False) == ["조기경고"]
     text = default_text().replace("value = 5\n", "value = 3\n", 1)
     use_file(monkeypatch, tmp_path, text)
-    assert deadline_actions(dl, date(2030, 1, 6), approved=False) == []
+    assert deadline_actions(dl, date(2030, 1, 3), approved=False) == []
 
 
 def test_필수_항목_누락은_항목_이름을_담은_오류(monkeypatch, tmp_path):

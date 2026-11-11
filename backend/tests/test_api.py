@@ -219,19 +219,19 @@ def test_판매율_조절_갈래를_API로_2차_승인_집행_완료까지(store
     d = sc.detail("PLAN-001")
     assert r["sales"]["net"] == 2550 and d["phase2"]["sellthrough"]["outcome"] == "조절"
     assert d["phase2"]["plan"]["qty"] == qty_b * 2550 // 3000 and d["phase2"]["gate"]["open"] is True
-    # 판매율로 조절한 2차가 2차 승인 대기로 들어간다: 승인권자는 Masil 대표·그룹, 기한은 8/25
-    assert d["case"]["status"] == "2차 승인 대기" and d["phase2"]["deadline"] == "2026-08-25"
-    assert d["phase2"]["pending_roles"] == ["Masil 대표", "그룹"]
+    # 판매율로 조절한 2차가 2차 승인 대기로 들어간다: 승인권자는 Masil 대표·그룹, 2차 집행일(기한) 8/28·승인 마감 8/24
+    assert d["case"]["status"] == "2차 승인 대기" and d["phase2"]["deadline"] == "2026-08-28"
+    assert d["phase2"]["approval_deadline"] == "2026-08-24" and d["phase2"]["pending_roles"] == ["Masil 대표", "그룹"]
     assert ok(c.get("/api/todo/Masil 대표"))["승인 대기"][0]["stage"] == "2차"
     assert ok(c.get(f"/api/cases/{d['case']['id']}", params={"viewer": "Masil 대표"}))["viewer"]["can_decide_phase2"] is True
     assert ok(c.get(f"/api/cases/{d['case']['id']}", params={"viewer": "그룹 CEO"}))["viewer"]["can_decide_phase2"] is False
     cid = d["case"]["id"]
     assert "2차 승인권자" in detail_of(c.post(f"/api/cases/{cid}/phase2/decision", json={"actor": "그룹 CEO", "action": "승인"}))
     assert "승인 또는 거절" in detail_of(c.post(f"/api/cases/{cid}/phase2/decision", json={"actor": "Masil 대표", "action": "분할승인"}))
-    sc.run_from(sale + 1)  # 2차 승인 두 건 → 2차 집행 → 8/27 완료
+    sc.run_from(sale + 1)  # 2차 승인 두 건 → 2차 집행 → 8/29 완료
     d = sc.detail("PLAN-001")
     assert d["case"]["status"] == "완료" and d["phase2"]["result"]["result"] == "집행"
-    assert d["phase2"]["exec"]["qty"] == qty_b * 2550 // 3000 and d["phase2"]["exec"]["date"] == "2026-08-26"
+    assert d["phase2"]["exec"]["qty"] == qty_b * 2550 // 3000 and d["phase2"]["exec"]["date"] == "2026-08-28"
     assert {(t["dept"], t["title"]) for t in d["tasks"]} >= {("물류", "물류 출고(2차)"), ("CS", "CS 대비(2차)")}
     assert [a["decision"] for a in d["approvals"]][-2:] == ["2차 승인", "2차 승인"]
 
@@ -732,4 +732,4 @@ def test_상신_API_2차_승인_단계(store):
     assert "보고 체계" in detail_of(c.post(f"/api/cases/{cid}/escalate", json={**body, "actor": "그룹 재무"}))
     d = ok(c.get(f"/api/cases/{cid}?viewer=그룹 CEO"))
     assert d["viewer"]["can_decide_phase2"] is True and d["escalations"][0]["stage"] == "2차"
-    assert d["phase2"]["deadline"] == "2026-08-25" and d["phase2"]["plan"]["date"] == "2026-08-26"
+    assert d["phase2"]["deadline"] == "2026-08-28" and d["phase2"]["plan"]["date"] == "2026-08-28"

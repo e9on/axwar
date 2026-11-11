@@ -250,9 +250,11 @@ def test_기한_전_조기경고는_한_단계_위에_한번만(store):
     eng.play(steps()[0])
     early = policy.get("deadline.early_warning_days")
     deadline = date.fromisoformat(store.get_case(cid)["facts"]["deadline"])
-    acts = eng.advance(deadline - timedelta(days=early))
+    buffer = policy.get("deadline.buffer_days")
+    run = deadline - timedelta(days=buffer)  # 기본 거부 실행일: 조기 경고 창은 여기서 센다
+    acts = eng.advance(run - timedelta(days=early))
     assert [a["action"] for a in acts] == ["조기경고"] and acts[0]["target"] == "CEO"
-    eng.advance(deadline - timedelta(days=1))
+    eng.advance(run - timedelta(days=1))
     assert len(store.events(cid, kind="조기경고")) == 1
     assert [x["case_id"] for x in eng.todo("그룹 CEO")["기한 임박"]] == [cid]
     assert [x["case_id"] for x in eng.todo("Masil 대표")["승인 대기"]] == [cid]
@@ -451,9 +453,9 @@ def test_등록부에서_집행일을_바꾸면_사실_이유문장_기한_승�
 def test_새_기한에_기본거부된다(store):
     eng, cid = _plan001_partly_approved(store)
     eng.update_plan("PLAN-001", {"settlement_date": "2026-09-30", "contract_deadline": "2026-09-25"}, "캠페인 담당자")
-    eng.advance(date(2026, 9, 24))
+    eng.advance(date(2026, 9, 21))  # 새 기한 9/25의 3일 전(9/22)이 기본 거부 실행일
     assert store.get_case(cid)["status"] == "재승인 대기"
-    eng.advance(date(2026, 9, 25))
+    eng.advance(date(2026, 9, 22))
     assert store.get_case(cid)["status"] == "확정 보류"
 
 

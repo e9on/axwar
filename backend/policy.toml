@@ -16,10 +16,15 @@ value = 1000000000
 source = "approval_authority_policy.md 인플루언서 연간 전속계약 체결·갱신"
 description = "전속계약 연 금액이 이 금액을 넘으면 CEO·이사회, 이하면 Masil 대표"
 
+[deadline.buffer_days]
+value = 3
+source = "사용자 지정(2026-11-12): 기한 당일 통보는 상대에게 급하므로 3일 여유"
+description = "기한(1차: 확정·통보 기한, 2차: 집행일) 며칠 전에 기본 거부를 실행하는지. 승인은 그 전날까지"
+
 [deadline.early_warning_days]
 value = 5
 source = "가정: 원본에 없음. 기한 5일 전부터 미승인이면 알릴 시간이 필요하다고 봄"
-description = "승인 기한 몇 일 전부터 미승인 건에 조기 경고를 내는지"
+description = "기본 거부 실행일 몇 일 전부터 미승인 건에 조기 경고를 내는지(기본 거부 실행일 = 기한 - deadline.buffer_days)"
 
 [escalation.after_days]
 value = 2
@@ -214,13 +219,8 @@ value = "캠페인 담당,계약 담당,마케팅팀,Masil 대표,CEO"
 source = "가정: 원본에 없음. 기안·계약을 만드는 실무 부서와 결재권자"
 description = "기안·계약 등록부를 등록·수정·가져오기·동기화할 수 있는 역할(쉼표로 구분). 인플루언서 측·에이전시 같은 외부 역할은 계약·기안 값을 바꿀 수 없다"
 
-[phase2.prep_days]
-value = 1
-source = "가정: 원본에 없음. 2차 승인 뒤 물류 출고·CS 대비를 준비하는 데 하루가 걸린다고 봄"
-description = "2차 승인 기한 = 2차 집행일 - 이 일수. 기한 당일까지 승인이 없으면 기본 거부(2차 없음)"
-
 [phase2.min_approval_days]
 value = 1
 source = "가정: 원본에 없음. 2차 게이트가 집행일 당일에야 열려도 승인권자에게 최소 하루는 준다고 봄"
-description = "2차 승인 대기에 들어간 날로부터 승인 기한까지 최소로 보장하는 일수(집행 준비 일수로 계산한 기한이 이미 지났거나 더 이르면 이 일수로 늘림)"
+description = "2차 승인 대기에 들어간 날로부터 2차 기본 거부 실행일까지 최소로 보장하는 일수. 진입일 + 이 일수가 기본 거부 실행일(2차 집행일 - deadline.buffer_days)보다 늦으면 2차 집행일을 (진입일 + 이 일수 + deadline.buffer_days)로 민다"
 

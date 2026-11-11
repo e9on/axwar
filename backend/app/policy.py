@@ -14,6 +14,7 @@ _SCHEMA: dict[str, type] = {
     "approval.total_limit_krw": int,
     "approval.contract_limit_krw": int,
     "deadline.early_warning_days": int,
+    "deadline.buffer_days": int,
     "escalation.after_days": int,
     "split.return_observe_days": int,
     "split.stop_z": float,
@@ -42,7 +43,6 @@ _SCHEMA: dict[str, type] = {
     "admin.review_inputters": str,
     "admin.return_inputters": str,
     "admin.registry_editors": str,
-    "phase2.prep_days": int,
     "phase2.min_approval_days": int,
 }
 

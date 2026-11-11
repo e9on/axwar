@@ -129,12 +129,13 @@ def test_판매율_조절로_2차가_열리면_2차_승인_대기에_들어간�
     eng, cid = to_wait(store)
     f = facts(store, cid)
     assert status(store, cid) == WAIT
-    assert f["phase2_deadline"] == "2026-08-25"  # 집행일 전날(8/23)은 이미 지나 최소 승인 일수만큼 늘림
+    assert f["phase2_deadline"] == "2026-08-28"  # 2차 기한 = 집행일. 기본 거부 8/21이 진입일 + 1일(8/25)보다 이르러 8/24 + 1 + 3 = 8/28로 민다
+    assert eng.phase2_view(cid)["approval_deadline"] == "2026-08-24"
     assert eng.phase2_view(cid)["pending_roles"] == ["Masil 대표", "그룹"]
     ev = store.events(cid, kind="2차승인대기")
     assert len(ev) == 1 and "Masil 대표" in ev[0]["detail"]["text"]
     todo = eng.todo("Masil 대표")["승인 대기"]
-    assert [(i["case_id"], i["stage"], i["deadline"]) for i in todo] == [(cid, "2차", "2026-08-25")]
+    assert [(i["case_id"], i["stage"], i["deadline"]) for i in todo] == [(cid, "2차", "2026-08-28")]
     assert eng.todo("그룹 CEO")["승인 대기"] == []  # 1차 승인권자는 2차 대상이 아님
 
 
@@ -173,12 +174,12 @@ def test_2차_승인권자가_모두_승인하면_2차_집행_그리고_집행�
     r = eng.decide_phase2(cid, "그룹 재무", "승인")
     assert r["status"] == EXEC
     t = {(x["dept"], x["title"]): x["due"] for x in store.list_tasks(cid)}
-    assert t[("물류", "물류 출고(2차)")] == "2026-08-26" and t[("CS", "CS 대비(2차)")] == "2026-08-26"
+    assert t[("물류", "물류 출고(2차)")] == "2026-08-28" and t[("CS", "CS 대비(2차)")] == "2026-08-28"
     assert any(e["detail"]["target"] == "그룹" and "2차" in e["detail"]["text"]
                for e in store.events(cid, kind="그룹보고"))
-    eng.advance(date(2026, 8, 26))  # 집행일(8/24에서 승인 기간 확보로 8/26) 당일은 아직 집행 중
+    eng.advance(date(2026, 8, 28))  # 집행일(8/24에서 승인 기간 확보로 8/28) 당일은 아직 집행 중
     assert status(store, cid) == EXEC
-    eng.advance(date(2026, 8, 27))
+    eng.advance(date(2026, 8, 29))
     assert status(store, cid) == "완료"
     res = facts(store, cid)["phase2_result"]
     assert res["result"] == "집행" and "2차" in res["text"]
@@ -215,12 +216,12 @@ def test_2차_거절이면_2차_없이_완료되고_통보는_만들지_않는�
 
 def test_2차_기한까지_승인이_없으면_기본_거부로_완료(store):
     eng, cid = to_wait(store)
+    eng.advance(date(2026, 8, 24))
+    assert status(store, cid) == WAIT  # 승인 마감일(8/24)까지는 승인할 수 있고 기본 거부는 집행일 8/28의 3일 전인 8/25 아침
     eng.advance(date(2026, 8, 25))
-    assert status(store, cid) == WAIT  # 최종 수정 M4: 기한 당일까지는 승인할 수 있으니 기본 거부는 다음 날
-    eng.advance(date(2026, 8, 26))
     assert status(store, cid) == "완료"
     res = facts(store, cid)["phase2_result"]
-    assert res["result"] == "기본 거부" and "기본 거부" in res["text"] and "8/25" in res["text"]
+    assert res["result"] == "기본 거부" and "기본 거부" in res["text"] and "8/25" in res["text"] and "8/24" in res["text"]
     assert not [x for x in store.list_tasks(cid) if "(2차)" in x["title"] or "통보" in x["title"]]
     assert [e["detail"]["result"] for e in store.events(cid, kind="2차결정")] == ["기본 거부"]
     with pytest.raises(ValueError, match="2차 승인 대기"):
@@ -229,9 +230,9 @@ def test_2차_기한까지_승인이_없으면_기본_거부로_완료(store):
 
 def test_기한이_지난_뒤_결정하려_해도_기본_거부(store):
     eng, cid = to_wait(store)
-    store.set_clock(date(2026, 8, 25))  # 기준일만 옮김(기한 점검 없이): 기한 당일까지는 승인할 수 있다(최종 수정 M4)
+    store.set_clock(date(2026, 8, 24))  # 기준일만 옮김(기한 점검 없이): 승인 마감일까지는 승인할 수 있다
     assert eng.decide_phase2(cid, "Masil 대표", "승인")["changed"] is True
-    store.set_clock(date(2026, 8, 26))
+    store.set_clock(date(2026, 8, 25))  # 기본 거부 실행일
     r = eng.decide_phase2(cid, "그룹 재무", "승인")
     assert r["changed"] is False and r["status"] == "완료" and "기본 거부" in r["message"]
 
@@ -273,20 +274,21 @@ def open_phase2(store, monkeypatch, days_ahead):
     return eng, cid
 
 
-def test_2차_기한은_집행일_전날(store, monkeypatch, ample):
+def test_2차_기한은_집행일이고_기본_거부는_3일_전(store, monkeypatch, ample):
     eng, cid = open_phase2(store, monkeypatch, days_ahead=10)
-    assert facts(store, cid)["phase2_deadline"] == (store.get_clock() + timedelta(days=9)).isoformat()
+    assert facts(store, cid)["phase2_deadline"] == (store.get_clock() + timedelta(days=10)).isoformat()
+    assert eng.phase2_view(cid)["deny_date"] == (store.get_clock() + timedelta(days=7)).isoformat()
 
 
 def test_2차_기한_조기_경고와_방치_올림과_기본_거부(store, monkeypatch, ample):
     eng, cid = open_phase2(store, monkeypatch, days_ahead=10)
     assert status(store, cid) == WAIT
-    deadline = date.fromisoformat(facts(store, cid)["phase2_deadline"])
-    eng.advance(deadline - timedelta(days=6))  # 경고 창(기한 5일 전) 전
+    deadline = date.fromisoformat(facts(store, cid)["phase2_deadline"]) - timedelta(days=3)  # 기본 거부 실행일
+    eng.advance(deadline - timedelta(days=6))  # 경고 창(기본 거부 실행일 5일 전) 전
     assert store.events(cid, kind="조기경고") == []
     eng.advance(deadline - timedelta(days=5))
     warn = store.events(cid, kind="조기경고")
-    assert len(warn) == 1 and warn[0]["detail"]["stage"] == "2차" and "2차 승인 기한" in warn[0]["detail"]["text"]
+    assert len(warn) == 1 and warn[0]["detail"]["stage"] == "2차" and "2차 집행일" in warn[0]["detail"]["text"]
     target = warn[0]["detail"]["target"]
     assert [(i["case_id"]) for i in eng.todo(target)["기한 임박"]] == [cid]
     eng.advance(deadline - timedelta(days=4))  # 같은 대상에게 다시 경고하지 않음
@@ -296,9 +298,9 @@ def test_2차_기한_조기_경고와_방치_올림과_기본_거부(store, monk
     assert len(stale) == 1 and stale[0]["detail"]["key"] == "2차 승인"
     assert status(store, cid) == WAIT
     assert [i["case_id"] for i in eng.todo(stale[0]["detail"]["target"])["알림"]] == [cid]
+    eng.advance(deadline - timedelta(days=1))
+    assert status(store, cid) == WAIT  # 승인 마감일까지 승인 가능
     eng.advance(deadline)
-    assert status(store, cid) == WAIT  # 최종 수정 M4: 기한 당일까지 승인 가능
-    eng.advance(deadline + timedelta(days=1))
     assert status(store, cid) == "완료"
     assert facts(store, cid)["phase2_result"]["result"] == "기본 거부"
     assert eng.todo(stale[0]["detail"]["target"])["알림"] == []  # 끝난 건의 올림 알림은 내려감
@@ -310,7 +312,7 @@ def test_방치_올림을_받은_상급자가_2차를_승인하면_아래_역할
     f = facts(store, cid)
     f["phase2_approvers"], f["phase2_approver_hits"] = ["마케팅팀"], []
     store.update_facts(cid, f, "시험", "")
-    deadline = date.fromisoformat(f["phase2_deadline"])
+    deadline = date.fromisoformat(f["phase2_deadline"]) - timedelta(days=3)  # 기본 거부 실행일
     with pytest.raises(PermissionError):
         eng.decide_phase2(cid, "Masil 대표", "승인")  # 아직 올림 전
     eng.advance(deadline - timedelta(days=5))
