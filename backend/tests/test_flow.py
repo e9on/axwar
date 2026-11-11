@@ -261,7 +261,7 @@ def test_정책이_바뀌어_결재권자가_바뀌면_권한이동을_남긴다
     assert len(store.get_approver_changes(cid)) == 1  # 같은 변경을 다시 남기지 않음
 
 
-def test_결재권자가_아닌데_회신대기에서_승인하면_오류가_아니라_순서_오류(store):
+def test_회신대기_중에는_승인할_수_없고_거절은_가능(store):
     eng, _, cid = seeded(store, ACCEPT)
     with pytest.raises(ValueError, match="회신"):
         eng.decide(cid, "Masil 대표", "승인")
