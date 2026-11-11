@@ -55,3 +55,111 @@ description = "인플루언서별 광고비 비중 제곱합(HHI)이 이 값을 
 value = 0.9
 source = "가정: 원본에 기준 없음. 표본이 과거 판매 기록의 90% 이상이면 한 주에 쏠려 대표성이 낮다고 봄"
 description = "캠페인 표본 주문이 해당 SKU·주 전체 주문에서 차지하는 비중이 이 값 이상이면 물량 추정 신뢰도 낮음"
+
+# ---- AI 연결 (3단계) ----
+
+[ai.total_cap_usd]
+value = 1.0
+source = "가정: 사용자 승인 운영 예산 — 전체 누적 한도"
+description = "AI 호출 비용(USD)이 누적으로 이 값에 닿으면 더 이상 호출하지 않음"
+
+[ai.daily_cap_usd]
+value = 0.3
+source = "가정: 사용자 승인 운영 예산 — 하루 한도"
+description = "AI 호출 비용(USD)이 하루 동안 이 값에 닿으면 그날은 더 이상 호출하지 않음"
+
+[ai.max_tokens]
+value = 2048
+source = "성능평가 2026-11-10: 300이면 생각 단계가 한도를 다 써서 빈 답, 2048이면 잘림 0/120"
+description = "AI 한 번 호출에서 받을 수 있는 최대 출력 토큰 수"
+
+[ai.effort]
+value = "low"
+source = "성능평가 2026-11-10"
+description = "Claude 호출의 생각 깊이(output_config.effort)"
+
+[ai.anthropic_version]
+value = "2023-06-01"
+source = "Anthropic API 문서: anthropic-version 요청 머리글"
+description = "Anthropic API 호출 시 보내는 API 버전 문자열"
+
+[ai.review_model]
+value = "claude-haiku-5-5"
+source = "AI_모델_성능평가.md 6. 배정 제안(사용자 승인)"
+description = "리뷰 분류에 쓰는 주 모델"
+
+[ai.review_backup]
+value = "gemini-3.1-flash-lite"
+source = "AI_모델_성능평가.md 6. 배정 제안(사용자 승인)"
+description = "리뷰 분류에서 주 모델이 실패하면 쓰는 예비 모델"
+
+[ai.reply_model]
+value = "claude-haiku-5-5"
+source = "AI_모델_성능평가.md 6. 배정 제안(사용자 승인)"
+description = "부서 회신 해석에 쓰는 주 모델"
+
+[ai.reply_backup]
+value = "gemini-3.1-flash-lite"
+source = "AI_모델_성능평가.md 6. 배정 제안(사용자 승인)"
+description = "부서 회신 해석에서 주 모델이 실패하면 쓰는 예비 모델"
+
+[ai.writer_model]
+value = "claude-haiku-5-5"
+source = "AI_모델_성능평가.md 6. 배정 제안(사용자 승인)"
+description = "통보 초안 글쓰기에 쓰는 주 모델"
+
+[ai.writer_backup]
+value = "claude-sonnet-5-5"
+source = "AI_모델_성능평가.md 6. 배정 제안(사용자 승인)"
+description = "통보 초안 글쓰기에서 주 모델이 실패하면 쓰는 예비 모델"
+
+# 모델 단가표. 100만 토큰당 USD. 배정 표(위)와 별개이며 성능평가용 실험 모델도 포함한다.
+# Gemini는 무료 등급이라 실제로는 청구되지 않지만 유료 전환 시 비용 비교용으로 유료 단가를 적는다.
+
+[ai.models."claude-haiku-5-5"]
+provider = "anthropic"
+in_usd_per_mtok = 0.1
+out_usd_per_mtok = 0.5
+source = "성능평가 2026-11-10 단가표"
+
+[ai.models."claude-sonnet-5-5"]
+provider = "anthropic"
+in_usd_per_mtok = 2
+out_usd_per_mtok = 10
+source = "성능평가 2026-11-10 단가표"
+
+[ai.models."claude-opus-5-5"]
+provider = "anthropic"
+in_usd_per_mtok = 4
+out_usd_per_mtok = 20
+source = "성능평가 2026-11-10 단가표"
+
+[ai.models."gemini-3.1-flash-lite"]
+provider = "gemini"
+in_usd_per_mtok = 0.25
+out_usd_per_mtok = 1.5
+source = "성능평가 2026-11-10 단가표(유료 전환 시 기준)"
+
+[ai.models."gemini-3.5-flash-lite"]
+provider = "gemini"
+in_usd_per_mtok = 0.3
+out_usd_per_mtok = 2.5
+source = "성능평가 2026-11-10 단가표(유료 전환 시 기준)"
+
+[ai.models."gemini-3.8-flash"]
+provider = "gemini"
+in_usd_per_mtok = 0.75
+out_usd_per_mtok = 3.75
+source = "성능평가 2026-11-10 단가표(유료 전환 시 기준)"
+
+[ai.models."solar-mini4"]
+provider = "upstage"
+in_usd_per_mtok = 0.1
+out_usd_per_mtok = 0.4
+source = "성능평가 2026-11-10 단가표"
+
+[ai.models."solar-pro4"]
+provider = "upstage"
+in_usd_per_mtok = 0.3
+out_usd_per_mtok = 1.2
+source = "성능평가 2026-11-10 단가표"
