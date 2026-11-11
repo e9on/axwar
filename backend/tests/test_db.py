@@ -204,7 +204,8 @@ def test_계약_수정은_허용된_열만_이벤트를_남긴다(store):
 
 
 def test_기안을_가져온다(store):
-    assert store.import_plans_from_source() == 0
+    r = store.import_plans_from_source()
+    assert r.added == 25 and r.skipped == []
     plans = store.list_plans()
     assert len(plans) == 25
     p = store.get_plan("PLAN-001")
@@ -215,7 +216,7 @@ def test_기안을_가져온다(store):
 
 def test_기안을_두번_가져와도_중복없음(store):
     store.import_plans_from_source()
-    assert store.import_plans_from_source() == 0
+    assert store.import_plans_from_source().added == 0
     assert len(store.list_plans()) == 25
 
 
@@ -223,7 +224,7 @@ def test_화면에서_고친_기안은_다시_가져와도_유지(store):
     store.import_plans_from_source()
     pid = store.get_plan("PLAN-001")["id"]
     store.update_plan(pid, {"requested_budget_krw": 5}, "담당자")
-    assert store.import_plans_from_source() == 1  # 건너뛴 수
+    assert [x.plan_id for x in store.import_plans_from_source().skipped] == ["PLAN-001"]
     p = store.get_plan("PLAN-001")
     assert p["requested_budget_krw"] == 5 and p["origin"] == "화면"
 
@@ -326,48 +327,6 @@ def test_예약이_한도를_넘으면_거절(store):
         store.reserve(0.1, day, 10.0, 0.6)
 
 
-@pytest.mark.parametrize("kind", ["db", "memory"])
-def test_동시호출에도_한도를_넘지_않는다(kind, tmp_path):
-    import threading
-    from app.ai.providers import BudgetExceeded, MemoryCostLedger
-    ledger = open_db(tmp_path / "th.db") if kind == "db" else MemoryCostLedger()
-    day = date(2030, 1, 2)
-    ok, no = [], []
-
-    def work():
-        try:
-            ok.append(ledger.reserve(0.001, day, 0.0035, 1.0))
-        except BudgetExceeded:
-            no.append(1)
-
-    threads = [threading.Thread(target=work) for _ in range(20)]
-    [t.start() for t in threads]
-    [t.join() for t in threads]
-    assert len(ok) == 3 and len(no) == 17
-    assert ledger.spent(None) <= 0.0035
-
-
-def test_두_연결이_같은_파일을_써도_한도를_넘지_않는다(tmp_path):
-    import threading
-    from app.ai.providers import BudgetExceeded
-    p = tmp_path / "two.db"
-    stores = [open_db(p), open_db(p)]
-    day = date(2030, 1, 2)
-    ok = []
-
-    def work(i):
-        try:
-            ok.append(stores[i % 2].reserve(0.001, day, 0.0035, 1.0))
-        except BudgetExceeded:
-            pass
-
-    threads = [threading.Thread(target=work, args=(i,)) for i in range(20)]
-    [t.start() for t in threads]
-    [t.join() for t in threads]
-    assert len(ok) == 3
-    [s.close() for s in stores]
-
-
 def test_예산_제공자가_DB_장부에_기록한다(store):
     from app.ai.providers import BudgetedProvider, Completion
 
@@ -381,3 +340,291 @@ def test_예산_제공자가_DB_장부에_기록한다(store):
     BudgetedProvider(Inner(), store, today=lambda: day).complete("s", "u")
     assert store.spent(day) == pytest.approx(0.00015)
     assert [r["model"] for r in store.ai_calls()] == ["claude-haiku-5-5"]
+
+
+# ======================= 수정 회차 1 =======================
+
+def _plan_csv(data_copy, plan_id, column, value):
+    import csv
+    from app.data import loader
+    path = data_copy / "02_masil/marketing/mkt_budget_plan_ms.csv"
+    lines = path.read_text(encoding="utf-8-sig").splitlines()
+    head = lines[0].split("|")
+    out = [lines[0]]
+    for ln in lines[1:]:
+        cells = ln.split("|")
+        if cells[0] == plan_id:
+            cells[head.index(column)] = str(value)
+        out.append("|".join(cells))
+    path.write_text("\n".join(out) + "\n", encoding="utf-8")
+    loader._read.cache_clear()
+
+
+# ---- 기안 가져오기 결과 ----
+
+def test_기안_가져오기_결과는_추가_갱신_변경없음_건너뜀을_센다(store):
+    r = store.import_plans_from_source()
+    assert (r.added, r.updated, r.unchanged, r.skipped) == (25, 0, 0, [])
+    r2 = store.import_plans_from_source()
+    assert (r2.added, r2.updated, r2.unchanged, r2.skipped) == (0, 0, 25, [])
+
+
+def test_원본이_바뀌면_갱신되고_이벤트에_무엇이_바뀌었는지_남는다(store, data_copy):
+    store.import_plans_from_source()
+    _plan_csv(data_copy, "PLAN-001", "requested_budget_krw", 777)
+    r = store.import_plans_from_source()
+    assert (r.added, r.updated, r.unchanged) == (0, 1, 24)
+    assert store.get_plan("PLAN-001")["requested_budget_krw"] == 777
+    ev = [e for e in store.events(None) if e["kind"] == "기안가져오기"]
+    last = ev[-1]["detail"]
+    assert last["added"] == 0 and last["updated"] == 1 and last["unchanged"] == 24
+    assert last["changes"] == {"PLAN-001": {"requested_budget_krw": {"before": 18962703, "after": 777}}}
+
+
+def test_화면에서_고친_기안은_건너뛰고_이유와_바뀐_열을_알려준다(store, data_copy):
+    store.import_plans_from_source()
+    store.update_plan(store.get_plan("PLAN-001")["id"], {"requested_budget_krw": 5}, "담당자")
+    _plan_csv(data_copy, "PLAN-001", "expected_gmv_krw", 999)
+    r = store.import_plans_from_source()
+    assert [s.plan_id for s in r.skipped] == ["PLAN-001"]
+    assert "화면" in r.skipped[0].reason and r.skipped[0].source_changed == ["expected_gmv_krw"]
+    assert store.get_plan("PLAN-001")["requested_budget_krw"] == 5
+    assert r.updated == 0 and r.unchanged == 24
+
+
+def test_캠페인_마스터에_없는_기안은_경고로_알린다(store, data_copy):
+    path = data_copy / "02_masil/master/m_campaign_ms.csv"
+    lines = path.read_text(encoding="utf-8-sig").splitlines()
+    path.write_text("\n".join(ln for ln in lines if not ln.startswith("CMP-0003|")) + "\n", encoding="utf-8")
+    from app.data import loader
+    loader._read.cache_clear()
+    r = store.import_plans_from_source()
+    assert r.added == 25 and any("PLAN-001" in w and "CMP-0003" in w for w in r.warnings)
+    assert store.get_plan("PLAN-001")["influencer_id"] is None
+
+
+def test_계약_원본이_바뀌면_가져오기_이벤트가_남는다(store, tmp_path):
+    src = tmp_path / "inf001_exclusive_contract_notice.md"
+    text = NOTICE.read_text(encoding="utf-8")
+    src.write_text(text, encoding="utf-8")
+    cid = store.import_contracts_from_notice(src)[0]
+    src.write_text(text.replace("연 28억원", "연 30억원"), encoding="utf-8")
+    assert store.import_contracts_from_notice(src)[0] == cid
+    assert store.get_contract(cid)["annual_fixed_krw"] == 3_000_000_000
+    ev = [e for e in store.events(None) if e["kind"] == "계약가져오기"]
+    assert ev[-1]["detail"]["changes"]["annual_fixed_krw"] == {"before": 2_800_000_000, "after": 3_000_000_000}
+
+
+def test_다른_폴더의_같은_이름_통보문은_다른_계약(store, tmp_path):
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir(), b.mkdir()
+    text = NOTICE.read_text(encoding="utf-8")
+    (a / "n_exclusive_contract_notice.md").write_text(text, encoding="utf-8")
+    (b / "n_exclusive_contract_notice.md").write_text(text.replace("INF-001", "INF-002"), encoding="utf-8")
+    assert store.import_contracts_from_notice(a / "n_exclusive_contract_notice.md") != \
+        store.import_contracts_from_notice(b / "n_exclusive_contract_notice.md")
+
+
+# ---- 등록부 값 검증·식별 열 ----
+
+def test_식별_열은_고칠_수_없다(store):
+    cid = store.import_contracts_from_notice(NOTICE)[0]
+    store.import_plans_from_source()
+    pid = store.get_plan("PLAN-001")["id"]
+    for col in ("source_doc",):
+        with pytest.raises(ValueError):
+            store.update_contract(cid, {col: "x"}, "a")
+    for col in ("plan_id", "source_file"):
+        with pytest.raises(ValueError):
+            store.update_plan(pid, {col: "x"}, "a")
+
+
+def test_등록부_값_형식을_검증한다(store):
+    base = {"influencer_code": "INF-V", "influencer_name": "n", "annual_fixed_krw": 1,
+            "notice_deadline": "2030-01-01", "expiry_date": "2030-02-01"}
+    for bad in ({"annual_fixed_krw": "28억"}, {"annual_fixed_krw": True}, {"annual_fixed_krw": 1.5},
+                {"notice_deadline": "내일"}, {"expiry_date": "2030/02/01"}, {"auto_renew": "예"}):
+        with pytest.raises(ValueError):
+            store.add_contract({**base, **bad}, "a")
+    cid = store.add_contract({**base, "notice_deadline": date(2030, 1, 5)}, "a")
+    assert store.get_contract(cid)["notice_deadline"] == "2030-01-05"
+    with pytest.raises(ValueError):
+        store.update_contract(cid, {"annual_fixed_krw": "x"}, "a")
+    with pytest.raises(ValueError):
+        store.add_plan({"plan_id": "P-V", "requested_budget_krw": "많이"}, "a")
+    with pytest.raises(ValueError):
+        store.add_plan({"plan_id": "P-V", "settlement_date": "어제"}, "a")
+
+
+# ---- reset 기록 ----
+
+def test_초기화는_누가_했는지_이벤트로_남긴다(store):
+    store.reset("담당자")
+    ev = [e for e in store.events(None) if e["kind"] == "초기화"]
+    assert ev and ev[-1]["actor"] == "담당자"
+
+
+# ---- 정산 실패·남은 예약 ----
+
+def test_존재하지_않는_예약을_정산하면_오류(store):
+    with pytest.raises(KeyError):
+        store.settle(999, "claude-haiku-5-5", 1, 1, 0.1)
+
+
+def test_정산_실패는_이벤트로_남는다(store):
+    store.note_settle_failure(7, RuntimeError("database is locked"))
+    ev = [e for e in store.events(None) if e["kind"] == "정산실패"]
+    assert ev and ev[-1]["detail"]["reservation_id"] == 7 and "database is locked" in ev[-1]["detail"]["error"]
+
+
+def test_COMMIT이_실패해도_연결이_갇히지_않는다(store):
+    class Wrap:
+        def __init__(self, real):
+            self.real, self.fail = real, True
+
+        def execute(self, sql, *a):
+            if sql == "COMMIT" and self.fail:
+                self.fail = False
+                raise sqlite3.OperationalError("disk I/O error")
+            return self.real.execute(sql, *a)
+
+        def __getattr__(self, name):
+            return getattr(self.real, name)
+
+    real = store._db
+    store._db = Wrap(real)
+    with pytest.raises(sqlite3.OperationalError):
+        store.create_case("k", "x", {}, "접수")
+    cid = store.create_case("k", "y", {}, "접수")  # 이전 실패가 연결을 막지 않는다
+    assert store.get_case(cid)["ref_id"] == "y"
+    with pytest.raises(KeyError):
+        store.get_case(cid - 1)  # 실패한 쓰기는 반영되지 않았다
+
+
+def _age(store, rid, seconds):
+    from datetime import datetime, timedelta, timezone
+    old = (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat(timespec="seconds")
+    store._db.execute("UPDATE ai_calls SET ts=? WHERE id=?", (old, rid))
+
+
+def test_예약_조회와_오래된_예약_정리(tmp_path):
+    p = tmp_path / "r.db"
+    s = open_db(p)
+    day = date(2030, 1, 2)
+    stale = s.reserve(0.2, day, 1.0, 1.0)
+    fresh = s.reserve(0.1, day, 1.0, 1.0)
+    _age(s, stale, policy.get("ai.reservation_stale_seconds") + 60)
+    pend = s.pending_reservations()
+    assert {r["id"] for r in pend} == {stale, fresh} and all(r["created"] for r in pend)
+    s.close()
+    s2 = open_db(p)  # 다시 열 때 오래된 예약은 '미정산'으로 바뀌어 보인다
+    assert [r["id"] for r in s2.pending_reservations()] == [fresh]
+    rows = {r["id"]: r for r in s2.ai_calls()}
+    assert rows[stale]["state"] == "미정산" and rows[stale]["usd"] == pytest.approx(0.2)
+    assert s2.spent(None) == pytest.approx(0.3)  # 예상 비용으로 계속 집계(보수적)
+    assert any(e["kind"] == "미정산예약" for e in s2.events(None))
+    s2.close()
+
+
+# ---- 느린 틈에서도 한도를 지키는 동시 호출 ----
+
+class GapLock:
+    """락을 놓은 직후 잠깐 쉬는 락: 락을 나눠 잡는 잘못된 구현에서 다른 스레드가 반드시 그 틈에 끼어들게 한다."""
+
+    def __init__(self, inner=None):
+        import threading
+        self._inner = inner or threading.Lock()
+
+    def __enter__(self):
+        self._inner.acquire()
+        return self
+
+    def __exit__(self, *exc):
+        import time
+        self._inner.release()
+        time.sleep(0.02)
+
+
+
+def _barrier_run(ledger, n, estimate, total_cap):
+    import threading
+    from app.ai.providers import BudgetExceeded
+    barrier = threading.Barrier(n)
+    day = date(2030, 1, 2)
+    ok = []
+
+    def work():
+        barrier.wait()
+        try:
+            ok.append(ledger.reserve(estimate, day, total_cap, 100.0))
+        except BudgetExceeded:
+            pass
+
+    threads = [threading.Thread(target=work) for _ in range(n)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    return ok
+
+
+@pytest.mark.parametrize("kind", ["db", "memory"])
+def test_틈이_있어도_동시_예약이_한도를_넘지_않는다(kind, tmp_path, monkeypatch):
+    import time
+    from app.ai import providers
+    from app.ai.providers import MemoryCostLedger
+    from app.store import db as dbmod
+    orig = providers.check_caps
+
+    def slow(*a, **k):
+        orig(*a, **k)
+        time.sleep(0.02)  # 확인과 기록 사이에 틈을 만든다
+
+    monkeypatch.setattr(providers, "check_caps", slow)
+    monkeypatch.setattr(dbmod, "check_caps", slow)
+    ledger = open_db(tmp_path / "s.db") if kind == "db" else MemoryCostLedger()
+    ledger._lock = GapLock(ledger._lock)
+    ok = _barrier_run(ledger, 20, 0.001, 0.0035)
+    assert len(ok) == 3 and ledger.spent(None) <= 0.0035
+
+
+def test_두_연결도_틈이_있어도_한도를_넘지_않는다(tmp_path, monkeypatch):
+    import threading
+    import time
+    from app.ai import providers
+    from app.ai.providers import BudgetExceeded
+    from app.store import db as dbmod
+    orig = providers.check_caps
+
+    def slow(*a, **k):
+        orig(*a, **k)
+        time.sleep(0.02)
+
+    monkeypatch.setattr(dbmod, "check_caps", slow)
+    p = tmp_path / "two2.db"
+    stores = [open_db(p), open_db(p)]
+    barrier = threading.Barrier(20)
+    ok = []
+
+    def work(i):
+        barrier.wait()
+        try:
+            ok.append(stores[i % 2].reserve(0.001, date(2030, 1, 2), 0.0035, 100.0))
+        except BudgetExceeded:
+            pass
+
+    threads = [threading.Thread(target=work, args=(i,)) for i in range(20)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert len(ok) == 3
+    [s.close() for s in stores]
+
+
+def test_저장된_정책이_무효가_되어도_저장소는_열린다(tmp_path):
+    p = tmp_path / "bad.db"
+    s = open_db(p)
+    s.change_policy("deadline.early_warning_days", 9, "a", "r")
+    s._db.execute("UPDATE policy_changes SET after='-5'")  # 나중에 무효가 된 값
+    s.close()
+    s2 = open_db(p)
+    assert policy.get("deadline.early_warning_days") != -5
+    assert any(e["kind"] == "정책덮어쓰기무시" for e in s2.events(None))
+    s2.close()

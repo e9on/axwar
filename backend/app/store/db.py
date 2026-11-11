@@ -9,10 +9,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 from contextlib import contextmanager
-from datetime import date, datetime, timezone
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -23,9 +25,11 @@ from app.data import loader
 from app.rules.models import ApproverChange, RuleHit
 
 SCHEMA_VERSION = 1
-MODES = ("운영", "시연")
+MODE_OPERATION, MODE_DEMO = "운영", "시연"
+MODES = (MODE_OPERATION, MODE_DEMO)
 ORIGINS = ("가져오기", "화면", "시연")
 CLOCK_LOCKED = "운영 모드에서는 날짜를 바꿀 수 없음"
+logger = logging.getLogger(__name__)
 
 _SCHEMA = """
 CREATE TABLE schema_version (version INTEGER NOT NULL);
@@ -82,7 +86,57 @@ _CONTRACT_FIELDS = ("influencer_code", "influencer_name", "annual_fixed_krw", "p
                     "notice_deadline", "expiry_date", "auto_renew", "source_doc")
 _PLAN_FIELDS = ("plan_id", "campaign_id", "influencer_id", "channel", "requested_budget_krw", "expected_gmv_krw",
                 "settlement_date", "contract_deadline", "source_file")
+# 화면에서 고칠 수 있는 열. 식별 열(source_doc, plan_id, source_file)은 뺀다(고치면 다시 가져올 때 중복이 생김).
+_CONTRACT_EDITABLE = tuple(f for f in _CONTRACT_FIELDS if f != "source_doc")
+_PLAN_EDITABLE = tuple(f for f in _PLAN_FIELDS if f not in ("plan_id", "source_file"))
 _BOOL_COLUMNS = {"auto_renew"}
+_INT_COLUMNS = {"annual_fixed_krw", "requested_budget_krw", "expected_gmv_krw"}
+_DATE_COLUMNS = {"notice_deadline", "expiry_date", "settlement_date", "contract_deadline"}
+
+
+@dataclass(frozen=True)
+class SkippedPlan:
+    plan_id: str
+    reason: str
+    source_changed: list[str]  # 원본 파일 값이 등록부 값과 달라진 열(화면 수정 때문에 반영되지 못함)
+
+
+@dataclass
+class PlanImportResult:
+    added: int = 0
+    updated: int = 0
+    unchanged: int = 0
+    skipped: list[SkippedPlan] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+
+def _clean(fields: dict) -> dict:
+    """등록부 값 검증: 금액은 정수, 날짜는 ISO 문자열 또는 date, 자동 갱신은 bool. 날짜는 ISO 문자열로 바꿔 돌려준다."""
+    out = {}
+    for k, v in fields.items():
+        if v is None:
+            out[k] = v
+        elif k in _INT_COLUMNS:
+            if isinstance(v, bool) or not isinstance(v, int):
+                raise ValueError(f"{k}는 정수여야 함: {v!r}")
+            out[k] = v
+        elif k in _DATE_COLUMNS:
+            try:
+                if isinstance(v, date):
+                    out[k] = v.isoformat()
+                elif isinstance(v, str) and len(v) == len(date.min.isoformat()):
+                    out[k] = date.fromisoformat(v).isoformat()
+                else:
+                    raise ValueError
+            except ValueError:
+                raise ValueError(f"{k}는 YYYY-MM-DD 날짜여야 함: {v!r}") from None
+        elif k in _BOOL_COLUMNS:
+            if not isinstance(v, bool):
+                raise ValueError(f"{k}는 참/거짓이어야 함: {v!r}")
+            out[k] = v
+        else:
+            out[k] = v
+    return out
 
 
 def _json(value) -> str:
@@ -110,6 +164,7 @@ class Store:
         self._db.execute("PRAGMA foreign_keys = ON")
         self._migrate()
         self._apply_policy_overrides()
+        self._expire_stale_reservations()
 
     # ---- 기반 ----
 
@@ -120,10 +175,13 @@ class Store:
             self._db.execute("BEGIN IMMEDIATE")
             try:
                 yield self._db
+                self._db.execute("COMMIT")
             except BaseException:
-                self._db.execute("ROLLBACK")
+                try:
+                    self._db.execute("ROLLBACK")
+                except sqlite3.Error:
+                    pass
                 raise
-            self._db.execute("COMMIT")
 
     def _all(self, sql: str, *args) -> list[sqlite3.Row]:
         with self._lock:
@@ -169,7 +227,7 @@ class Store:
         return row[0] if row else None
 
     def _mode(self, db) -> str:
-        return self._setting(db, "mode") or MODES[1]  # 지금은 시연 데이터로 쓰므로 기본은 시연
+        return self._setting(db, "mode") or MODE_DEMO  # 지금은 시연 데이터로 쓰므로 기본은 시연
 
     def get_mode(self) -> str:
         with self._lock:
@@ -183,7 +241,7 @@ class Store:
                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (mode,))
 
     def _clock(self, db) -> date:
-        if self._mode(db) == MODES[0]:
+        if self._mode(db) == MODE_OPERATION:
             return self._today()
         saved = self._setting(db, "demo_clock")
         return date.fromisoformat(saved) if saved else sim_start()
@@ -195,22 +253,23 @@ class Store:
 
     def set_clock(self, d: date) -> None:
         with self._tx() as db:
-            if self._mode(db) == MODES[0]:
+            if self._mode(db) == MODE_OPERATION:
                 raise PermissionError(CLOCK_LOCKED)
             if d < self._clock(db):
                 raise ValueError("시연 시계는 뒤로 돌릴 수 없음")
             db.execute("INSERT INTO settings (key, value) VALUES ('demo_clock', ?) "
                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (d.isoformat(),))
 
-    def reset(self) -> None:
+    def reset(self, actor: str = "시스템") -> None:
         """시연 데이터(사건·작업·회신·리뷰·사건 이벤트·시연 등록부 행)를 지우고 시계를 기준일로 되돌린다."""
         with self._tx() as db:
-            if self._mode(db) == MODES[0]:
+            if self._mode(db) == MODE_OPERATION:
                 raise PermissionError(CLOCK_LOCKED)
             db.execute("DELETE FROM cases")  # 딸린 작업·요청·회신·리뷰·승인·권한이동·사건 이벤트는 CASCADE
             db.execute("DELETE FROM contracts WHERE origin='시연'")
             db.execute("DELETE FROM plans WHERE origin='시연'")
             db.execute("DELETE FROM settings WHERE key='demo_clock'")
+            self._event(db, None, "초기화", actor, {})
 
     # ---- 사건 ----
 
@@ -328,7 +387,7 @@ class Store:
         extra = set(fields) - set(_CONTRACT_FIELDS)
         if extra:
             raise ValueError(f"계약에 없는 항목: {sorted(extra)}")
-        row = {"performance_fee_text": "", "auto_renew": False, "source_doc": "", **fields}
+        row = {"performance_fee_text": "", "auto_renew": False, "source_doc": "", **_clean(fields)}
         missing = [f for f in _CONTRACT_FIELDS if f not in row]
         if missing:
             raise ValueError(f"계약 항목 누락: {missing}")
@@ -348,10 +407,10 @@ class Store:
         return cur.lastrowid
 
     def update_contract(self, contract_id: int, fields: dict, actor: str) -> None:
-        self._update_row("contracts", "계약", _CONTRACT_FIELDS, contract_id, fields, actor, "계약수정")
+        self._update_row("contracts", "계약", _CONTRACT_EDITABLE, contract_id, fields, actor, "계약수정")
 
     def update_plan(self, plan_row_id: int, fields: dict, actor: str) -> None:
-        self._update_row("plans", "기안", _PLAN_FIELDS, plan_row_id, fields, actor, "기안수정")
+        self._update_row("plans", "기안", _PLAN_EDITABLE, plan_row_id, fields, actor, "기안수정")
 
     def _update_row(self, table: str, label: str, allowed: tuple[str, ...], row_id: int, fields: dict, actor: str,
                     event_kind: str) -> None:
@@ -359,6 +418,7 @@ class Store:
         bad = set(fields) - set(allowed)
         if bad or not fields:
             raise ValueError(f"{label}에서 고칠 수 없는 항목: {sorted(bad) or '(비어 있음)'}")
+        fields = _clean(fields)
         with self._tx() as db:
             old = db.execute(f"SELECT * FROM {table} WHERE id=?", (row_id,)).fetchone()
             if old is None:
@@ -384,15 +444,20 @@ class Store:
                   "notice_deadline": n.notice_deadline.isoformat(), "expiry_date": n.expiry.isoformat(),
                   "auto_renew": n.auto_renew, "source_doc": n.source_file}
         with self._tx() as db:
-            old = db.execute("SELECT id, origin FROM contracts WHERE source_doc=?", (n.source_file,)).fetchone()
+            old = db.execute("SELECT * FROM contracts WHERE source_doc=?", (n.source_file,)).fetchone()
             if old is None:
                 new_id = self._insert_contract(db, values, "가져오기")
                 self._event(db, None, "계약등록", "가져오기", {"contract_id": new_id, "source_doc": n.source_file})
                 return new_id
             if old["origin"] == "가져오기":
-                sets = ", ".join(f"{f}=?" for f in _CONTRACT_FIELDS)
-                db.execute(f"UPDATE contracts SET {sets}, updated_at=? WHERE id=?",
-                           (*[_db_value(f, values[f]) for f in _CONTRACT_FIELDS], _now(), old["id"]))
+                changes = {f: {"before": bool(old[f]) if f in _BOOL_COLUMNS else old[f], "after": values[f]}
+                           for f in _CONTRACT_FIELDS if (bool(old[f]) if f in _BOOL_COLUMNS else old[f]) != values[f]}
+                if changes:
+                    sets = ", ".join(f"{f}=?" for f in _CONTRACT_FIELDS)
+                    db.execute(f"UPDATE contracts SET {sets}, updated_at=? WHERE id=?",
+                               (*[_db_value(f, values[f]) for f in _CONTRACT_FIELDS], _now(), old["id"]))
+                    self._event(db, None, "계약가져오기", "가져오기",
+                                {"contract_id": old["id"], "source_doc": n.source_file, "changes": changes})
             return old["id"]
 
     def get_plan(self, plan_id: str) -> dict:
@@ -410,7 +475,7 @@ class Store:
         extra = set(fields) - set(_PLAN_FIELDS)
         if extra or "plan_id" not in fields:
             raise ValueError(f"기안 항목 오류: 없는 항목 {sorted(extra)} 또는 plan_id 누락")
-        row = {**{f: None for f in _PLAN_FIELDS}, "source_file": "", **fields}
+        row = {**{f: None for f in _PLAN_FIELDS}, "source_file": "", **_clean(fields)}
         with self._tx() as db:
             new_id = self._insert_plan(db, row, fields, origin)
             self._event(db, None, "기안등록", actor, {"plan_id": fields["plan_id"], "origin": origin})
@@ -425,38 +490,70 @@ class Store:
             (*[row[f] for f in _PLAN_FIELDS], _json(raw), origin, now, now))
         return cur.lastrowid
 
-    def import_plans_from_source(self) -> int:
+    def import_plans_from_source(self) -> PlanImportResult:
         """캠페인 기안 원본 파일을 등록부에 넣는다. 기안 ID 기준으로 갱신하며(중복 없음),
-        화면에서 고친 행은 덮어쓰지 않고 건너뛴다. 건너뛴 수를 돌려준다."""
+        화면에서 고친 행은 덮어쓰지 않고 건너뛴다(어느 열의 원본 값이 달라졌는지 함께 알림).
+        추가·갱신·변경 없음 수와 건너뛴 기안을 돌려주고, 한 번의 가져오기를 이벤트 하나로 남긴다."""
         rows = loader.plan_rows()
-        campaigns = {r["campaign_id"]: r for r in loader.read_table("02_masil/master/m_campaign_ms.csv")}
-        skipped = 0
+        campaigns = {r["campaign_id"]: r for r in loader.campaign_master_rows()}
+        result = PlanImportResult()
+        changes: dict[str, dict] = {}
         with self._tx() as db:
             for r in rows:
-                camp = campaigns.get(r["campaign_id"], {})
+                camp = campaigns.get(r["campaign_id"])
+                if camp is None:
+                    result.warnings.append(f"{r['plan_id']}: 캠페인 마스터에 {r['campaign_id']}가 없어 인플루언서·채널을 비워 둠")
+                    camp = {}
                 vals = {"plan_id": r["plan_id"], "campaign_id": r["campaign_id"],
                         "influencer_id": camp.get("influencer_id"), "channel": camp.get("sales_channel"),
                         "requested_budget_krw": r["requested_budget_krw"], "expected_gmv_krw": r["expected_gmv_krw"],
                         "settlement_date": r["settlement_date"].isoformat(),
                         "contract_deadline": r["contract_deadline"].isoformat(), "source_file": loader.PLAN_SOURCE}
-                old = db.execute("SELECT id, origin FROM plans WHERE plan_id=?", (r["plan_id"],)).fetchone()
+                old = db.execute("SELECT * FROM plans WHERE plan_id=?", (r["plan_id"],)).fetchone()
                 if old is None:
                     self._insert_plan(db, vals, r, "가져오기")
-                elif old["origin"] == "화면":
-                    skipped += 1
+                    result.added += 1
+                    continue
+                diff = {f: {"before": old[f], "after": vals[f]} for f in _PLAN_FIELDS if old[f] != vals[f]}
+                new_raw = json.loads(_json(r))
+                if old["origin"] == "화면":
+                    # 마지막으로 가져온 원본(raw)과 지금 원본을 비교해, 반영되지 못한 원본 변경 열을 알려 준다
+                    prev_raw = json.loads(old["raw"])
+                    result.skipped.append(SkippedPlan(r["plan_id"], "화면에서 고친 기안이라 덮어쓰지 않음",
+                                                      [c for c in new_raw if prev_raw.get(c) != new_raw[c]]))
+                elif not diff and json.loads(old["raw"]) == new_raw:
+                    result.unchanged += 1
                 else:
                     sets = ", ".join(f"{f}=?" for f in _PLAN_FIELDS)
                     db.execute(f"UPDATE plans SET {sets}, raw=?, updated_at=? WHERE id=?",
                                (*[vals[f] for f in _PLAN_FIELDS], _json(r), _now(), old["id"]))
-        return skipped
+                    result.updated += 1
+                    changes[r["plan_id"]] = diff
+            self._event(db, None, "기안가져오기", "가져오기",
+                        {"added": result.added, "updated": result.updated, "unchanged": result.unchanged,
+                         "skipped": [x.plan_id for x in result.skipped], "changes": changes})
+        return result
 
     # ---- 정책 변경 ----
 
     def _apply_policy_overrides(self) -> None:
+        """저장된 덮어쓰기를 적용한다. 나중에 무효가 된 값(예: 단가표에서 빠진 모델)은 건너뛰고 이벤트로 남겨
+        저장소가 열리지 못하는 일이 없게 한다."""
         latest: dict[str, tuple] = {}
         for r in self._all("SELECT * FROM policy_changes ORDER BY id"):
-            latest[r["key"]] = (json.loads(r["after"]), r["actor"], r["at"])
-        policy.set_overrides(latest)
+            latest[r["key"]] = (json.loads(r["after"]), r["actor"], r["at"], r["id"])
+        ignored = []
+        for key, (value, _, _, change_id) in list(latest.items()):
+            try:
+                policy.validate(key, value)
+            except ValueError as e:
+                ignored.append({"key": key, "change_id": change_id, "error": str(e)})
+                del latest[key]
+        policy.set_overrides({k: v[:3] for k, v in latest.items()})
+        if ignored:
+            logger.error("무효가 된 정책 덮어쓰기를 건너뜀: %s", ignored)
+            with self._tx() as db:
+                self._event(db, None, "정책덮어쓰기무시", "시스템", {"ignored": ignored})
 
     def change_policy(self, key: str, new_value, actor: str, reason: str) -> None:
         """값을 검증(app.policy)하고 이력에 남긴 뒤 덮어쓰기로 적용한다. 정책 파일은 고치지 않는다."""
@@ -485,7 +582,7 @@ class Store:
         return cur.lastrowid
 
     def spent(self, day: date | None = None) -> float:
-        """쓴 돈(USD) = 정산된 비용 + 예약분. day가 있으면 그날만(UTC 날짜)."""
+        """쓴 돈(USD) = 정산된 비용 + 예약분(미정산 포함, 예상 비용). day가 있으면 그날만(UTC 날짜)."""
         row = (self._one("SELECT COALESCE(SUM(usd), 0) FROM ai_calls") if day is None
                else self._one("SELECT COALESCE(SUM(usd), 0) FROM ai_calls WHERE day=?", day.isoformat()))
         return row[0]
@@ -505,9 +602,34 @@ class Store:
             self._insert_call(db, "정산", day or utc_today(), case_id, kind, model, in_tok, out_tok, usd, confidence, summary)
 
     def ai_calls(self, case_id: int | None = None) -> list[dict]:
-        rows = (self._all("SELECT * FROM ai_calls WHERE state='정산' ORDER BY id") if case_id is None
-                else self._all("SELECT * FROM ai_calls WHERE state='정산' AND case_id=? ORDER BY id", case_id))
+        """정산된 호출과 미정산(이전 프로세스가 남긴 예약, 예상 비용) 호출. 진행 중인 예약은 pending_reservations."""
+        base = "SELECT * FROM ai_calls WHERE state IN ('정산', '미정산')"
+        rows = (self._all(base + " ORDER BY id") if case_id is None
+                else self._all(base + " AND case_id=? ORDER BY id", case_id))
         return [dict(r) for r in rows]
+
+    def pending_reservations(self) -> list[dict]:
+        """아직 정산·반환되지 않은 예약(created = 예약 시각, usd = 예상 비용)."""
+        return [{"id": r["id"], "created": r["ts"], "day": r["day"], "usd": r["usd"]}
+                for r in self._all("SELECT * FROM ai_calls WHERE state='예약' ORDER BY id")]
+
+    def _expire_stale_reservations(self) -> None:
+        """열 때 정책 시간(ai.reservation_stale_seconds)보다 오래된 예약을 '미정산'으로 바꿔 보이게 한다.
+        비용은 예상 비용 그대로 집계에 남긴다(보수적)."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=policy.get("ai.reservation_stale_seconds"))
+                  ).isoformat(timespec="seconds")
+        with self._tx() as db:
+            stale = db.execute("SELECT id, usd FROM ai_calls WHERE state='예약' AND ts < ?", (cutoff,)).fetchall()
+            if not stale:
+                return
+            db.execute("UPDATE ai_calls SET state='미정산', summary='정산되지 않은 예약(예상 비용으로 집계)' "
+                       "WHERE state='예약' AND ts < ?", (cutoff,))
+            self._event(db, None, "미정산예약", "시스템", {"ids": [r["id"] for r in stale], "usd": sum(r["usd"] for r in stale)})
+
+    def note_settle_failure(self, reservation_id: int, error: BaseException) -> None:
+        """호출은 성공했지만 정산이 실패한 사실을 이벤트로 남긴다(예약은 예상 비용으로 남음)."""
+        with self._tx() as db:
+            self._event(db, None, "정산실패", "시스템", {"reservation_id": reservation_id, "error": str(error)})
 
     def reserve(self, estimate_usd: float, day: date, total_cap: float, daily_cap: float) -> int:
         """한도 확인과 예약을 한 묶음(BEGIN IMMEDIATE)으로. 넘으면 BudgetExceeded."""
@@ -519,12 +641,14 @@ class Store:
 
     def settle(self, reservation_id: int, model: str, in_tok: int, out_tok: int, usd: float) -> None:
         with self._tx() as db:
-            db.execute("UPDATE ai_calls SET model=?, in_tok=?, out_tok=?, usd=?, state='정산', ts=? "
-                       "WHERE id=? AND state='예약'", (model, in_tok, out_tok, usd, _now(), reservation_id))
+            cur = db.execute("UPDATE ai_calls SET model=?, in_tok=?, out_tok=?, usd=?, state='정산', summary='', ts=? "
+                             "WHERE id=? AND state IN ('예약', '미정산')", (model, in_tok, out_tok, usd, _now(), reservation_id))
+            if cur.rowcount == 0:
+                raise KeyError(f"없는 예약: {reservation_id}")
 
     def release(self, reservation_id: int) -> None:
         with self._tx() as db:
-            db.execute("DELETE FROM ai_calls WHERE id=? AND state='예약'", (reservation_id,))
+            db.execute("DELETE FROM ai_calls WHERE id=? AND state IN ('예약', '미정산')", (reservation_id,))
 
 
 def open_db(path: str | Path | None = None, today: Callable[[], date] = date.today) -> Store:
