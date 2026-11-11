@@ -85,6 +85,10 @@ EV_WARN, EV_REPORT, EV_REAPPROVE, EV_DRIFT = "조기경고", "그룹보고", "�
 EV_SPLIT, EV_STOCK, EV_ANNOUNCE, EV_BLOCK = "분할안변경", "재고부족", "공지", "1차차단"
 EV_UNBLOCK = "차단해제"  # 등록부 집행일을 고쳐 1차 차단이 풀림(사용자 결정 2026-11-11)
 EV_SELL = "판매율조절"  # 1차 판매 실적(판매율)으로 2차 수량을 조절·보류·품절 기록(추가 결정 8)
+EV_STALE = "방치올림"  # 담당이 처리하지 않은 사람 확인·판단을 상급자에게 올림(추가 결정 9)
+EV_DECIDE = "판매율판단"  # 판매율 보류 건에 대한 담당의 2차 계속·취소 판단(컨트롤러 판정 10)
+STALE_SCM_HUMAN, STALE_PHASE2_HOLD = "SCM 사람 확인", "2차 보류 판단"  # 방치 올림 대상 종류(두 번째는 작업 제목과 같음)
+CHOICE_CONTINUE, CHOICE_CANCEL = "2차 계속", "2차 취소"
 NO_SALES = "1차 판매 실적 미입력"
 SELL_ADJUST, SELL_HOLD, SELL_SOLDOUT = "조절", "보류", "품절"
 SCM_ASKED, SCM_FULL, SCM_PARTIAL, SCM_REFUSED = "요청", "전량 허용", "일부 허용", "거절"
@@ -420,6 +424,7 @@ class Engine:
             out += self._scm_timeout(self.store.get_case(case["id"]), d)
             case = self.store.get_case(case["id"])
             out += self._phase2_refresh(case["id"])
+            out += self._escalate_phase2_hold(self.store.get_case(case["id"]), d)
             if case["status"] not in OPEN[case["kind"]]:
                 continue
             # 필요한 승인이 모두 있는데 다른 부서 회신(SCM)만 기다리는 건은 승인된 건이다
@@ -435,6 +440,7 @@ class Engine:
                 w = self._warn(case, d)
                 if w:
                     out.append(w)
+            out += self._escalate_scm_human(self.store.get_case(case["id"]), d)
         return out
 
     # ---------------------------------------------------------------- 등록부 반영·재판정·확정 (한 경로)
@@ -657,8 +663,85 @@ class Engine:
         self.store.add_event(case["id"], EV_WARN, "시스템", {"target": CAMPAIGN, "pending": [], "text": text,
                                                          "deadline": f["deadline"], "scm_human": True})
         f["scm_human_warned"] = True
+        f["scm_human_warned_on"] = d.isoformat()  # 방치 올림의 기준 시점
         self.store.update_facts(case["id"], f, "시스템", "SCM 사람 확인 미처리 경고")
         return {"date": d.isoformat(), "case_id": case["id"], "action": "조기경고", "target": CAMPAIGN, "text": text}
+
+    # ---------------------------------------------------------------- 방치 올림 (추가 결정 9)
+
+    def _escalation_target(self, roles: list[str]) -> str:
+        """올릴 곳 = 승인권자 역할 중 보고 체계에서 가장 높은 역할. 마케팅팀뿐이면 바로 위(Masil 대표).
+        보고 체계 밖 역할(그룹 등)은 순서에 넣지 않고, 체계 안 역할이 하나도 없으면 마케팅팀으로 본다."""
+        chain = self.people.escalation
+        known = [r for r in roles if r in chain]
+        top = max(known, key=chain.index) if known else chain[0]
+        return self.people.above(top) if top == chain[0] else top
+
+    def _escalate_stale(self, case: dict, key: str, since: date, owner: str, roles: list[str], since_label: str,
+                        d: date, what: str) -> dict | None:
+        """일반형: 담당(owner)이 key 종류의 일을 since부터 policy escalation.after_days일 넘게 처리하지 않았으면
+        roles 중 최고 역할에게 한 번 올린다(할 일 알림 + 이벤트). 올려 받은 역할은 _can_handle로 처리 권한을 얻는다.
+        자동 거절·기본 처리는 하지 않는다. 호출하는 쪽이 아직 미처리인지 확인한다."""
+        f = case["facts"]
+        days = (d - since).days
+        if key in f.get("escalated", {}) or days < policy.get("escalation.after_days"):
+            return None
+        target = self._escalation_target(roles)
+        text = (f"{case['ref_id']} {what} — 방치 올림({since_label} 후 {days}일): {owner}가 처리하지 않아 "
+                f"{target}에게 올림")
+        self.store.add_event(case["id"], EV_STALE, "시스템", {"target": target, "key": key, "owner": owner,
+                                                           "since": since.isoformat(), "days": days, "text": text})
+        f["escalated"] = {**f.get("escalated", {}), key: {"target": target, "since": since.isoformat(),
+                                                          "at": d.isoformat(), "days": days}}
+        self.store.update_facts(case["id"], f, "시스템", f"방치 올림: {key}")
+        return {"date": d.isoformat(), "case_id": case["id"], "action": EV_STALE, "target": target, "text": text}
+
+    @staticmethod
+    def _can_handle(f: dict, key: str, role: str, owner: str) -> bool:
+        """담당이거나, 그 일을 올려 받은 역할이면 직접 처리할 수 있다."""
+        return role == owner or (f.get("escalated", {}).get(key) or {}).get("target") == role
+
+    def _escalate_scm_human(self, case: dict, d: date) -> list[dict]:
+        """첫 경고(scm_human_warned_on) 뒤 정책 일수가 지나도 SCM 회신 사람 확인이 그대로면 올린다."""
+        f = case["facts"]
+        if (case["kind"] != KIND_PLAN or case["status"] not in OPEN[KIND_PLAN] or not f.get("scm_human_warned_on")
+                or not self._human_open(case["id"])):
+            return []
+        got = self._escalate_stale(case, STALE_SCM_HUMAN, _d(f["scm_human_warned_on"]), OWNER[KIND_PLAN],
+                                   _required_roles(f), "경고", d, "SCM 회신 사람 확인 방치")
+        return [got] if got else []
+
+    def _human_open(self, case_id: int) -> bool:
+        return any(r["purpose"] == P_STOCK and r["status"] == R_HUMAN for r in self.store.list_requests(case_id))
+
+    def _hold_task(self, case_id: int) -> dict | None:
+        pending = [t for t in self.store.list_tasks(case_id) if t["title"] == STALE_PHASE2_HOLD and t["status"] == "대기"]
+        return pending[-1] if pending else None
+
+    def _escalate_phase2_hold(self, case: dict, d: date) -> list[dict]:
+        """판매율 하한 미만 2차 보류 판단 작업이 작업 생성일부터 정책 일수가 지나도 그대로면 올린다."""
+        f = case["facts"]
+        task = self._hold_task(case["id"])
+        if case["status"] != S_PHASE2_HOLD or f.get("phase2_decision") or task is None:
+            return []
+        roles = _required_roles(f, "2차") if f.get(STAGES["2차"][0]) else _required_roles(f)
+        got = self._escalate_stale(case, STALE_PHASE2_HOLD, _d(task["due"]), CAMPAIGN, roles, "작업 생성", d,
+                                   "2차 보류 판단 방치")
+        return [got] if got else []
+
+    @_locked
+    def resolve_human_check(self, request_id: int, actor: str, text: str, attachments: int = 0) -> dict:
+        """사람 확인에 머문 요청을 사람이 처리한다(회신을 다시 넣어 해석·반영). 담당이거나 방치로 올려 받은 역할만 가능."""
+        req = self.store.get_request(request_id)
+        case = self.store.get_case(req["case_id"])
+        if req["status"] != R_HUMAN:
+            raise ValueError("사람 확인 상태인 요청만 처리할 수 있음")
+        role = self.role_of(actor)
+        key = STALE_SCM_HUMAN if req["purpose"] == P_STOCK else req["purpose"]
+        if not self._can_handle(case["facts"], key, role, OWNER[case["kind"]]):
+            raise PermissionError(f"{actor}({role})는 이 사람 확인을 처리할 수 없음 — {OWNER[case['kind']]}"
+                                  "(또는 방치로 올려 받은 사람)만")
+        return self.reply(request_id, text, attachments)
 
     def _default_deny(self, case: dict, d: date) -> dict:
         """기한까지 승인 없음 → 기본 거부(설계 3장 2번·4.3). 기안은 확정 보류(철회)."""
@@ -1408,6 +1491,75 @@ class Engine:
         return {"case_id": case_id, "status": now["status"], "sales": now["facts"]["sales"], "actions": acts,
                 "gate": asdict(self._gate(now))}
 
+    def _resize_phase2(self, f: dict, case_id: int, amt_b: int, qty_a: int, amt_a: int, why: str, core: str) -> None:
+        """2차 수량·금액을 바꾸고 승인권자를 다시 판정한다(자동 조절과 담당 판단이 같은 경로를 쓴다)."""
+        p2 = f["phase2"]
+        before = _decision(f, "2차") if f.get(STAGES["2차"][0]) else None
+        p2["qty"], p2["amount_krw"] = qty_a, amt_a
+        if p2.get("date"):
+            # 줄어든 2차 금액만큼 요청액을 덜어 승인권자를 다시 판정한다(같은 승인권자 규칙 경로)
+            self._phase2_approvers(f, case_id, f["amount_krw"] - (amt_b - amt_a), before,
+                                   f"{why} 2차 금액 {amt_b:,}→{amt_a:,}원")
+            f[STAGES["2차"][1]].append({"rule_id": "sellthrough_adjust", "text": core,
+                                       "source": "1차 판매 실적", "badge": "계산"})
+
+    def _hold_guard(self, case_id: int, actor: str, reason) -> tuple[dict, dict, dict]:
+        """판매율 보류 판단의 공통 검사. 보류 상태가 아니거나 반품 보류면 ValueError, 이미 판단했으면 ValueError,
+        담당도 올려 받은 사람도 아니면 PermissionError, 이유가 비면 ValueError."""
+        case = self.store.get_case(case_id)
+        f = case["facts"]
+        rec = f.get("phase2_sellthrough") or {}
+        if case["kind"] != KIND_PLAN or case["status"] != S_PHASE2_HOLD or rec.get("outcome") != SELL_HOLD:
+            raise ValueError("1차 판매율이 하한 미만이라 2차 보류가 된 건만 판단할 수 있음(반품 보류는 해당 없음)")
+        if f.get("phase2_decision"):
+            raise ValueError("이미 판단한 건 — 판단은 한 번만")
+        role = self.role_of(actor)
+        if not self._can_handle(f, STALE_PHASE2_HOLD, role, CAMPAIGN):
+            raise PermissionError(f"{actor}({role})는 2차 보류를 판단할 수 없음 — {CAMPAIGN}(또는 방치로 올려 받은 사람)만")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("판단 이유 문장이 필요함")
+        return case, f, rec
+
+    def _finish_hold(self, case: dict, f: dict, rec: dict, actor: str, choice: str, reason: str, qty_a: int,
+                     amt_a: int, status: str) -> dict:
+        case_id, ref = case["id"], case["ref_id"]
+        qty_b, amt_b = rec["qty_before"], rec["amount_before"]
+        f["phase2_decision"] = {"choice": choice, "reason": reason.strip(), "actor": actor, "qty_before": qty_b,
+                                "qty_after": qty_a, "at": self._today().isoformat()}
+        self.store.update_facts(case_id, f, actor, f"판매율 보류 판단: {choice}")
+        self.store.set_status(case_id, status, actor, f"{ref} {choice}: {reason.strip()}")
+        task = self._hold_task(case_id)
+        if task:
+            self.store.set_task_status(task["id"], "완료", actor)
+        text = (f"{ref} 1차 판매율 {rec['rate']:.1%} 보류 건을 {choice}으로 판단: 2차 {qty_b:,}→{qty_a:,}개, "
+                f"금액 {amt_b:,}→{amt_a:,}원 — 이유: {reason.strip()}")
+        self.store.add_event(case_id, EV_DECIDE, actor, {
+            "choice": choice, "rate": rec["rate"], "reason": reason.strip(), "qty_before": qty_b, "qty_after": qty_a,
+            "amount_before": amt_b, "amount_after": amt_a, "text": text})
+        return {"case_id": case_id, "choice": choice, "status": status, "qty_before": qty_b, "qty_after": qty_a,
+                "amount_before": amt_b, "amount_after": amt_a, "text": text}
+
+    @_locked
+    def continue_phase2(self, case_id: int, actor: str, qty: int, reason: str) -> dict:
+        """판매율 보류 건을 2차 계속으로 판단한다. 수량은 1 이상 계획 2차 이하, 금액은 같은 비율로 줄이고
+        2차 승인권자를 다시 판정하며 2차 잠금(승인 대기) 경로로 보낸다."""
+        case, f, rec = self._hold_guard(case_id, actor, reason)
+        qty_b, amt_b = rec["qty_before"], rec["amount_before"]
+        if not isinstance(qty, int) or isinstance(qty, bool) or not 1 <= qty <= qty_b:
+            raise ValueError(f"2차 수량은 1 이상 계획 2차({qty_b:,}개) 이하의 정수여야 함: {qty!r}")
+        amt_a = amt_b * qty // qty_b
+        core = (f"1차 판매율 {rec['rate']:.1%} 보류 건을 담당이 2차 계속으로 판단: "
+                f"2차 {qty_b:,}→{qty:,}개, 금액 {amt_b:,}→{amt_a:,}원")
+        self._resize_phase2(f, case_id, amt_b, qty, amt_a, "2차 계속 판단으로", core)
+        return self._finish_hold(case, f, rec, actor, CHOICE_CONTINUE, reason, qty, amt_a, S_PHASE2_LOCK)
+
+    @_locked
+    def cancel_phase2(self, case_id: int, actor: str, reason: str) -> dict:
+        """판매율 보류 건을 2차 취소로 판단한다: 2차 없음, 상태는 1차 집행(2차 잠금 해제)."""
+        case, f, rec = self._hold_guard(case_id, actor, reason)
+        f["phase2"] = None
+        return self._finish_hold(case, f, rec, actor, CHOICE_CANCEL, reason, 0, 0, S_PHASE1)
+
     def _phase2_judge(self, case_id: int) -> list[dict]:
         """2차 게이트가 열리는 시점(반품 보류·리뷰 잠금·관찰 기간·계약 만료가 모두 풀림)에 판매율로 2차를 판정한다.
         판매 실적이 없으면 열지 않고 캠페인 담당 작업만 만든다. 한 건당 한 번만 판정한다."""
@@ -1460,14 +1612,7 @@ class Engine:
                 self.store.update_facts(case_id, f, "시스템", "판매율 조절: 2차 없음")
                 self.store.set_status(case_id, S_PHASE1, "시스템", f"{ref} {core}")
             else:
-                before = _decision(f, "2차") if f.get(STAGES["2차"][0]) else None
-                p2["qty"], p2["amount_krw"] = qty_a, amt_a
-                if p2.get("date"):
-                    # 줄어든 2차 금액만큼 요청액을 덜어 승인권자를 다시 판정한다(같은 승인권자 규칙 경로)
-                    self._phase2_approvers(f, case_id, f["amount_krw"] - (amt_b - amt_a), before,
-                                           f"1차 판매율 {rate:.1%}로 2차 금액 {amt_b:,}→{amt_a:,}원")
-                    f[STAGES["2차"][1]].append({"rule_id": "sellthrough_adjust", "text": core,
-                                               "source": "1차 판매 실적", "badge": "계산"})
+                self._resize_phase2(f, case_id, amt_b, qty_a, amt_a, f"1차 판매율 {rate:.1%}로", core)
                 self.store.update_facts(case_id, f, "시스템", "판매율 조절: 2차 수량·금액")
         text = f"{ref} {core}"
         self.store.add_event(case_id, EV_SELL, "시스템", {**rec, "text": text})
@@ -1479,6 +1624,12 @@ class Engine:
     def _item(c: dict) -> dict:
         return {"case_id": c["id"], "kind": c["kind"], "ref_id": c["ref_id"], "status": c["status"],
                 "deadline": c["facts"].get("deadline")}
+
+    def _stale_open(self, c: dict, key: str) -> bool:
+        """올림 알림은 그 일이 아직 미처리일 때만 보인다."""
+        if key == STALE_SCM_HUMAN:
+            return c["status"] in OPEN[c["kind"]] and self._human_open(c["id"])
+        return c["status"] == S_PHASE2_HOLD and not c["facts"].get("phase2_decision") and self._hold_task(c["id"]) is not None
 
     def todo(self, person: str) -> dict:
         """사람별 할 일(설계 6.2): 승인 대기, 기한 임박, 회신 대기, 작업, 권한 이동, 알림."""
@@ -1505,10 +1656,10 @@ class Engine:
             if (c and e["detail"]["target"] == role and c["status"] in OPEN[c["kind"]]
                     and self._warn_target(c["facts"]) == role):
                 out["기한 임박"].append({**self._item(c), "text": e["detail"]["text"]})
-        for kind in (EV_REPORT, EV_REAPPROVE, EV_BLOCK, EV_UNBLOCK):
+        for kind in (EV_REPORT, EV_REAPPROVE, EV_BLOCK, EV_UNBLOCK, EV_STALE):
             for e in self.store.events(kind=kind):
                 c = cases.get(e["case_id"])
-                if c and e["detail"]["target"] == role:
+                if c and e["detail"]["target"] == role and (kind != EV_STALE or self._stale_open(c, e["detail"]["key"])):
                     out["알림"].append({**self._item(c), "kind": kind, "text": e["detail"]["text"]})
         for r in self.store.all_requests(dept=role):
             if r["status"] != R_DONE and r["case_id"] in cases:

@@ -14,6 +14,7 @@ _SCHEMA: dict[str, type] = {
     "approval.total_limit_krw": int,
     "approval.contract_limit_krw": int,
     "deadline.early_warning_days": int,
+    "escalation.after_days": int,
     "split.return_observe_days": int,
     "split.stop_z": float,
     "split.sellthrough_hold_ratio": float,
