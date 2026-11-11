@@ -133,7 +133,10 @@ def diff_approver(old: ApproverDecision, new: ApproverDecision, at: date) -> App
     gone = [h for h in old.hits if h.rule_id not in new_ids]
     came = [h for h in new.hits if h.rule_id not in old_ids]
     changed = tuple(gone + came)
-    parts = [h.text for h in changed] or [h.text for h in new.hits]
+    # 새 근거와 해제된 근거를 나눠 적는다(해제된 근거의 옛 값이 현재 근거처럼 읽히지 않게)
+    now = [h.text for h in came] or [h.text for h in new.hits]
     reason = (f"집행일 {_md(at)} 기준으로 승인권자가 {'·'.join(old.approvers)}에서 "
-              f"{'·'.join(new.approvers)}로 바뀜: " + "; ".join(parts))
+              f"{'·'.join(new.approvers)}로 바뀜. 새 근거: " + "; ".join(now))
+    if gone:
+        reason += ". 더는 적용되지 않는 근거: " + "; ".join(h.text for h in gone)
     return ApproverChange(old.approvers, new.approvers, reason, changed, at)

@@ -2,6 +2,7 @@
 import json
 import re
 import shutil
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -121,30 +122,50 @@ def test_등록부에_이미_있는_계약은_그대로_쓰고_없으면_통보�
     assert scenarios.register_contract(store, "INF-001") == cid
 
 
+def _num(n: int) -> set[str]:
+    return {str(n), f"{n:,}"}
+
+
+def _day(d) -> set[str]:
+    return {d.isoformat(), f"{d.month}/{d.day}", f"{d.month}월 {d.day}일"}
+
+
 def _scene_values() -> set[str]:
-    """시연 파일에 나온 ID·문장과, 그 ID가 가리키는 원본 기안의 금액·날짜(장면 값)."""
+    """시연 파일에 나온 ID·문장·문장 속 숫자, 그 ID가 가리키는 원본 기안·통보문의 금액·날짜(여러 표기),
+    역할 이름과 다른 사람 이름(장면 값)."""
     values: set[str] = set()
     plan_rows = {r["plan_id"]: r for r in loader.plan_rows()}
+    notices = {n.influencer_code: n for n in loader.contract_notices().values()}
     for f in config.demo_dir().glob("scenario_*.json"):
         body = json.loads(f.read_text(encoding="utf-8"))
         for pid in body.get("plans", []):
             values.add(pid)
             r = plan_rows[pid]
-            values |= {r["campaign_id"], str(r["requested_budget_krw"]), f"{r['requested_budget_krw']:,}",
-                       str(r["expected_gmv_krw"]), r["settlement_date"].isoformat(), r["contract_deadline"].isoformat()}
-        values |= set(body.get("contracts", []))
+            values |= {r["campaign_id"]} | _num(r["requested_budget_krw"]) | _num(r["expected_gmv_krw"])
+            values |= _day(r["settlement_date"]) | _day(r["contract_deadline"])
+        for code in body.get("contracts", []):
+            values.add(code)
+            n = notices[code]
+            values |= _num(n.annual_fixed_krw) | _day(n.expiry) | _day(n.notice_deadline)
         for step in body.get("script", []) + body.get("requests", []):
             if step.get("text"):
                 values.add(step["text"])
+                for m in re.findall(r"\d[\d,]*\d", step["text"]):
+                    if len(m.replace(",", "")) >= 3:
+                        values |= _num(int(m.replace(",", "")))
             for v in step.values():
-                if isinstance(v, (int, float)) and not isinstance(v, bool) and abs(v) >= 100:
-                    values.add(str(v))
+                if isinstance(v, int) and not isinstance(v, bool) and abs(v) >= 100:
+                    values |= _num(v)
+            if step.get("date"):
+                values |= _day(date.fromisoformat(step["date"]))
+    people = json.loads((config.demo_dir() / "people.json").read_text(encoding="utf-8"))["people"]
+    values |= {p["name"] for p in people if p["name"] != p["role"]}
     return values
 
 
 def test_엔진코드에_장면값이_없다():
     values = _scene_values()
-    assert "PLAN-019" in values and "4807921" in values  # 대조 목록이 실제로 채워졌는지
+    assert {"PLAN-019", "4807921", "4,807,921", "9/14", "그룹 CEO"} <= values  # 대조 목록이 실제로 채워졌는지
     sources = {p.name: p.read_text(encoding="utf-8") for p in ENGINE_DIR.glob("*.py")}
     assert {"flow.py", "scenarios.py"} <= set(sources)
     found = [(name, v) for name, src in sources.items() for v in values if v in src]

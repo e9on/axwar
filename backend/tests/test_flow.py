@@ -110,7 +110,7 @@ def test_같은_승인을_두번_눌러도_작업은_한번(store):
     first = eng.decide(cid, "Masil 대표", "승인")
     second = eng.decide(cid, "Masil 대표", "승인")
     assert first["changed"] is True and second["changed"] is False
-    assert second["status"] == "1차 집행"
+    assert second["status"] == "1차 집행" and second["message"] == "결정 단계가 지난 건이라 상태 그대로"
     assert len(store.list_tasks(cid)) == 2 and len(store.list_approvals(cid)) == 1
     assert len(store.events(kind="그룹보고")) == 1
 
@@ -379,3 +379,145 @@ def test_지표_반대_판정은_기안별_빨강만_쓴다(store):
     assert f2["indicator_good"] is False and "indicator_opposite" in [h["rule_id"] for h in f2["approver_hits"]]
     assert [h["rule_id"] for h in f2["indicator_hits"]] == ["coupon_stacking", "slow_payment_channel",
                                                             "spend_concentration"]
+
+
+# ---- 수정 회차 1: 등록부가 원천(I1), 재판정 뒤 확정(I2), 동시성(M1), 역할 이름(M4), 경고 대상(M5) ----
+
+def _plan001_partly_approved(store):
+    scenarios.register_plan(store, "PLAN-001")
+    eng, _ = make(store, ACCEPT)
+    cid = eng.open_plan("PLAN-001")
+    eng.reply(store.list_requests(cid)[0]["id"], "가능합니다")
+    eng.decide(cid, "그룹 CEO", "승인")
+    return eng, cid
+
+
+def test_등록부에서_집행일을_바꾸면_사실_이유문장_기한_승인권자가_새값으로(store):
+    """재현: PLAN-001 집행일 7/27→9/30, 기한 7/17→9/25. 하회 구간 밖이 되어 Masil 대표 + 그룹 보고 + 그룹 확인."""
+    eng, cid = _plan001_partly_approved(store)
+    eng.update_plan("PLAN-001", {"settlement_date": "2026-09-30", "contract_deadline": "2026-09-25"}, "캠페인 담당자")
+    c = store.get_case(cid)
+    f = c["facts"]
+    assert f["settlement_date"] == "2026-09-30" and f["deadline"] == "2026-09-25"
+    assert f["approvers"] == ["Masil 대표", "그룹 보고", "그룹 확인"]
+    reason = store.get_approver_changes(cid)[-1].reason
+    assert reason.startswith("집행일 9/30 기준으로") and "7/27 기준" not in reason
+    new_part, old_part = reason.split("더는 적용되지 않는 근거:")
+    assert "7/27" not in new_part and "7/27" in old_part  # 옛 날짜는 해제된 근거로만
+    # 이미 받은 승인은 무효, 재승인 대기. 이전 승인자(CEO)에게 무엇이 바뀌었는지 알림
+    assert c["status"] == "재승인 대기" and f["approved_roles"] == []
+    note = store.events(cid, kind="재승인알림")
+    assert [e["detail"]["target"] for e in note] == ["CEO"]
+    assert "집행일 7/27→9/30" in note[0]["detail"]["text"]
+    assert [x["case_id"] for x in eng.todo("그룹 CEO")["알림"]] == [cid]
+    # 옛 기한(7/17)에는 기본 거부가 일어나지 않는다
+    eng.advance(date(2026, 7, 17))
+    assert store.get_case(cid)["status"] == "재승인 대기"
+    assert [x["case_id"] for x in eng.todo("Masil 대표")["승인 대기"]] == [cid]
+    with pytest.raises(PermissionError):
+        eng.decide(cid, "그룹 CEO", "승인")  # 더는 승인권자가 아님
+    assert eng.decide(cid, "Masil 대표", "승인")["pending"] == ["그룹"]
+    assert eng.decide(cid, "그룹 재무", "승인")["status"] == "1차 집행"
+    assert {t["due"] for t in store.list_tasks(cid)} == {"2026-09-30"}
+
+
+def test_새_기한에_기본거부된다(store):
+    eng, cid = _plan001_partly_approved(store)
+    eng.update_plan("PLAN-001", {"settlement_date": "2026-09-30", "contract_deadline": "2026-09-25"}, "캠페인 담당자")
+    eng.advance(date(2026, 9, 24))
+    assert store.get_case(cid)["status"] == "재승인 대기"
+    eng.advance(date(2026, 9, 25))
+    assert store.get_case(cid)["status"] == "확정 보류"
+
+
+def test_금액만_바뀌어도_받은_승인은_무효(store):
+    eng, cid = _plan001_partly_approved(store)
+    amount = store.get_case(cid)["facts"]["amount_krw"]
+    eng.update_plan("PLAN-001", {"requested_budget_krw": amount + 1}, "캠페인 담당자")
+    c = store.get_case(cid)
+    assert c["facts"]["amount_krw"] == amount + 1 and c["status"] == "재승인 대기"
+    assert c["facts"]["approvers"] == ["CEO", "이사회", "이사회 의결"]  # 구성은 그대로
+    assert "요청액" in store.events(cid, kind="재승인알림")[0]["detail"]["text"]
+
+
+def test_승인_전_등록부_변경은_사실만_바꾸고_상태는_그대로(store):
+    eng, _, cid = seeded(store, ACCEPT)
+    eng.update_plan("PLAN-019", {"settlement_date": "2026-09-20"}, "캠페인 담당자")
+    c = store.get_case(cid)
+    assert c["facts"]["settlement_date"] == "2026-09-20" and c["status"] == "회신 대기"
+    assert store.events(cid, kind="재승인알림") == []
+
+
+def test_끝난_건은_등록부가_바뀌어도_그대로_경고만_한번(store):
+    eng, _, cid = seeded(store, ACCEPT)
+    eng.run_script("scenario_1")
+    eng.update_plan("PLAN-019", {"settlement_date": "2026-09-20"}, "캠페인 담당자")
+    eng.sync()
+    eng.advance(store.get_clock() + timedelta(days=1))
+    c = store.get_case(cid)
+    assert c["status"] == "1차 집행" and c["facts"]["settlement_date"] == "2026-09-14"
+    warn = store.events(cid, kind="등록부변경경고")
+    assert len(warn) == 1 and "settlement_date" in warn[0]["detail"]["changes"]
+
+
+def test_가져오기로_바뀐_등록부도_다음_점검에서_반영(store):
+    eng, _, cid = seeded(store, ACCEPT)
+    store.update_plan(store.get_plan("PLAN-019")["id"], {"settlement_date": "2026-09-20"}, "다른 경로")
+    eng.check_deadlines()
+    assert store.get_case(cid)["facts"]["settlement_date"] == "2026-09-20"
+
+
+def test_필요한_역할이_모두_승인했으면_재판정에서_바로_확정(store):
+    """남은 승인 역할이 없는 승인 대기 사건은 멈추거나 기한에 기본 거부되지 않고 확정된다(I2)."""
+    eng, _, cid = seeded(store, ACCEPT)
+    eng.play(steps()[0])
+    f = store.get_case(cid)["facts"]
+    f["approved_roles"] = ["Masil 대표"]  # 승인은 받았는데 확정되지 않은 상태(재판정으로 생길 수 있음)
+    store.update_facts(cid, f, "시험", "")
+    acts = eng.advance(store.get_clock() + timedelta(days=1))
+    assert store.get_case(cid)["status"] == "1차 집행"
+    assert "확정" in [a["action"] for a in acts]
+    assert len(store.list_tasks(cid)) == 2
+
+
+def test_동시에_같은_승인을_눌러도_작업은_한번(store):
+    import threading
+    eng, _, cid = seeded(store, ACCEPT)
+    eng.play(steps()[0])
+    barrier = threading.Barrier(5)
+    errors = []
+
+    def press():
+        barrier.wait()
+        try:
+            eng.decide(cid, "Masil 대표", "승인")
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+
+    threads = [threading.Thread(target=press) for _ in range(5)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == [] and len(store.list_tasks(cid)) == 2 and len(store.list_approvals(cid)) == 1
+
+
+def test_운영모드에서는_역할_이름으로_사람을_대신할_수_없다(store):
+    eng, _ = make(store)
+    assert eng.role_of("CEO") == "CEO" and eng.role_of("그룹 CEO") == "CEO"
+    store.set_mode(MODE_OPERATION)
+    assert eng.role_of("그룹 CEO") == "CEO"
+    with pytest.raises(PermissionError):
+        eng.role_of("CEO")
+
+
+def test_경고_뒤_승인권자가_바뀌면_새_대상에게_다시_경고(store):
+    eng, _, cid = seeded(store, ACCEPT)
+    eng.play(steps()[0])
+    deadline = date.fromisoformat(store.get_case(cid)["facts"]["deadline"])
+    eng.advance(deadline - timedelta(days=policy.get("deadline.early_warning_days")))
+    store.change_policy("approval.total_limit_krw", 1000000000, "관리자", "시험")
+    acts = eng.advance(store.get_clock() + timedelta(days=1))
+    assert [a.get("target") for a in acts if a["action"] == "조기경고"] == ["Masil 대표"]
+    assert [x["case_id"] for x in eng.todo("Masil 대표")["기한 임박"]] == [cid]
+    assert eng.todo("그룹 CEO")["기한 임박"] == []  # 지난 대상의 경고는 내려감

@@ -9,6 +9,8 @@
 """
 from __future__ import annotations
 
+import functools
+import threading
 from dataclasses import asdict
 from datetime import date, timedelta
 from pathlib import Path
@@ -35,7 +37,9 @@ S_APPROVED, S_SPLIT_APPROVED, S_REJECTED = "승인", "분할 승인", "거절"
 S_DEFAULT_DENY, S_HOLD = "기본 거부", "확정 보류"
 S_PHASE1, S_PHASE2_LOCK, S_PHASE2_HOLD, S_DONE = "1차 집행", "2차 잠금", "2차 보류", "완료"
 S_REVIEW, S_RENEW_OK, S_CHANGE_OK, S_AGREED = "검토", "갱신 승인", "조건변경 승인", "합의"
-OPEN = {KIND_PLAN: (S_WAIT_REPLY, S_WAIT_APPROVAL), KIND_CONTRACT: (S_REVIEW, S_WAIT_APPROVAL)}
+S_REAPPROVAL = "재승인 대기"  # 받은 승인이 무효가 되어 새로 받아야 함(설계 4.1·4.2 변경 통보)
+APPROVAL_STATES = (S_WAIT_APPROVAL, S_REAPPROVAL)
+OPEN = {KIND_PLAN: (S_WAIT_REPLY, *APPROVAL_STATES), KIND_CONTRACT: (S_REVIEW, *APPROVAL_STATES)}
 TERMINAL = {KIND_PLAN: (S_REJECTED, S_HOLD, S_DONE), KIND_CONTRACT: (S_REJECTED, S_AGREED)}
 RENEWAL_CONFIRMED = (S_RENEW_OK, S_CHANGE_OK, S_AGREED)
 
@@ -56,7 +60,22 @@ CHANGE_OF_MIND, COLOR_RETURN = "단순변심", "색상불만"  # 원본 반품 �
 COLOR_REVIEW = "색상불일치"  # 리뷰 해석 사유 값
 NO_VOLUME = "추정 불가 — 담당자 입력 필요"
 ALLOC_HOLD, ALLOC_FULL, ALLOC_PARTIAL = "보류", "전량", "조건부"
-EV_WARN, EV_REPORT = "조기경고", "그룹보고"
+EV_WARN, EV_REPORT, EV_REAPPROVE, EV_DRIFT = "조기경고", "그룹보고", "재승인알림", "등록부변경경고"
+# 사건 사실 ← 등록부 열(등록부가 원천). 바뀌면 사실을 새로 읽고 다시 판정한다.
+SYNC_FIELDS = {
+    KIND_PLAN: {"amount_krw": "requested_budget_krw", "settlement_date": "settlement_date",
+                "deadline": "contract_deadline", "expected_gmv_krw": "expected_gmv_krw",
+                "campaign_id": "campaign_id", "influencer_id": "influencer_id", "channel": "channel"},
+    KIND_CONTRACT: {"annual_fixed_krw": "annual_fixed_krw", "deadline": "notice_deadline",
+                    "expiry": "expiry_date", "auto_renew": "auto_renew"},
+}
+# 이미 받은 승인을 무효로 만드는 등록부 사실(승인한 내용 자체가 바뀜). 승인권자 구성이 바뀌어도 무효.
+# 분할 수량 변경(11b)은 등록부가 아니라 엔진이 바꾸므로 그 자리에서 _invalidate(material=["split"])를 부른다.
+MATERIAL = {KIND_PLAN: ("amount_krw", "settlement_date"), KIND_CONTRACT: ("annual_fixed_krw",)}
+LABELS = {"amount_krw": "요청액", "settlement_date": "집행일", "deadline": "기한", "expected_gmv_krw": "예상 GMV",
+          "plan_total_krw": "기안 총액", "annual_fixed_krw": "연 고정 피", "expiry": "계약 만료", "split": "분할안"}
+# 승인 단계: 단계마다 (승인권자, 근거, 받은 승인, 판정 기준 날짜) 사실 키. 11b는 "2차"를 더한다.
+STAGES = {"1차": ("approvers", "approver_hits", "approved_roles", "settlement_date")}
 RAW_KEEP = 500  # AI 원문은 이 글자 수까지만 판정 기록에 남긴다
 OBSERVE_NOTE = "2차는 반품 관찰 뒤 열림"
 
@@ -73,25 +92,46 @@ def _hits(hits) -> list[dict]:
     return [{"rule_id": h.rule_id, "text": h.text, "source": h.source, "badge": h.badge} for h in hits]
 
 
-def _decision(f: dict) -> ApproverDecision:
-    return ApproverDecision(tuple(f["approvers"]), tuple(RuleHit(**h) for h in f["approver_hits"]))
+def _decision(f: dict, stage: str = "1차") -> ApproverDecision:
+    a, h, _, _ = STAGES[stage]
+    return ApproverDecision(tuple(f[a]), tuple(RuleHit(**x) for x in f[h]))
 
 
 def _role(label: str) -> str:
     return APPROVER_ROLE.get(label, label)
 
 
-def _required_roles(f: dict) -> list[str]:
+def _required_roles(f: dict, stage: str = "1차") -> list[str]:
     out: list[str] = []
-    for label in f["approvers"]:
+    for label in f[STAGES[stage][0]]:
         if label not in REPORT_ONLY and _role(label) not in out:
             out.append(_role(label))
     return out
 
 
-def _pending_roles(f: dict) -> list[str]:
-    done = set(f.get("approved_roles", []))
-    return [r for r in _required_roles(f) if r not in done]
+def _pending_roles(f: dict, stage: str = "1차") -> list[str]:
+    done = set(f.get(STAGES[stage][2], []))
+    return [r for r in _required_roles(f, stage) if r not in done]
+
+
+def _show(key: str, v) -> str:
+    if isinstance(v, str) and len(v) == len(date.min.isoformat()):
+        try:
+            return _md(_d(v))
+        except ValueError:
+            return v
+    if isinstance(v, int) and not isinstance(v, bool):
+        return f"{v:,}원"
+    return str(v)
+
+
+def _locked(method):
+    """엔진의 변경 메서드는 한 번에 하나씩(읽고-판단하고-쓰는 사이에 다른 호출이 끼지 않게)."""
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return wrapper
 
 
 class Engine:
@@ -106,6 +146,7 @@ class Engine:
             people = scenarios.load_people(self.demo_dir / "people.json" if self.demo_dir is not None else None)
         self.people = people
         self._handlers = {P_LOGISTICS: self._on_logistics, P_CONTENT: self._on_content_fix}
+        self._lock = threading.RLock()
 
     # ---------------------------------------------------------------- 기반
 
@@ -141,7 +182,8 @@ class Engine:
         return rows[-1] if rows else None
 
     def role_of(self, person: str) -> str:
-        return self.people.role_of(person)
+        """보는 사람의 역할. 역할 이름을 사람 대신 받는 것은 시연 모드에서만."""
+        return self.people.role_of(person, allow_role_names=self.store.get_mode() != MODE_OPERATION)
 
     # ---------------------------------------------------------------- 기안·계약 판정
 
@@ -195,6 +237,7 @@ class Engine:
             text += " (표본 쏠림으로 물량 추정 신뢰도 낮음)"
         return text
 
+    @_locked
     def open_plan(self, plan_id: str, actor: str = "시스템") -> int:
         """등록부의 기안으로 사건을 연다(이미 있으면 그 사건). 물류에 처리 능력 요청을 보내고 회신 대기."""
         found = self._find_case(KIND_PLAN, plan_id)
@@ -210,7 +253,7 @@ class Engine:
             "deadline": plan["contract_deadline"], "direction": "확대",
             "indicator_good": ind.good, "indicator_hits": _hits(ind.hits), "indicator_excluded": list(ind.excluded),
             "approvers": list(dec.approvers), "approver_hits": _hits(dec.hits), "approved_roles": [],
-            "volume": vol, "allocation": ALLOC_HOLD, "warned": False, "phase1": None, "phase2": None,
+            "volume": vol, "allocation": ALLOC_HOLD, "warned_targets": [], "phase1": None, "phase2": None,
         }
         cid = self.store.create_case(KIND_PLAN, plan_id, facts, S_DRAFT)
         if vol["units"] is None:
@@ -220,6 +263,7 @@ class Engine:
         self.store.set_status(cid, S_WAIT_REPLY, actor, "물류 처리 능력 회신 요청")
         return cid
 
+    @_locked
     def open_contract(self, influencer_code: str, actor: str = "시스템") -> int:
         """등록부의 전속계약으로 갱신 검토 사건을 연다(이미 있으면 그 사건). 승인 대기."""
         found = self._find_case(KIND_CONTRACT, influencer_code)
@@ -234,7 +278,7 @@ class Engine:
             "annual_fixed_krw": c["annual_fixed_krw"], "deadline": c["notice_deadline"], "expiry": c["expiry_date"],
             "auto_renew": c["auto_renew"], "direction": "갱신",
             "indicator_good": ind.good, "indicator_hits": _hits(ind.hits), "indicator_excluded": list(ind.excluded),
-            "approvers": list(dec.approvers), "approver_hits": _hits(dec.hits), "approved_roles": [], "warned": False,
+            "approvers": list(dec.approvers), "approver_hits": _hits(dec.hits), "approved_roles": [], "warned_targets": [],
         }
         cid = self.store.create_case(KIND_CONTRACT, influencer_code, facts, S_REVIEW)
         self.store.set_status(cid, S_WAIT_APPROVAL, actor, "승인권자에게 갱신 여부 승인 요청")
@@ -242,6 +286,7 @@ class Engine:
 
     # ---------------------------------------------------------------- 시연
 
+    @_locked
     def seed(self, scenario: str) -> list[int]:
         """시연 파일을 읽어 검증한 뒤(실패하면 아무것도 지우지 않음) 시연 데이터를 초기화하고 등록·사건을 연다."""
         if self.store.get_mode() == MODE_OPERATION:
@@ -304,6 +349,7 @@ class Engine:
 
     # ---------------------------------------------------------------- 기준일·기한
 
+    @_locked
     def advance(self, to: date) -> list[dict]:
         """시연 시계를 하루씩 옮기며 날마다 기한(조기 경고·기본 거부)과 승인권자를 다시 본다. 운영 모드면 PermissionError."""
         if self.store.get_mode() == MODE_OPERATION:
@@ -322,6 +368,7 @@ class Engine:
             actions += self._daily(d, cache)
         return actions
 
+    @_locked
     def check_deadlines(self) -> list[dict]:
         """오늘(운영은 실제 오늘) 기준으로 기한·승인권자를 점검한다. 여러 번 불러도 같은 조치를 두 번 하지 않는다."""
         return self._daily(self._today(), {"windows": self._windows()})
@@ -329,54 +376,158 @@ class Engine:
     def _daily(self, d: date, cache: dict) -> list[dict]:
         out: list[dict] = []
         for case in self.store.list_cases():
+            out += self._refresh(case["id"], cache)
+            case = self.store.get_case(case["id"])
             if case["status"] not in OPEN[case["kind"]]:
                 continue
-            out += self._recheck_approver(case, cache)
-            case = self.store.get_case(case["id"])
             acts = deadline_actions(_d(case["facts"]["deadline"]), d, approved=False)
             if "기본거부" in acts:
                 out.append(self._default_deny(case, d))
-            elif "조기경고" in acts and not case["facts"].get("warned"):
+            elif "조기경고" in acts:
                 w = self._warn(case, d)
                 if w:
                     out.append(w)
         return out
 
-    def _recheck_approver(self, case: dict, cache: dict) -> list[dict]:
-        """등록부·정책·하회 구간으로 승인권자를 다시 정하고, 바뀌면 권한 이동을 남긴다(설계 4.2)."""
-        key = ("decision", case["id"])
-        if key not in cache:
-            if case["kind"] == KIND_PLAN:
-                cache[key] = self._plan_decision(self.store.get_plan(case["ref_id"]), cache["windows"])[0]
-            else:
-                c = self.store.get_contract(case["facts"]["contract_row_id"])
-                cache[key] = self._contract_decision(c, cache["windows"])[0]
-        new = cache[key]
-        f = case["facts"]
-        at = _d(f["settlement_date"] if case["kind"] == KIND_PLAN else f["deadline"])
-        change = diff_approver(_decision(f), new, at)
-        if change is None:
-            return []
-        self.store.add_approver_change(case["id"], change)
-        f["approvers"], f["approver_hits"] = list(new.approvers), _hits(new.hits)
-        f["approved_roles"] = [r for r in f.get("approved_roles", []) if r in _required_roles(f)]
-        self.store.update_facts(case["id"], f, "시스템", "승인권자 변경")
-        return [{"date": self._today().isoformat(), "case_id": case["id"], "action": "권한이동",
-                 "before": list(change.before), "after": list(change.after), "reason": change.reason}]
+    # ---------------------------------------------------------------- 등록부 반영·재판정·확정 (한 경로)
 
-    def _warn(self, case: dict, d: date) -> dict | None:
+    @_locked
+    def update_plan(self, plan_id: str, fields: dict, actor: str) -> list[dict]:
+        """등록부 기안을 고치고(화면 수정) 그 기안의 사건을 바로 다시 판정한다."""
+        self.store.update_plan(self.store.get_plan(plan_id)["id"], fields, actor)
+        return self._refresh_where(lambda c: c["kind"] == KIND_PLAN and c["ref_id"] == plan_id, actor)
+
+    @_locked
+    def update_contract(self, contract_row_id: int, fields: dict, actor: str) -> list[dict]:
+        """등록부 계약을 고치고 그 계약의 사건을 바로 다시 판정한다."""
+        self.store.update_contract(contract_row_id, fields, actor)
+        return self._refresh_where(
+            lambda c: c["kind"] == KIND_CONTRACT and c["facts"].get("contract_row_id") == contract_row_id, actor)
+
+    @_locked
+    def sync(self, actor: str = "시스템") -> list[dict]:
+        """모든 사건을 등록부에 맞춰 다시 판정한다(가져오기 뒤 등). 같은 변경은 두 번 처리하지 않는다."""
+        return self._refresh_where(lambda c: True, actor)
+
+    def _refresh_where(self, pick, actor: str) -> list[dict]:
+        cache: dict = {"windows": self._windows()}
+        out: list[dict] = []
+        for c in self.store.list_cases():
+            if pick(c):
+                out += self._refresh(c["id"], cache, actor)
+        return out
+
+    def _registry_now(self, case: dict, cache: dict) -> tuple[dict, ApproverDecision] | None:
+        """등록부의 지금 값(사실 키로)과 그 값으로 다시 판정한 승인권자. 등록부 행이 없으면 None."""
+        key = ("registry", case["id"])
+        if key not in cache:
+            try:
+                if case["kind"] == KIND_PLAN:
+                    row = self.store.get_plan(case["ref_id"])
+                    dec, ind, total = self._plan_decision(row, cache["windows"])
+                    extra = {"plan_total_krw": total}
+                else:
+                    row = self.store.get_contract(case["facts"]["contract_row_id"])
+                    dec, ind = self._contract_decision(row, cache["windows"])
+                    extra = {}
+            except KeyError:
+                cache[key] = None
+                return None
+            vals = {fk: row[rk] for fk, rk in SYNC_FIELDS[case["kind"]].items()}
+            vals.update(extra, indicator_good=ind.good, indicator_hits=_hits(ind.hits),
+                        indicator_excluded=list(ind.excluded))
+            cache[key] = (vals, dec)
+        return cache[key]
+
+    def _refresh(self, case_id: int, cache: dict, actor: str = "시스템") -> list[dict]:
+        """사건 하나를 등록부에 맞추고(등록부가 원천) 승인권자를 다시 판정한 뒤, 필요하면 받은 승인을 무효로 하고
+        (재승인 대기), 필요한 승인이 모두 있으면 확정한다. advance·check_deadlines·decide·등록부 변경이 모두 이 길을 쓴다.
+
+        끝난 사건(결정 단계가 지남)은 사실을 바꾸지 않고, 등록부와 달라진 값을 경고 이벤트로 한 번만 남긴다."""
+        case = self.store.get_case(case_id)
+        now = self._registry_now(case, cache)
+        if now is None:
+            return []
+        vals, new_dec = now
         f = case["facts"]
+        changes = {k: {"before": f.get(k), "after": v} for k, v in vals.items() if f.get(k) != v}
+        out: list[dict] = []
+        if case["status"] not in OPEN[case["kind"]]:
+            data = {k: c for k, c in changes.items() if k in SYNC_FIELDS[case["kind"]] or k == "plan_total_krw"}
+            last = self.store.events(case_id, kind=EV_DRIFT)
+            if data and (not last or last[-1]["detail"]["changes"] != data):
+                text = (f"{case['ref_id']}는 {case['status']} 상태라 사건을 바꾸지 않음. 등록부와 다른 값: "
+                        + ", ".join(f"{LABELS.get(k, k)} {_show(k, c['before'])}→{_show(k, c['after'])}"
+                                    for k, c in data.items()))
+                self.store.add_event(case_id, EV_DRIFT, actor, {"changes": data, "text": text})
+                out.append({"date": self._today().isoformat(), "case_id": case_id, "action": "등록부변경경고",
+                            "text": text})
+            return out
+        for k, c in changes.items():
+            f[k] = c["after"]
+        a_key, h_key, ok_key, date_key = STAGES["1차"]
+        change = diff_approver(_decision(f), new_dec, _d(f[date_key]))
+        if change is not None:
+            self.store.add_approver_change(case_id, change)
+            f[a_key], f[h_key] = list(new_dec.approvers), _hits(new_dec.hits)
+            out.append({"date": self._today().isoformat(), "case_id": case_id, "action": "권한이동",
+                        "before": list(change.before), "after": list(change.after), "reason": change.reason})
+        if changes or change is not None:
+            self.store.update_facts(case_id, f, actor, "등록부 반영·승인권자 재판정")
+        material = [k for k in MATERIAL[case["kind"]] if k in changes]
+        if f.get(ok_key) and (material or change is not None):
+            out += self._invalidate(case_id, material, changes, change, actor)
+        return out + self._maybe_finalize(case_id, actor)
+
+    def _invalidate(self, case_id: int, material: list[str], changes: dict, change, actor: str) -> list[dict]:
+        """받은 승인을 무효로 하고 재승인 대기로 둔다. 이전 승인자에게 무엇이 바뀌었는지 알린다(설계 4.1·4.2)."""
+        case = self.store.get_case(case_id)
+        f = case["facts"]
+        ok_key = STAGES["1차"][2]
+        previous = list(f.get(ok_key, []))
+        parts = [f"{LABELS.get(k, k)} {_show(k, changes[k]['before'])}→{_show(k, changes[k]['after'])}"
+                 for k in material]
+        if change is not None:
+            parts.append(f"승인권자 {'·'.join(change.before)}→{'·'.join(change.after)}")
+        text = f"{case['ref_id']} 재승인 필요: " + ", ".join(parts)
+        f[ok_key] = []
+        f.pop("split_chosen", None)
+        self.store.update_facts(case_id, f, actor, "받은 승인 무효")
+        for role in previous:
+            self.store.add_event(case_id, EV_REAPPROVE, actor, {"target": role, "text": text})
+        if case["status"] != S_REAPPROVAL:
+            self.store.set_status(case_id, S_REAPPROVAL, actor, text)
+        return [{"date": self._today().isoformat(), "case_id": case_id, "action": "재승인", "text": text}]
+
+    def _maybe_finalize(self, case_id: int, actor: str) -> list[dict]:
+        """승인 단계에서 필요한 역할이 모두 승인했으면 확정한다(남은 역할 없이 멈추지 않게)."""
+        case = self.store.get_case(case_id)
+        f = case["facts"]
+        if case["status"] in APPROVAL_STATES and f.get(STAGES["1차"][2]) and not _pending_roles(f):
+            status = self._finalize(case_id, actor)
+            return [{"date": self._today().isoformat(), "case_id": case_id, "action": "확정", "status": status}]
+        return []
+
+    def _warn_target(self, f: dict) -> str | None:
         pending = _pending_roles(f)
         if not pending:
             return None
         chain = self.people.escalation
         lowest = min(pending, key=lambda r: chain.index(r) if r in chain else len(chain))
-        target = self.people.above(lowest)
-        deadline = _d(f["deadline"])
-        text = f"{case['ref_id']} 확정 기한 {_md(deadline)} 전 미승인(승인권자 {'·'.join(pending)})"
+        return self.people.above(lowest)
+
+    def _warn(self, case: dict, d: date) -> dict | None:
+        """조기 경고는 경고 대상 역할마다 한 번. 경고 뒤 승인권자가 바뀌어 대상이 달라지면 새 대상에게 다시 보낸다.
+        회신 대기에도 보낸다(부서 회신이 늦어도 기한은 다가오므로 — 설계 4.3보다 넓힘)."""
+        f = case["facts"]
+        target = self._warn_target(f)
+        if target is None or target in f.get("warned_targets", []):
+            return None
+        pending = _pending_roles(f)
+        text = f"{case['ref_id']} 확정 기한 {_md(_d(f['deadline']))} 전 미승인(승인권자 {'·'.join(pending)})"
         self.store.add_event(case["id"], EV_WARN, "시스템", {"target": target, "pending": pending, "text": text,
                                                          "deadline": f["deadline"]})
-        f["warned"] = True
+        f["warned_targets"] = [*f.get("warned_targets", []), target]
         self.store.update_facts(case["id"], f, "시스템", "조기 경고")
         return {"date": d.isoformat(), "case_id": case["id"], "action": "조기경고", "target": target, "text": text}
 
@@ -394,6 +545,7 @@ class Engine:
 
     # ---------------------------------------------------------------- 회신
 
+    @_locked
     def reply(self, request_id: int, text: str, attachments: int = 0) -> dict:
         """회신 저장 → AI 해석 → (사람 확인 | 목적별 처리 → 상태 변경). 이미 처리된 요청이면 무시."""
         req = self.store.get_request(request_id)
@@ -454,19 +606,23 @@ class Engine:
 
     # ---------------------------------------------------------------- 결정
 
+    @_locked
     def decide(self, case_id: int, actor: str, action: str, comment: str = "") -> dict:
         """승인권자의 결정. 승인권자가 아니면 PermissionError, 끝난 건이면 상태 그대로."""
         if action not in DECISIONS:
             raise ValueError(f"결정은 {', '.join(DECISIONS)} 중 하나: {action!r}")
-        role = self.people.role_of(actor)
+        role = self.role_of(actor)
         case = self.store.get_case(case_id)
+        if case["status"] in OPEN[case["kind"]]:
+            self._refresh(case_id, {"windows": self._windows()})  # 등록부의 지금 값으로 판정한 뒤 결정
+            case = self.store.get_case(case_id)
         f = case["facts"]
         required = _required_roles(f)
         if role not in required:
             raise PermissionError(f"{actor}({role})는 이 건의 승인권자가 아님 — 승인권자: {'·'.join(required)}")
         base = {"case_id": case_id, "actor": actor, "role": role, "action": action}
         if case["status"] not in OPEN[case["kind"]]:
-            return {**base, "changed": False, "status": case["status"], "message": "이미 끝난 건이라 상태 그대로"}
+            return {**base, "changed": False, "status": case["status"], "message": "결정 단계가 지난 건이라 상태 그대로"}
         if action == D_REJECT:
             self.store.add_approval(case_id, (role,), action, actor, comment)
             self.store.set_status(case_id, S_REJECTED, actor, comment or "승인권자 거절")
@@ -482,11 +638,10 @@ class Engine:
         if action == D_SPLIT:
             f["split_chosen"] = True
         self.store.update_facts(case_id, f, actor, f"{role} {action}")
-        pending = _pending_roles(f)
-        if pending:
-            return {**base, "changed": True, "status": case["status"], "pending": pending}
-        status = self._finalize(case_id, actor)
-        return {**base, "changed": True, "status": status}
+        done = self._maybe_finalize(case_id, actor)
+        if done:
+            return {**base, "changed": True, "status": done[0]["status"]}
+        return {**base, "changed": True, "status": case["status"], "pending": _pending_roles(f)}
 
     def _finalize(self, case_id: int, actor: str) -> str:
         case = self.store.get_case(case_id)
@@ -527,6 +682,7 @@ class Engine:
 
     # ---------------------------------------------------------------- 리뷰·반품·2차
 
+    @_locked
     def add_reviews(self, case_id: int, reviews: list[tuple[str, str]]) -> GateResult:
         """모의 리뷰를 AI로 해석한다. 색상불일치면 캠페인 담당에게 콘텐츠 수정 요청(첨부 필수), 2차는 잠금 유지."""
         case = self.store.get_case(case_id)
@@ -555,6 +711,7 @@ class Engine:
             self._task_once(case_id, owner, "리뷰 사람 확인", self._today(), f"AI가 확신하지 못한 리뷰 {human}건")
         return self._gate(self.store.get_case(case_id))
 
+    @_locked
     def add_returns(self, case_id: int, change_of_mind: int, color: int) -> GateResult:
         """시연용 모의 반품(1차 기준 건수). 통계 기준(기준선 = 과거 건수 반품률)을 넘으면 2차 자동 보류."""
         if change_of_mind < 0 or color < 0:
@@ -608,12 +765,12 @@ class Engine:
 
     def todo(self, person: str) -> dict:
         """사람별 할 일(설계 6.2): 승인 대기, 기한 임박, 회신 대기, 작업, 권한 이동, 알림."""
-        role = self.people.role_of(person)
+        role = self.role_of(person)
         out: dict = {"person": person, "role": role, "승인 대기": [], "기한 임박": [], "회신 대기": [],
                      "작업": [], "권한 이동": [], "알림": []}
         cases = {c["id"]: c for c in self.store.list_cases()}
         for c in cases.values():
-            if c["status"] == S_WAIT_APPROVAL and role in _pending_roles(c["facts"]):
+            if c["status"] in APPROVAL_STATES and role in _pending_roles(c["facts"]):
                 out["승인 대기"].append(self._item(c))
             for ch in self.store.get_approver_changes(c["id"]):
                 before = {_role(x) for x in ch.before if x not in REPORT_ONLY}
@@ -622,12 +779,15 @@ class Engine:
                     out["권한 이동"].append({**self._item(c), "reason": ch.reason})
         for e in self.store.events(kind=EV_WARN):
             c = cases.get(e["case_id"])
-            if c and e["detail"]["target"] == role and c["status"] in OPEN[c["kind"]]:
+            # 지금도 경고 대상인 역할에게만 보인다(승인권자가 바뀌어 대상이 달라지면 지난 경고는 내려감)
+            if (c and e["detail"]["target"] == role and c["status"] in OPEN[c["kind"]]
+                    and self._warn_target(c["facts"]) == role):
                 out["기한 임박"].append({**self._item(c), "text": e["detail"]["text"]})
-        for e in self.store.events(kind=EV_REPORT):
-            c = cases.get(e["case_id"])
-            if c and e["detail"]["target"] == role:
-                out["알림"].append({**self._item(c), "text": e["detail"]["text"]})
+        for kind in (EV_REPORT, EV_REAPPROVE):
+            for e in self.store.events(kind=kind):
+                c = cases.get(e["case_id"])
+                if c and e["detail"]["target"] == role:
+                    out["알림"].append({**self._item(c), "kind": kind, "text": e["detail"]["text"]})
         for r in self.store.all_requests(dept=role):
             if r["status"] != R_DONE and r["case_id"] in cases:
                 out["회신 대기"].append({**self._item(cases[r["case_id"]]), "request_id": r["id"], "text": r["text"],

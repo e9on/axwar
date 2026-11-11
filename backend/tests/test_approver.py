@@ -76,6 +76,8 @@ def test_2차_집행일을_8월24일로_옮기면_CEO에서_대표로_이동():
     assert ch.before[0] == "CEO"
     assert ch.after[0] == "Masil 대표"
     assert "하회 구간" in ch.reason and "8/24" in ch.reason
+    assert "새 근거:" in ch.reason and "더는 적용되지 않는 근거:" in ch.reason
+    assert "7/27" in ch.reason.split("더는 적용되지 않는 근거:")[1]
 
 
 def test_승인권자가_같으면_변경_없음():

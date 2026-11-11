@@ -54,11 +54,12 @@ class People:
     people: dict[str, str]  # 이름 -> 역할
     escalation: tuple[str, ...]  # 아래에서 위로
 
-    def role_of(self, who: str) -> str:
-        """이름이면 그 역할, 역할 이름이면 그대로. 모르면 PermissionError."""
+    def role_of(self, who: str, allow_role_names: bool = True) -> str:
+        """이름이면 그 역할, (허용할 때) 역할 이름이면 그대로. 모르면 PermissionError.
+        운영에서는 역할 이름을 사람 대신 받지 않는다(적기만 하면 권한이 생기지 않게)."""
         if who in self.people:
             return self.people[who]
-        if who in self.people.values():
+        if allow_role_names and who in self.people.values():
             return who
         raise PermissionError(f"등록되지 않은 사람: {who}")
 
