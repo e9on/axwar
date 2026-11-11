@@ -24,3 +24,15 @@ def db_path() -> Path:
     """SQLite DB 파일 위치: AXWAR_DB 환경변수, 없으면 backend/var/axwar.db. 호출할 때마다 환경변수를 다시 읽는다."""
     env = os.environ.get("AXWAR_DB")
     return Path(env) if env else Path(__file__).resolve().parents[1] / "var" / "axwar.db"
+
+
+def demo_dir() -> Path:
+    """시연 파일 폴더: AXWAR_DEMO_DIR 환경변수, 없으면 backend/demo. 호출할 때마다 환경변수를 다시 읽는다."""
+    env = os.environ.get("AXWAR_DEMO_DIR")
+    return Path(env) if env else Path(__file__).resolve().parents[1] / "demo"
+
+
+def people_path() -> Path:
+    """보는 사람·역할 파일: AXWAR_PEOPLE 환경변수(운영), 없으면 시연 폴더의 people.json."""
+    env = os.environ.get("AXWAR_PEOPLE")
+    return Path(env) if env else demo_dir() / "people.json"
