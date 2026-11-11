@@ -34,8 +34,8 @@ ROLES = ("캠페인 담당", "마케팅팀", "Masil 대표", "CEO", "이사회",
          "물류", "SCM", "CS", "품질", "에이전시", "인플루언서 측")
 DECISIONS = ("승인", "분할승인", "거절")
 ACTION_FIELDS = {"회신": ("dept", "text"), "결정": ("actor", "decision"), "리뷰": ("reviews",),
-                 "반품": ("change_of_mind", "color"), "공지": ("actor",), "발송": ("actor",), "기준일": ("date",)}
-TARGETED = ("회신", "결정", "리뷰", "반품", "공지", "발송")
+                 "반품": ("change_of_mind", "color"), "판매": ("actor", "orders", "returns"), "공지": ("actor",), "발송": ("actor",), "기준일": ("date",)}
+TARGETED = ("회신", "결정", "리뷰", "반품", "판매", "공지", "발송")
 _TOP_KEYS = ("title", "description", "plans", "contracts", "requests", "script")
 _NAME = re.compile(r"^[\w-]+$")
 SEED_ACTOR = "시연"
@@ -149,6 +149,15 @@ def _check_step(name: str, i: int, s, plans: list, contracts: list) -> None:
             isinstance(r, list) and len(r) == 2 and all(isinstance(x, str) for x in r) for r in s["reviews"])
         if not ok:
             raise _fail(name, f"{where}의 reviews는 [[상품, 문장], ...]이어야 함")
+    elif action == "판매":
+        if not isinstance(s["actor"], str) or not s["actor"].strip():
+            raise _fail(name, f"{where}의 actor가 잘못됨")
+        for f in ("orders", "returns"):
+            v = s[f]
+            if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+                raise _fail(name, f"{where}의 {f}는 0 이상 정수여야 함")
+        if s["returns"] > s["orders"]:
+            raise _fail(name, f"{where}의 returns는 orders보다 클 수 없음")
     elif action == "반품":
         for f in ("change_of_mind", "color"):
             v = s[f]

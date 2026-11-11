@@ -16,6 +16,7 @@ _SCHEMA: dict[str, type] = {
     "deadline.early_warning_days": int,
     "split.return_observe_days": int,
     "split.stop_z": float,
+    "split.sellthrough_hold_ratio": float,
     "allocate.capacity_fallback_ratio": float,
     "cash.horizon_days": int,
     "signals.return_ratio_red": float,

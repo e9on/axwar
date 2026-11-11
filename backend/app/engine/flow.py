@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import functools
 import threading
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -84,6 +84,9 @@ ALLOC_HOLD, ALLOC_FULL, ALLOC_PARTIAL = "보류", "전량", "조건부"
 EV_WARN, EV_REPORT, EV_REAPPROVE, EV_DRIFT = "조기경고", "그룹보고", "재승인알림", "등록부변경경고"
 EV_SPLIT, EV_STOCK, EV_ANNOUNCE, EV_BLOCK = "분할안변경", "재고부족", "공지", "1차차단"
 EV_UNBLOCK = "차단해제"  # 등록부 집행일을 고쳐 1차 차단이 풀림(사용자 결정 2026-11-11)
+EV_SELL = "판매율조절"  # 1차 판매 실적(판매율)으로 2차 수량을 조절·보류·품절 기록(추가 결정 8)
+NO_SALES = "1차 판매 실적 미입력"
+SELL_ADJUST, SELL_HOLD, SELL_SOLDOUT = "조절", "보류", "품절"
 SCM_ASKED, SCM_FULL, SCM_PARTIAL, SCM_REFUSED = "요청", "전량 허용", "일부 허용", "거절"
 ORDER_ADJUST, MEASURE = "발주 조정 요청", "측정 요청"
 # 사건 사실 ← 등록부 열(등록부가 원천). 바뀌면 사실을 새로 읽고 다시 판정한다.
@@ -373,6 +376,8 @@ class Engine:
         elif action == "리뷰":
             g = self.add_reviews(cid, [(p, t) for p, t in step["reviews"]])
             out = {"case_id": cid, "status": self.store.get_case(cid)["status"], "gate": asdict(g)}
+        elif action == "판매":
+            out = self.record_phase1_sales(cid, step["actor"], step["orders"], step["returns"])
         else:
             g = self.add_returns(cid, step["change_of_mind"], step["color"])
             out = {"case_id": cid, "status": self.store.get_case(cid)["status"], "gate": asdict(g)}
@@ -747,6 +752,7 @@ class Engine:
         f = self.store.get_case(case_id)["facts"]
         f["content_fix_confirmed"] = True
         self.store.update_facts(case_id, f, "AI", "콘텐츠 수정 확인(첨부 포함)")
+        self._phase2_judge(case_id)  # 리뷰 잠금이 풀렸으면 다음은 판매율
 
     # ---------------------------------------------------------------- 재고 장부·SCM (설계 4.5)
 
@@ -1177,7 +1183,8 @@ class Engine:
         if split:
             first = S_SPLIT_APPROVED
             f["phase1"] = {"qty": split["phase1_qty"], "date": split["phase1_date"]}
-            f["phase2"] = ({"qty": split["phase2_qty"], "date": split["phase2_date"]}
+            f["phase2"] = ({"qty": split["phase2_qty"], "date": split["phase2_date"],
+                            "amount_krw": self._plan_amount_of(f, split["phase2_qty"])}
                            if split["phase2_qty"] > 0 else None)
             if f["phase2"] and f["phase2"]["date"]:
                 self._phase2_approvers(f, case_id)
@@ -1253,6 +1260,8 @@ class Engine:
         g = self._gate(case)
         if g.auto_stopped and case["status"] == S_PHASE2_LOCK:
             self.store.set_status(case_id, S_PHASE2_HOLD, "시스템", "; ".join(g.reasons))
+        else:
+            self._phase2_judge(case_id)  # 반품 보류가 없으면 다음은 판매율(추가 결정 8)
         return g
 
     def _renewal_confirmed(self, influencer_code: str) -> bool:
@@ -1260,6 +1269,14 @@ class Engine:
                    for c in self.store.list_cases(KIND_CONTRACT))
 
     def _gate(self, case: dict) -> GateResult:
+        """반품·리뷰·관찰·계약 만료 판정(_gate_core)에 1차 판매 실적 입력 여부를 더한다(추가 결정 8)."""
+        g = self._gate_core(case)
+        f = case["facts"]
+        if not f.get("phase2") or f.get("sales"):
+            return g
+        return replace(g, open=False, reasons=(*g.reasons, NO_SALES), actions=(*g.actions, "1차 판매 실적 입력"))
+
+    def _gate_core(self, case: dict) -> GateResult:
         f = case["facts"]
         review_actions = (("콘텐츠 수정 요청", "사람 확인")
                           if f.get("color_review_flagged") and not f.get("content_fix_confirmed") else ())
@@ -1314,6 +1331,8 @@ class Engine:
             note = "갱신이 확정되어 2차 차단 해제"
             self.store.set_status(case_id, S_PHASE2_LOCK, "시스템", note)
             return [{"date": today, "case_id": case_id, "action": "2차차단해제", "text": note}]
+        if not blocked and case["status"] == S_PHASE2_LOCK:
+            return self._phase2_judge(case_id)
         return []
 
     def _replan_phase2(self, case_id: int) -> None:
@@ -1330,17 +1349,129 @@ class Engine:
             self._phase2_approvers(f, case_id)
         self.store.update_facts(case_id, f, "시스템", "갱신 확정으로 2차 집행일 결정")
 
-    def _phase2_approvers(self, f: dict, case_id: int) -> None:
-        """2차 집행일 기준으로 승인권자를 다시 판정한다(설계 4.2·4.5). 1차와 달라지면 권한 이동으로 남긴다."""
+    def _phase2_approvers(self, f: dict, case_id: int, amount_krw: int | None = None,
+                          before: ApproverDecision | None = None, why: str = "") -> None:
+        """2차 집행일 기준으로 승인권자를 다시 판정한다(설계 4.2·4.5). 1차와 달라지면 권한 이동으로 남긴다.
+        판매율로 2차 금액이 줄어 다시 판정할 때는 amount_krw(줄어든 요청액)와 before(지금의 2차 판정)를 넘기고,
+        바뀐 이유(why)를 권한 이동 사유에 쓴다."""
         a_key, h_key, ok_key, date_key = STAGES["2차"]
         d2 = _d(f["phase2"]["date"])
-        dec = decide_plan(PlanFacts(f["plan_id"], f["campaign_id"] or "", f["influencer_id"] or "", f["amount_krw"],
+        amount = f["amount_krw"] if amount_krw is None else amount_krw
+        dec = decide_plan(PlanFacts(f["plan_id"], f["campaign_id"] or "", f["influencer_id"] or "", amount,
                                     f["plan_total_krw"], d2, _d(f["deadline"]), "확대", f["indicator_good"]),
                           self._windows())
-        change = diff_approver(_decision(f), dec, d2)
+        change = diff_approver(before or _decision(f), dec, d2)
+        if change is not None and why:
+            change = replace(change, reason=f"{why}로 2차 승인권자가 {'·'.join(change.before)}에서 "
+                                            f"{'·'.join(change.after)}로 바뀜. 새 근거: "
+                                            + "; ".join(h.text for h in dec.hits))
         f[a_key], f[h_key], f[ok_key], f[date_key] = list(dec.approvers), _hits(dec.hits), [], f["phase2"]["date"]
         if change is not None:
             self.store.add_approver_change(case_id, change)
+
+    # ---------------------------------------------------------------- 2차 수량의 판매율 조절 (추가 결정 8)
+
+    @staticmethod
+    def _plan_amount_of(f: dict, qty: int) -> int:
+        """계획 2차 금액 = 기안 요청액 × 2차 수량 ÷ 기안 물량(원 단위 내림). 물량을 모르면 1차+2차 수량으로 나눈다."""
+        units = (f.get("volume") or {}).get("units")
+        if not units:
+            units = ((f.get("phase1") or {}).get("qty") or 0) + qty
+        return f["amount_krw"] * qty // units if units else 0
+
+    @_locked
+    def record_phase1_sales(self, case_id: int, actor: str, orders: int, returns: int) -> dict:
+        """캠페인 담당이 1차 판매 실적(주문 수·반품 수)을 입력한다. 순판매 = 주문 - 반품.
+        주문·반품이 0 이상 정수이고 반품이 주문 이하여야 한다(아니면 ValueError, 아무것도 바꾸지 않음).
+        판정(2차 수량 조절·보류·품절 기록)은 2차 게이트가 열릴 때: 반품 보류·리뷰 잠금·관찰 기간이 먼저다.
+        HTTP 연결은 Task 12."""
+        role = self.role_of(actor)
+        if role != CAMPAIGN:
+            raise PermissionError(f"{actor}({role})는 1차 판매 실적을 입력할 수 없음 — {CAMPAIGN}만")
+        for label, v in (("주문 수", orders), ("반품 수", returns)):
+            if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+                raise ValueError(f"{label}는 0 이상 정수여야 함: {v!r}")
+        if returns > orders:
+            raise ValueError(f"반품 수({returns:,})가 주문 수({orders:,})보다 클 수 없음")
+        case = self.store.get_case(case_id)
+        f = case["facts"]
+        if case["kind"] != KIND_PLAN or not f.get("phase1"):
+            raise ValueError("1차 집행이 시작된 기안만 판매 실적을 입력할 수 있음")
+        if f.get("phase2_sellthrough"):
+            raise ValueError("이미 판매율로 2차를 판정한 건은 판매 실적을 고칠 수 없음")
+        if not f["phase1"].get("qty"):
+            raise ValueError("1차 수량이 없어 판매율을 낼 수 없음")
+        f["sales"] = {"orders": orders, "returns": returns, "net": orders - returns, "date": self._today().isoformat()}
+        self.store.update_facts(case_id, f, actor, f"1차 판매 실적 입력: 주문 {orders:,}, 반품 {returns:,}")
+        acts = self._phase2_judge(case_id)
+        now = self.store.get_case(case_id)
+        return {"case_id": case_id, "status": now["status"], "sales": now["facts"]["sales"], "actions": acts,
+                "gate": asdict(self._gate(now))}
+
+    def _phase2_judge(self, case_id: int) -> list[dict]:
+        """2차 게이트가 열리는 시점(반품 보류·리뷰 잠금·관찰 기간·계약 만료가 모두 풀림)에 판매율로 2차를 판정한다.
+        판매 실적이 없으면 열지 않고 캠페인 담당 작업만 만든다. 한 건당 한 번만 판정한다."""
+        case = self.store.get_case(case_id)
+        f = case["facts"]
+        p2 = f.get("phase2")
+        if case["kind"] != KIND_PLAN or case["status"] != S_PHASE2_LOCK or not p2 or f.get("phase2_sellthrough"):
+            return []
+        if self._phase2_blocked(f) or [r for r in self._gate(case).reasons if r != NO_SALES]:
+            return []
+        today = self._today()
+        ref = case["ref_id"]
+        sales = f.get("sales")
+        if not sales:
+            self._task_once(case_id, CAMPAIGN, "1차 판매 실적 입력", today,
+                            f"{ref} 2차를 열려면 1차 주문 수·반품 수가 필요함(판매율 = (주문-반품) ÷ 1차 {f['phase1']['qty']:,}개)")
+            return []
+        p1q, net = f["phase1"]["qty"], sales["net"]
+        rate = net / p1q
+        hold = policy.get("split.sellthrough_hold_ratio")
+        qty_b = p2["qty"]
+        amt_b = p2.get("amount_krw")
+        if amt_b is None:
+            amt_b = self._plan_amount_of(f, qty_b)
+        basis = (f"1차 판매율 {rate:.1%}(순판매 {net:,}개 = 주문 {sales['orders']:,} - 반품 {sales['returns']:,}, "
+                 f"1차 {p1q:,}개)")
+        rec = {"rate": rate, "orders": sales["orders"], "returns": sales["returns"], "net": net, "p1_qty": p1q,
+               "hold_ratio": hold, "qty_before": qty_b, "amount_before": amt_b, "at": today.isoformat()}
+        if rate < hold:
+            rec |= {"outcome": SELL_HOLD, "qty_after": qty_b, "amount_after": amt_b}
+            core = f"{basis}가 하한 {hold:.1%} 미만이라 2차 {qty_b:,}개를 자동으로 줄이지 않고 보류 — 캠페인 담당이 판단"
+            f["phase2_sellthrough"] = rec
+            self.store.update_facts(case_id, f, "시스템", "판매율 하한 미만: 2차 보류")
+            self.store.set_status(case_id, S_PHASE2_HOLD, "시스템", f"{ref} {core}")
+            self._task_once(case_id, CAMPAIGN, "2차 보류 판단", today, f"{ref} {core}")
+        elif rate >= 1:
+            rec |= {"outcome": SELL_SOLDOUT, "qty_after": qty_b, "amount_after": amt_b, "excess": max(0, net - p1q)}
+            core = (f"{basis}: 1차 전량 판매(품절) — 2차 계획 {qty_b:,}개 유지, 넘친 수요 {rec['excess']:,}개는 "
+                    "2차 판단 자료로 기록")
+            f["phase2_sellthrough"], f["phase1_soldout"] = rec, True
+            self.store.update_facts(case_id, f, "시스템", "1차 품절 기록: 2차 계획 유지")
+        else:
+            qty_a, amt_a = qty_b * net // p1q, amt_b * net // p1q
+            rec |= {"outcome": SELL_ADJUST, "qty_after": qty_a, "amount_after": amt_a}
+            core = f"{basis}에 맞춰 2차 {qty_b:,}→{qty_a:,}개, 금액 {amt_b:,}→{amt_a:,}원"
+            f["phase2_sellthrough"] = rec
+            if qty_a == 0:
+                f["phase2"] = None
+                core += " — 2차 수량이 0개가 되어 2차 없음"
+                self.store.update_facts(case_id, f, "시스템", "판매율 조절: 2차 없음")
+                self.store.set_status(case_id, S_PHASE1, "시스템", f"{ref} {core}")
+            else:
+                before = _decision(f, "2차") if f.get(STAGES["2차"][0]) else None
+                p2["qty"], p2["amount_krw"] = qty_a, amt_a
+                if p2.get("date"):
+                    # 줄어든 2차 금액만큼 요청액을 덜어 승인권자를 다시 판정한다(같은 승인권자 규칙 경로)
+                    self._phase2_approvers(f, case_id, f["amount_krw"] - (amt_b - amt_a), before,
+                                           f"1차 판매율 {rate:.1%}로 2차 금액 {amt_b:,}→{amt_a:,}원")
+                    f[STAGES["2차"][1]].append({"rule_id": "sellthrough_adjust", "text": core,
+                                               "source": "1차 판매 실적", "badge": "계산"})
+                self.store.update_facts(case_id, f, "시스템", "판매율 조절: 2차 수량·금액")
+        text = f"{ref} {core}"
+        self.store.add_event(case_id, EV_SELL, "시스템", {**rec, "text": text})
+        return [{"date": today.isoformat(), "case_id": case_id, "action": EV_SELL, "text": text}]
 
     # ---------------------------------------------------------------- 화면용 읽기
 

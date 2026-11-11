@@ -210,3 +210,12 @@ def test_SCM_무응답_일수는_사용자_지정_3일():
     assert policy.validate("scm.no_reply_days", 5) == 5
     with pytest.raises(ValueError):
         policy.validate("scm.no_reply_days", 0)
+
+
+def test_2차_보류_판매율_하한은_가정_출처와_설명을_가진다():
+    value, source, desc = policy.entry("split.sellthrough_hold_ratio")
+    assert value == 0.5 and isinstance(value, float)
+    assert source.startswith("가정: 원본에 없음") and desc.strip()
+    assert policy.validate("split.sellthrough_hold_ratio", 1) == 1.0
+    with pytest.raises(ValueError):
+        policy.validate("split.sellthrough_hold_ratio", 0)

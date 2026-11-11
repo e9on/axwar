@@ -143,7 +143,8 @@ def test_장면2_조건변경_SCM_일부허용(store):
     assert statuses(store, cid) == ["회신 대기", "승인 대기", "재승인 대기", "분할 승인", "1차 집행", "2차 잠금"]
     f = store.get_case(cid)["facts"]
     assert f["phase1"] == {"qty": 3000, "date": "2026-07-27"}
-    assert f["phase2"] == {"qty": 12996, "date": "2026-08-24"}
+    assert f["phase2"]["qty"] == 12996 and f["phase2"]["date"] == "2026-08-24"
+    assert f["phase2"]["amount_krw"] == f["amount_krw"] * 12996 // f["volume"]["units"]  # 계획 2차 금액
     assert sorted(t for t in tasks(store, cid) if t[0] in ("물류", "CS")) == [("CS", "CS 대비"), ("물류", "물류 출고")]
     # 2차 집행일 8/24는 하회 구간(7/21~8/22) 밖 → 2차 승인권자 Masil 대표로 이동, 권한 이동 1건
     ch = store.get_approver_changes(cid)
@@ -178,8 +179,14 @@ def test_장면2_조건변경_SCM_일부허용(store):
     assert len(fix) == 1 and fix[0]["dept"] == "캠페인 담당" and fix[0]["attach_required"] is True
     assert "콘텐츠 수정 요청" in r["gate"]["actions"] and r["gate"]["open"] is False
 
-    # ---- 기준일 8/24: 모의 반품 색상불만 = 1차의 5% → 통계 기준(약 4.3%) 초과 → 2차 자동 보류
+    # ---- 기준일 8/24: 1차 판매 실적 입력(주문 2,600·반품 250). 리뷰 잠금이 먼저라 2차 수량은 아직 그대로
     r = eng.play(st[8])
+    assert r["action"] == "판매" and store.get_clock() == date(2026, 8, 24)
+    f = store.get_case(cid)["facts"]
+    assert f["sales"]["net"] == 2350 and f["phase2"]["qty"] == 12996 and "phase2_sellthrough" not in f
+    assert store.events(cid, kind="판매율조절") == []
+    # ---- 기준일 8/24: 모의 반품 색상불만 = 1차의 5% → 통계 기준(약 4.3%) 초과 → 2차 자동 보류
+    r = eng.play(st[9])
     assert store.get_clock() == date(2026, 8, 24)
     base = return_count_rate("INF-001", "색상불만")
     limit = return_stop_threshold(base, 3000)
@@ -904,3 +911,30 @@ def test_SCM이_전량_허용해_분할안이_그대로면_분할안변경_이�
     eng, _, cid, st = scene2(store, ACCEPT, SCM_FULL)
     to_scm_reply(eng, store, cid, st, "전량 허용합니다.")
     assert store.events(cid, kind="분할안변경") == []
+
+
+def test_장면2_판매율_변형_반품이_기준_이내면_판매율로_2차_수량과_금액이_줄고_승인권자를_다시_판정(store):
+    """scenario_2_sales: 리뷰 없음, 8/24 반품 기준 이내 → 게이트가 열린 뒤 판매 실적(주문 2,600·반품 50 = 85%)으로 2차 조절."""
+    eng, fake, cid, st = scene2(store, ACCEPT, SCM_PART, name="scenario_2_sales")
+    for step in st[:-2]:
+        eng.play(step)
+    f = store.get_case(cid)["facts"]
+    qty_b, amt_b = f["phase2"]["qty"], f["phase2"]["amount_krw"]
+    assert qty_b == 12996 and amt_b == f["amount_krw"] * 12996 // f["volume"]["units"]
+    approvers_b = list(f["phase2_approvers"])
+    # 8/24 모의 반품(기준 이내)만 들어온 상태: 판매 실적이 없어 2차를 열지 않고 캠페인 담당 작업
+    r = eng.play(st[-2])
+    assert store.get_case(cid)["status"] == "2차 잠금" and r["gate"]["open"] is False
+    assert "1차 판매 실적 미입력" in r["gate"]["reasons"]
+    assert ("캠페인 담당", "1차 판매 실적 입력") in tasks(store, cid)
+    # 판매 실적 입력 → 순판매 2,550 / 1차 3,000 = 85%
+    r = eng.play(st[-1])
+    f = store.get_case(cid)["facts"]
+    assert store.get_case(cid)["status"] == "2차 잠금" and r["gate"]["open"] is True
+    assert f["phase2"]["qty"] == qty_b * 2550 // 3000 == 11046
+    assert f["phase2"]["amount_krw"] == amt_b * 2550 // 3000
+    assert f["phase2_sellthrough"]["rate"] == 0.85 and f["phase2_sellthrough"]["outcome"] == "조절"
+    assert f["phase2"]["date"] == "2026-08-24" and f["phase2_approvers"] == approvers_b
+    assert any(h["rule_id"] == "sellthrough_adjust" for h in f["phase2_approver_hits"])
+    ev = store.events(cid, kind="판매율조절")
+    assert len(ev) == 1 and ev[0]["detail"]["qty_after"] == 11046 and "85.0%" in ev[0]["detail"]["text"]

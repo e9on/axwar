@@ -31,6 +31,11 @@ value = 1.645
 source = "통계 관행: 정규분포 한쪽 95% 임계값"
 description = "반품률이 평소보다 이 z 값만큼 높으면 2차 집행 자동 보류"
 
+[split.sellthrough_hold_ratio]
+value = 0.5
+source = "가정: 원본에 없음. 공지 수량의 절반도 못 팔면 예측이 크게 빗나간 것으로 보고 사람이 판단"
+description = "1차 순판매(주문-반품)가 1차 수량의 이 비율 미만이면 2차를 자동으로 줄이지 않고 보류해 사람이 판단"
+
 [allocate.capacity_fallback_ratio]
 value = 0.85
 source = "가정: Kingman 대기행렬 관행(가동률 85%를 넘으면 대기가 급증)"
