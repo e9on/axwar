@@ -18,3 +18,9 @@ def data_root() -> Path:
 def ai_mode() -> str:
     """AI 모드: "fake"(기본, 키 없이 규칙 기반 고정 응답) | "real"(실제 모델 호출). 호출할 때마다 환경변수를 다시 읽는다."""
     return os.environ.get("AXWAR_AI", "fake")
+
+
+def db_path() -> Path:
+    """SQLite DB 파일 위치: AXWAR_DB 환경변수, 없으면 backend/var/axwar.db. 호출할 때마다 환경변수를 다시 읽는다."""
+    env = os.environ.get("AXWAR_DB")
+    return Path(env) if env else Path(__file__).resolve().parents[1] / "var" / "axwar.db"
