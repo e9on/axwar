@@ -741,3 +741,12 @@ def test_초기화하면_AI_판정도_지워진다(store):
     store.add_judgment(cid, "회신해석", "fake", "", {}, True, None)
     store.reset()
     assert store.list_judgments() == []
+
+
+def test_엔진_이벤트를_남긴다(store):
+    cid = store.create_case("k", "r", {}, "접수")
+    store.add_event(cid, "조기경고", "시스템", {"target": "CEO"})
+    store.add_event(None, "그룹보고", "시스템", {"target": "그룹"})
+    assert store.events(cid)[-1]["kind"] == "조기경고" and store.events(cid)[-1]["detail"] == {"target": "CEO"}
+    assert store.events(None)[-1]["case_id"] is None
+    assert [e["kind"] for e in store.events(kind="조기경고")] == ["조기경고"]

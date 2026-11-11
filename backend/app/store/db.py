@@ -443,10 +443,19 @@ class Store:
     def list_reviews(self, case_id: int) -> list[dict]:
         return [dict(r) for r in self._all("SELECT * FROM reviews WHERE case_id=? ORDER BY id", case_id)]
 
-    def events(self, case_id: int | None = None) -> list[dict]:
-        """case_id가 있으면 그 사건의 이벤트, None이면 전체(사건 없는 등록부·정책 이벤트 포함)."""
-        rows = (self._all("SELECT * FROM events ORDER BY id") if case_id is None
-                else self._all("SELECT * FROM events WHERE case_id=? ORDER BY id", case_id))
+    def add_event(self, case_id: int | None, kind: str, actor: str, detail: dict) -> None:
+        """엔진이 남기는 알림성 이벤트(조기 경고·보고 등)."""
+        with self._tx() as db:
+            self._event(db, case_id, kind, actor, detail)
+
+    def events(self, case_id: int | None = None, kind: str | None = None) -> list[dict]:
+        """case_id가 있으면 그 사건의 이벤트, None이면 전체(사건 없는 등록부·정책 이벤트 포함). kind로 종류를 거른다."""
+        sql, args = "SELECT * FROM events WHERE 1=1", []
+        if case_id is not None:
+            sql, args = sql + " AND case_id=?", [*args, case_id]
+        if kind is not None:
+            sql, args = sql + " AND kind=?", [*args, kind]
+        rows = self._all(sql + " ORDER BY id", *args)
         return [{**dict(r), "detail": json.loads(r["detail"])} for r in rows]
 
     # ---- 등록부(계약·기안) ----
