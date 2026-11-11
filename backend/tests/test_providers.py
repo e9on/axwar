@@ -3,7 +3,7 @@ import importlib.util
 import io
 import json
 import urllib.error
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -246,8 +246,9 @@ def test_오늘_하루한도에_닿으면_막는다():
 def test_한도는_인자로_바꿀_수_있다():
     ledger = MemoryCostLedger()
     day = date(2030, 1, 2)
-    p = BudgetedProvider(Stub(), ledger, total_cap_usd=0.0001, daily_cap_usd=1.0, today=lambda: day)
-    p.complete("s", "u")  # 첫 호출은 이미 쓴 돈이 0이라 통과
+    est = providers.estimate_usd(HAIKU, "s", "u")
+    p = BudgetedProvider(Stub(), ledger, total_cap_usd=est * 1.05, daily_cap_usd=1.0, today=lambda: day)
+    p.complete("s", "u")  # 첫 호출은 이미 쓴 돈이 0이라 통과(실제 비용 0.00015)
     with pytest.raises(BudgetExceeded):
         p.complete("s", "u")
 
@@ -262,7 +263,7 @@ def test_단가표에_없는_모델이면_기록하지_않고_오류():
 def test_날짜_기본값은_실제_오늘():
     ledger = MemoryCostLedger()
     BudgetedProvider(Stub(), ledger).complete("s", "u")
-    assert ledger.spent(date.today()) > 0
+    assert ledger.spent(datetime.now(timezone.utc).date()) > 0  # 과금 기준에 맞춰 UTC 날짜
 
 
 # ---- 예비 모델 ----
@@ -323,12 +324,15 @@ def test_fake_모드는_리뷰_회신_글쓰기_모두_유효한_응답(monkeypa
     assert make_provider("writer").complete("s", "사실: 내용").text.strip()
 
 
-def test_real_모드는_예산_감싼_예비_구조(monkeypatch):
+def test_real_모드는_주_예비_각각_예산을_감싼_구조(monkeypatch):
     monkeypatch.setenv("AXWAR_AI", "real")
-    p = make_provider("writer", ledger=MemoryCostLedger())
-    assert isinstance(p, BudgetedProvider) and isinstance(p.inner, FallbackProvider)
-    assert p.inner.primary.model == policy.get("ai.writer_model")
-    assert p.inner.backup.model == policy.get("ai.writer_backup")
+    ledger = MemoryCostLedger()
+    p = make_provider("writer", ledger=ledger)
+    assert isinstance(p, FallbackProvider)
+    assert isinstance(p.primary, BudgetedProvider) and isinstance(p.backup, BudgetedProvider)
+    assert p.primary.inner.model == policy.get("ai.writer_model")
+    assert p.backup.inner.model == policy.get("ai.writer_backup")
+    assert p.primary.ledger is ledger and p.backup.ledger is ledger
 
 
 def test_모르는_모드와_작업은_오류(monkeypatch):
@@ -338,3 +342,68 @@ def test_모르는_모드와_작업은_오류(monkeypatch):
     monkeypatch.setenv("AXWAR_AI", "fake")
     with pytest.raises(ValueError, match="없는작업"):
         make_provider("없는작업")
+
+
+# ---- 예약·정산 (동시 호출 한도 초과 방지) ----
+
+def test_호출_전에_예상_비용을_예약하고_호출_뒤_실제_비용으로_정산():
+    ledger = MemoryCostLedger()
+    day = date(2030, 1, 2)
+    seen = []
+
+    class Peek(Stub):
+        def complete(self, system, user):
+            seen.append(ledger.spent(day))  # 호출 도중에는 예약분이 잡혀 있어야 한다
+            return super().complete(system, user)
+
+    BudgetedProvider(Peek(), ledger, today=lambda: day).complete("sys", "user")
+    assert seen[0] == pytest.approx(providers.estimate_usd(HAIKU, "sys", "user"))
+    assert ledger.spent(day) == pytest.approx(0.00015)
+
+
+def test_호출이_실패하면_예약을_돌려준다():
+    ledger = MemoryCostLedger()
+    day = date(2030, 1, 2)
+    with pytest.raises(RuntimeError):
+        BudgetedProvider(Stub(fail=RuntimeError("503")), ledger, today=lambda: day).complete("s", "u")
+    assert ledger.spent(None) == 0
+
+
+def test_예상_비용은_입력_추정과_최대_출력_단가():
+    _, p_in, p_out = policy.model_price(HAIKU)
+    est = providers.estimate_usd(HAIKU, "가나", "다라마")
+    expect = (5 * providers.ESTIMATE_TOKENS_PER_CHAR * p_in + policy.get("ai.max_tokens") * p_out) / providers.TOKENS_PER_PRICE_UNIT
+    assert est == pytest.approx(expect)
+
+
+def test_예상_비용만으로_한도를_넘으면_호출하지_않는다():
+    ledger = MemoryCostLedger()
+    inner = Stub()
+    p = BudgetedProvider(inner, ledger, total_cap_usd=providers.estimate_usd(HAIKU, "s", "u") / 2, daily_cap_usd=1.0)
+    with pytest.raises(BudgetExceeded):
+        p.complete("s", "u")
+    assert inner.calls == 0
+
+
+def test_예비모델도_한도를_확인한다():
+    ledger = MemoryCostLedger()
+    day = date(2030, 1, 2)
+    backup_model = "gemini-3.1-flash-lite"
+    main_est = providers.estimate_usd(HAIKU, "s", "u")
+    backup_est = providers.estimate_usd(backup_model, "s", "u")
+    # 주 모델 예약은 통과(그리고 실패해 돌려줌)하지만 예비의 예상 비용은 남은 한도를 넘는다
+    cap = max(main_est, backup_est) * 1.2
+    ledger.record(HAIKU, 0, 0, cap - backup_est / 2, day)
+    main_inner, backup_inner = Stub(fail=RuntimeError("503")), Stub(model=backup_model)
+    primary = BudgetedProvider(main_inner, ledger, total_cap_usd=cap + main_est, daily_cap_usd=10.0, today=lambda: day)
+    backup = BudgetedProvider(backup_inner, ledger, total_cap_usd=cap, daily_cap_usd=10.0, today=lambda: day)
+    with pytest.raises(BudgetExceeded):
+        FallbackProvider(primary, backup).complete("s", "u")
+    assert main_inner.calls == 1 and backup_inner.calls == 0
+
+
+def test_real모드는_장부없이_만들수_없다(monkeypatch):
+    monkeypatch.setenv("AXWAR_AI", "real")
+    with pytest.raises(ValueError, match="실제 AI 모드는 DB 비용 장부가 필요함"):
+        make_provider("review")
+    assert not hasattr(providers, "_LEDGER")

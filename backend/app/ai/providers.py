@@ -3,7 +3,7 @@
 - RealProvider: Anthropic·Gemini·Upstage 호출 (모델 -> 제공자·단가는 policy.toml의 ai.models)
 - FakeProvider / make_provider("fake"): 키 없이 도는 고정 응답 (화면 개발·시연용)
 - FallbackProvider: 주 모델이 실패하면 예비 모델로 한 번 더
-- BudgetedProvider: 호출 전 전체·하루 한도를 확인하고, 호출 뒤 비용을 장부에 기록
+- BudgetedProvider: 호출 전 예상 비용을 예약하며 전체·하루 한도를 확인하고, 호출 뒤 실제 비용으로 정산
 
 키는 환경변수(ANTHROPIC_API_KEY 등)를 먼저 보고, 없으면 키 파일(AXWAR_KEYS, 기본 ~/.axwar/keys.env)에서
 처음 쓸 때 읽는다. 키 값은 로그·예외 메시지에 넣지 않는다.
@@ -18,7 +18,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Callable, Protocol
 
@@ -254,38 +254,96 @@ class FallbackProvider:
 
 # ---------------------------------------------------------------- 비용 한도
 
+ESTIMATE_TOKENS_PER_CHAR = 1  # 예상 비용 추정: 글자 하나를 토큰 하나로 보는 보수적 가정(실제는 더 적게 든다)
+
+
+def utc_today() -> date:
+    """하루 한도의 기준 날짜. 과금 기준에 맞춰 UTC 날짜를 쓴다(운영·시연 시계와 무관)."""
+    return datetime.now(timezone.utc).date()
+
+
+def estimate_usd(model: str, system: str, user: str) -> float:
+    """호출 전 최악 비용 추정 = 지시문 길이 기반 입력 토큰 x 입력 단가 + 정책 ai.max_tokens x 출력 단가."""
+    _, price_in, price_out = policy.model_price(model)
+    in_tok = (len(system) + len(user)) * ESTIMATE_TOKENS_PER_CHAR
+    return (in_tok * price_in + policy.get("ai.max_tokens") * price_out) / TOKENS_PER_PRICE_UNIT
+
 
 class CostLedger(Protocol):
     def spent(self, day: date | None) -> float: ...
 
     def record(self, model: str, in_tok: int, out_tok: int, usd: float, day: date) -> None: ...
 
+    def reserve(self, estimate_usd: float, day: date, total_cap: float, daily_cap: float) -> int:
+        """한도를 확인하고 예상 비용을 예약한다(확인과 예약이 한 묶음). 넘으면 BudgetExceeded."""
+
+    def settle(self, reservation_id: int, model: str, in_tok: int, out_tok: int, usd: float) -> None: ...
+
+    def release(self, reservation_id: int) -> None: ...
+
+
+def check_caps(spent_total: float, spent_day: float, estimate: float, total_cap: float, daily_cap: float) -> None:
+    """예약 직전 한도 판정(장부 구현 공통). 이미 닿았거나 예상 비용을 더하면 넘으면 BudgetExceeded."""
+    if spent_total >= total_cap or spent_total + estimate > total_cap:
+        raise BudgetExceeded("AI 사용 전체 한도 도달")
+    if spent_day >= daily_cap or spent_day + estimate > daily_cap:
+        raise BudgetExceeded("AI 사용 하루 한도 도달")
+
 
 class MemoryCostLedger:
-    """메모리 장부(재시작하면 사라진다). DB 장부는 Task 10에서 같은 프로토콜로 만든다."""
+    """메모리 장부(재시작하면 사라진다). DB 장부(Store)와 같은 프로토콜. 예약분도 쓴 돈으로 센다."""
 
     def __init__(self):
         self.rows: list[tuple[str, int, int, float, date]] = []
+        self._reserved: dict[int, tuple[float, date]] = {}
+        self._next = 1
         self._lock = threading.Lock()
+
+    def _spent(self, day: date | None) -> float:
+        done = sum(r[3] for r in self.rows if day is None or r[4] == day)
+        held = sum(e for e, d in self._reserved.values() if day is None or d == day)
+        return done + held
 
     def spent(self, day: date | None = None) -> float:
         with self._lock:
-            return sum(r[3] for r in self.rows if day is None or r[4] == day)
+            return self._spent(day)
 
     def record(self, model: str, in_tok: int, out_tok: int, usd: float, day: date) -> None:
         with self._lock:
             self.rows.append((model, in_tok, out_tok, usd, day))
 
+    def reserve(self, estimate_usd: float, day: date, total_cap: float, daily_cap: float) -> int:
+        with self._lock:
+            check_caps(self._spent(None), self._spent(day), estimate_usd, total_cap, daily_cap)
+            rid, self._next = self._next, self._next + 1
+            self._reserved[rid] = (estimate_usd, day)
+            return rid
+
+    def settle(self, reservation_id: int, model: str, in_tok: int, out_tok: int, usd: float) -> None:
+        with self._lock:
+            _, day = self._reserved.pop(reservation_id)
+            self.rows.append((model, in_tok, out_tok, usd, day))
+
+    def release(self, reservation_id: int) -> None:
+        with self._lock:
+            self._reserved.pop(reservation_id, None)
+
+
+# 가장 비싼 모델 기준 추정에 쓰는 폴백 모델 선택(inner에 model이 없을 때)
+def _priciest_model() -> str:
+    return max(policy.model_names(), key=lambda m: policy.model_price(m)[2])
+
 
 class BudgetedProvider:
-    """호출 전 전체·하루 한도를 확인하고(닿았으면 BudgetExceeded, 호출 안 함), 호출 뒤 비용을 기록한다.
+    """호출 전에 예상 비용을 예약하며 전체·하루 한도를 확인하고(넘으면 BudgetExceeded, 호출 안 함),
+    호출 뒤 실제 비용으로 정산한다. 호출이 실패하면 예약을 돌려준다(가정: 제공자는 실패한 요청에 과금하지 않음).
 
     한도를 따로 주지 않으면 호출할 때마다 정책 설정(ai.total_cap_usd·ai.daily_cap_usd)을 읽는다.
-    today는 날짜를 돌려주는 함수(테스트에서 주입). 기본은 실제 오늘.
+    today는 하루 한도의 기준 날짜를 돌려주는 함수(기본 UTC 날짜, 테스트에서 주입).
     """
 
     def __init__(self, inner: Provider, ledger: CostLedger, total_cap_usd: float | None = None,
-                 daily_cap_usd: float | None = None, today: Callable[[], date] = date.today):
+                 daily_cap_usd: float | None = None, today: Callable[[], date] = utc_today):
         self.inner, self.ledger, self.today = inner, ledger, today
         self.total_cap_usd, self.daily_cap_usd = total_cap_usd, daily_cap_usd
 
@@ -293,24 +351,27 @@ class BudgetedProvider:
         total_cap = policy.get("ai.total_cap_usd") if self.total_cap_usd is None else self.total_cap_usd
         daily_cap = policy.get("ai.daily_cap_usd") if self.daily_cap_usd is None else self.daily_cap_usd
         day = self.today()
-        if self.ledger.spent(None) >= total_cap:
-            raise BudgetExceeded("AI 사용 전체 한도 도달")
-        if self.ledger.spent(day) >= daily_cap:
-            raise BudgetExceeded("AI 사용 하루 한도 도달")
-        c = self.inner.complete(system, user)
-        _, price_in, price_out = policy.model_price(c.model)
-        usd = (c.in_tok * price_in + c.out_tok * price_out) / TOKENS_PER_PRICE_UNIT
-        self.ledger.record(c.model, c.in_tok, c.out_tok, usd, day)
+        model = getattr(self.inner, "model", None) or _priciest_model()
+        rid = self.ledger.reserve(estimate_usd(model, system, user), day, total_cap, daily_cap)
+        try:
+            c = self.inner.complete(system, user)
+            _, price_in, price_out = policy.model_price(c.model)
+            usd = (c.in_tok * price_in + c.out_tok * price_out) / TOKENS_PER_PRICE_UNIT
+        except BaseException:
+            self.ledger.release(rid)
+            raise
+        self.ledger.settle(rid, c.model, c.in_tok, c.out_tok, usd)
         return c
 
 
 # ---------------------------------------------------------------- 만들기
 
-_LEDGER = MemoryCostLedger()  # real 모드의 기본 장부(프로세스 안에서 공유). DB 장부는 Task 10.
-
 
 def make_provider(task: str, ledger: CostLedger | None = None) -> Provider:
-    """task: "review" | "reply" | "writer". fake 모드(기본)는 키 없이 규칙 기반 고정 응답."""
+    """task: "review" | "reply" | "writer". fake 모드(기본)는 키 없이 규칙 기반 고정 응답.
+
+    real 모드는 DB 비용 장부가 꼭 필요하다(재시작해도 누적 한도가 이어지도록). 주 모델과 예비 모델을 각각 한도로 감싼다.
+    """
     if task not in TASKS:
         raise ValueError(f"알 수 없는 AI 작업: {task}")
     mode = config.ai_mode()
@@ -318,6 +379,7 @@ def make_provider(task: str, ledger: CostLedger | None = None) -> Provider:
         return _RuleProvider(task)
     if mode != "real":
         raise ValueError(f"알 수 없는 AI 모드: {mode}")
-    inner = FallbackProvider(RealProvider(policy.get(f"ai.{task}_model")),
-                             RealProvider(policy.get(f"ai.{task}_backup")))
-    return BudgetedProvider(inner, ledger if ledger is not None else _LEDGER)
+    if ledger is None:
+        raise ValueError("실제 AI 모드는 DB 비용 장부가 필요함")
+    return FallbackProvider(BudgetedProvider(RealProvider(policy.get(f"ai.{task}_model")), ledger),
+                            BudgetedProvider(RealProvider(policy.get(f"ai.{task}_backup")), ledger))
