@@ -36,3 +36,9 @@ def people_path() -> Path:
     """보는 사람·역할 파일: AXWAR_PEOPLE 환경변수(운영), 없으면 시연 폴더의 people.json."""
     env = os.environ.get("AXWAR_PEOPLE")
     return Path(env) if env else demo_dir() / "people.json"
+
+
+def frontend_dist() -> Path:
+    """화면 빌드 폴더: AXWAR_FRONTEND_DIST 환경변수, 없으면 저장소 루트의 frontend/dist. 없는 폴더면 API만 연다."""
+    env = os.environ.get("AXWAR_FRONTEND_DIST")
+    return Path(env) if env else REPO_ROOT / "frontend" / "dist"

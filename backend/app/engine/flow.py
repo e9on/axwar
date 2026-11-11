@@ -1747,6 +1747,17 @@ class Engine:
                                   "detail": t["detail"], "due": t["due"]})
         return out
 
+    def phase2_view(self, case_id: int) -> dict:
+        """2차 집행 관찰 화면(설계 6.5): 계획 2차, 2차 승인권자, 게이트(열림·자동 보류·사유), 판매 실적·반품·판매율 판정·담당 판단."""
+        case = self.store.get_case(case_id)
+        f = case["facts"]
+        has = bool(f.get(STAGES["2차"][0]))
+        return {"plan": f.get("phase2"), "approvers": f.get(STAGES["2차"][0]), "hits": f.get(STAGES["2차"][1], []),
+                "required_roles": _required_roles(f, "2차") if has else [],
+                "pending_roles": _pending_roles(f, "2차") if has else [],
+                "gate": asdict(self._gate(case)), "sales": f.get("sales"), "returns": f.get("returns"),
+                "sellthrough": f.get("phase2_sellthrough"), "decision": f.get("phase2_decision")}
+
     BRIEFING, COUNTERPOINTS = "브리핑", "반대근거"  # ai_judgments 종류
 
     def _brief_basis(self, case: dict) -> dict:
@@ -1807,14 +1818,7 @@ class Engine:
         f = case["facts"]
         open_ = case["status"] in OPEN[case["kind"]]
         pending = _pending_roles(f) if open_ else []
-        p2 = None
-        if case["kind"] == KIND_PLAN and f.get("phase2"):
-            has = bool(f.get(STAGES["2차"][0]))
-            p2 = {"plan": f["phase2"], "approvers": f.get(STAGES["2차"][0]), "hits": f.get(STAGES["2차"][1], []),
-                  "required_roles": _required_roles(f, "2차") if has else [],
-                  "pending_roles": _pending_roles(f, "2차") if has else [],
-                  "gate": asdict(self._gate(case)), "sales": f.get("sales"), "returns": f.get("returns"),
-                  "sellthrough": f.get("phase2_sellthrough"), "decision": f.get("phase2_decision")}
+        p2 = self.phase2_view(case_id) if case["kind"] == KIND_PLAN and f.get("phase2") else None
         out = {
             "case": {k: case[k] for k in ("id", "kind", "ref_id", "status", "created_at", "updated_at")},
             "facts": f,
