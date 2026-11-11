@@ -104,3 +104,18 @@ def test_관찰일수를_인자로_바꿀_수_있다():
 
 def test_만료_규칙_id는_snake_case():
     assert _split(end=date(2026, 8, 20)).hits[0].rule_id == "split_expiry"
+
+
+def test_갱신_미확정이고_만료_뒤면_차단_표시():
+    g = gate(renewal_confirmed=False, phase2_date=date(2026, 9, 2))
+    assert g.blocked and not g.open
+
+
+def test_갱신이_확정됐거나_만료_전이면_차단_아님():
+    assert not gate(renewal_confirmed=True, phase2_date=date(2026, 9, 2)).blocked
+    assert not gate(renewal_confirmed=False, phase2_date=date(2026, 8, 24)).blocked
+
+
+def test_반품_자동보류는_차단이_아니다():
+    g = gate(color_returns=90)
+    assert g.auto_stopped and not g.blocked

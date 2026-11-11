@@ -197,3 +197,8 @@ def test_값_검증은_자료형_양수_빈문자열을_본다():
             policy.validate(key, bad)
     with pytest.raises(ValueError, match="알 수 없는 정책 항목"):
         policy.validate("없는.항목", 1)
+
+
+def test_품절_손실_비율은_설계값이고_출처가_있다():
+    value, source, desc = policy.entry("scm.stockout_loss_pct")
+    assert value == 0.04 and "설계 4.5" in source and desc.strip()

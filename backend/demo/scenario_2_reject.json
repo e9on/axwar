@@ -1,0 +1,60 @@
+{
+  "title": "장면 2. 조건 변경 — SCM 거절",
+  "description": "장면 2와 같되 SCM이 안전재고 사용을 거절한다. 1차는 입고 다음 날로 연기되고, 28일 관찰이 끝나는 날이 계약 만료 뒤라 갱신이 확정되지 않으면 2차는 차단된다. 시연 조작판에서 SCM 응답만 바꿔 두 갈래를 비교한다.",
+  "plans": [
+    "PLAN-001"
+  ],
+  "contracts": [],
+  "register_contracts": [
+    "INF-001"
+  ],
+  "requests": [],
+  "script": [
+    {
+      "action": "회신",
+      "plan": "PLAN-001",
+      "dept": "물류",
+      "text": "평소 하루 20,000개, 최대 26,000개까지 처리할 수 있습니다.",
+      "attachments": 0
+    },
+    {
+      "action": "결정",
+      "plan": "PLAN-001",
+      "actor": "그룹 CEO",
+      "decision": "분할승인",
+      "comment": "covenant 하회 구간 건, 1차를 분할해 진행"
+    },
+    {
+      "action": "결정",
+      "plan": "PLAN-001",
+      "actor": "이사회",
+      "decision": "분할승인",
+      "comment": "지표 반대 근거 확인, 분할 승인"
+    },
+    {
+      "action": "회신",
+      "plan": "PLAN-001",
+      "dept": "SCM",
+      "text": "안전재고는 쓸 수 없습니다. 거절합니다.",
+      "attachments": 0
+    },
+    {
+      "action": "결정",
+      "plan": "PLAN-001",
+      "actor": "그룹 CEO",
+      "decision": "분할승인",
+      "comment": "입고 다음 날로 연기된 분할안 재승인"
+    },
+    {
+      "action": "결정",
+      "plan": "PLAN-001",
+      "actor": "이사회",
+      "decision": "분할승인",
+      "comment": "재승인"
+    },
+    {
+      "action": "기준일",
+      "date": "2026-09-17"
+    }
+  ]
+}

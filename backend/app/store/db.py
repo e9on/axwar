@@ -324,6 +324,16 @@ class Store:
                         {"dept": dept, "title": title, "due": due.isoformat(), "detail": detail})
             return cur.lastrowid
 
+    def set_task_status(self, task_id: int, status: str, actor: str) -> None:
+        """작업 상태를 바꾼다(대기 → 완료 등). 바꾼 사람과 함께 이벤트로 남긴다."""
+        with self._tx() as db:
+            row = db.execute("SELECT case_id, title FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if row is None:
+                raise KeyError(f"작업 없음: {task_id}")
+            db.execute("UPDATE tasks SET status=? WHERE id=?", (status, task_id))
+            self._event(db, row["case_id"], "작업상태", actor,
+                        {"task_id": task_id, "title": row["title"], "status": status})
+
     def all_tasks(self, dept: str | None = None) -> list[dict]:
         """모든 사건의 작업(dept가 있으면 그 부서만)."""
         rows = (self._all("SELECT * FROM tasks ORDER BY id") if dept is None

@@ -6,12 +6,15 @@
 파일 형식
   title, description: 문자열
   plans: [기안 ID], contracts: [인플루언서 코드]
+  register_contracts: [인플루언서 코드] (선택) 등록부에만 넣는 계약 — 사건은 열지 않는다(2차 집행의 계약 만료·갱신 판정용)
   requests: [{plan|contract, dept, text, attach_required?, purpose?}]
   script: [{action, plan|contract, date?, ...}]
     회신  dept, text, attachments?          (SCM 응답도 dept="SCM" 회신)
     결정  actor(보는 사람 이름), decision(승인|분할승인|거절), comment?
     리뷰  reviews: [[상품, 문장], ...]
     반품  change_of_mind, color(건수)
+    공지  actor                              (캠페인 담당이 1차 수량을 소비자에게 공지: 재고·물류 예약)
+    발송  actor                              (계약 담당이 조건변경 통보문을 상대에게 발송)
     기준일 date(대상 없음)
   date가 있으면 그 날짜로 기준일을 옮긴 뒤 행동한다.
 """
@@ -31,8 +34,8 @@ ROLES = ("캠페인 담당", "마케팅팀", "Masil 대표", "CEO", "이사회",
          "물류", "SCM", "CS", "품질", "에이전시", "인플루언서 측")
 DECISIONS = ("승인", "분할승인", "거절")
 ACTION_FIELDS = {"회신": ("dept", "text"), "결정": ("actor", "decision"), "리뷰": ("reviews",),
-                 "반품": ("change_of_mind", "color"), "기준일": ("date",)}
-TARGETED = ("회신", "결정", "리뷰", "반품")
+                 "반품": ("change_of_mind", "color"), "공지": ("actor",), "발송": ("actor",), "기준일": ("date",)}
+TARGETED = ("회신", "결정", "리뷰", "반품", "공지", "발송")
 _TOP_KEYS = ("title", "description", "plans", "contracts", "requests", "script")
 _NAME = re.compile(r"^[\w-]+$")
 SEED_ACTOR = "시연"
@@ -47,6 +50,7 @@ class Scenario:
     contracts: tuple[str, ...]
     requests: tuple[dict, ...]
     script: tuple[dict, ...]
+    register_contracts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -132,6 +136,9 @@ def _check_step(name: str, i: int, s, plans: list, contracts: list) -> None:
         att = s.get("attachments", 0)
         if not isinstance(att, int) or isinstance(att, bool) or att < 0:
             raise _fail(name, f"{where}의 attachments는 0 이상 정수여야 함")
+    elif action in ("공지", "발송"):
+        if not isinstance(s["actor"], str) or not s["actor"].strip():
+            raise _fail(name, f"{where}의 actor가 잘못됨")
     elif action == "결정":
         if s["decision"] not in DECISIONS:
             raise _fail(name, f"{where}의 decision은 {', '.join(DECISIONS)} 중 하나여야 함: {s['decision']!r}")
@@ -167,8 +174,9 @@ def load(name: str, demo_dir: str | Path | None = None) -> Scenario:
     if missing:
         raise _fail(name, f"항목이 없음: {', '.join(missing)}")
     plans, contracts = body["plans"], body["contracts"]
-    for k in ("plans", "contracts"):
-        if not isinstance(body[k], list) or not all(isinstance(x, str) and x for x in body[k]):
+    reg = body.get("register_contracts", [])
+    for k, v in (("plans", plans), ("contracts", contracts), ("register_contracts", reg)):
+        if not isinstance(v, list) or not all(isinstance(x, str) and x for x in v):
             raise _fail(name, f"{k}는 문자열 ID 목록이어야 함")
     if not isinstance(body["requests"], list) or not isinstance(body["script"], list):
         raise _fail(name, "requests·script는 목록이어야 함")
@@ -182,7 +190,7 @@ def load(name: str, demo_dir: str | Path | None = None) -> Scenario:
     for i, s in enumerate(body["script"]):
         _check_step(name, i, s, plans, contracts)
     return Scenario(name, str(body["title"]), str(body["description"]), tuple(plans), tuple(contracts),
-                    tuple(body["requests"]), tuple(body["script"]))
+                    tuple(body["requests"]), tuple(body["script"]), tuple(reg))
 
 
 def _source_plans() -> dict[str, dict]:
@@ -208,7 +216,7 @@ def check_refs(store: Store, sc: Scenario) -> None:
         except KeyError:
             if pid not in source:
                 missing_plans.append(pid)
-    missing_contracts = [c for c in sc.contracts if registry_contract(store, c) is None and _notice(c) is None]
+    missing_contracts = [c for c in (*sc.contracts, *sc.register_contracts) if registry_contract(store, c) is None and _notice(c) is None]
     if missing_plans:
         raise _fail(sc.name, f"등록부·원본 기안 파일에 없는 기안 ID: {missing_plans}")
     if missing_contracts:

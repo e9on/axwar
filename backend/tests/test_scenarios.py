@@ -143,7 +143,7 @@ def _scene_values() -> set[str]:
             r = plan_rows[pid]
             values |= {r["campaign_id"]} | _num(r["requested_budget_krw"]) | _num(r["expected_gmv_krw"])
             values |= _day(r["settlement_date"]) | _day(r["contract_deadline"])
-        for code in body.get("contracts", []):
+        for code in body.get("contracts", []) + body.get("register_contracts", []):
             values.add(code)
             n = notices[code]
             values |= _num(n.annual_fixed_krw) | _day(n.expiry) | _day(n.notice_deadline)
@@ -173,3 +173,36 @@ def test_엔진코드에_장면값이_없다():
     # 시연 파일 이름도 엔진에 박혀 있지 않다(파일 이름은 인자로만 받는다)
     for name, src in sources.items():
         assert not re.search(r"scenario_\d", src), name
+
+
+def test_장면2_3_파일을_읽는다():
+    s2 = scenarios.load("scenario_2")
+    assert s2.plans == ("PLAN-001",) and s2.register_contracts == ("INF-001",) and s2.contracts == ()
+    assert [x["action"] for x in s2.script].count("결정") == 4 and "공지" in [x["action"] for x in s2.script]
+    rej = scenarios.load("scenario_2_reject")
+    assert [x for x in rej.script if x.get("dept") == "SCM"][0]["text"] != [x for x in s2.script if x.get("dept") == "SCM"][0]["text"]
+    s3 = scenarios.load("scenario_3")
+    assert s3.plans == ("PLAN-001", "PLAN-002", "PLAN-003") and s3.contracts == ("INF-001",)
+    assert [x["action"] for x in s3.script] == ["기준일", "기준일", "발송", "회신"]
+
+
+def test_공지와_발송은_행동자가_필요하고_대상이_있어야_한다(demo):
+    _write(demo, "n1", _minimal(plans=["PLAN-001"], script=[{"action": "공지", "plan": "PLAN-001"}]))
+    with pytest.raises(ValueError, match="n1.*actor"):
+        scenarios.load("n1", demo)
+    _write(demo, "n2", _minimal(script=[{"action": "발송", "contract": "INF-001", "actor": "a"}]))
+    with pytest.raises(ValueError, match="n2.*INF-001"):
+        scenarios.load("n2", demo)
+    _write(demo, "n3", _minimal(plans=["PLAN-001"], script=[{"action": "공지", "plan": "PLAN-001", "actor": "a"}]))
+    assert scenarios.load("n3", demo).script[0]["action"] == "공지"
+
+
+def test_등록만_할_계약_목록은_문자열_목록이고_등록부나_통보문에_있어야_한다(demo, store):
+    _write(demo, "r1", _minimal(register_contracts="INF-001"))
+    with pytest.raises(ValueError, match="r1.*register_contracts"):
+        scenarios.load("r1", demo)
+    _write(demo, "r2", _minimal(register_contracts=["INF-999"]))
+    with pytest.raises(ValueError, match="INF-999"):
+        scenarios.check_refs(store, scenarios.load("r2", demo))
+    _write(demo, "r3", _minimal())
+    assert scenarios.load("r3", demo).register_contracts == ()  # 없으면 빈 목록

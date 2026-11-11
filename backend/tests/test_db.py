@@ -768,3 +768,14 @@ def test_시연_행을_고쳐도_출처는_시연이라_초기화하면_지워�
     assert store.get_contract(cid)["origin"] == "시연"
     store.reset()
     assert all(c["influencer_code"] != "INF-T" for c in store.list_contracts())
+
+
+def test_작업을_끝내면_상태와_이벤트가_남고_할일에서_빠진다(store):
+    cid = store.create_case("k", "r", {}, "접수")
+    tid = store.add_task(cid, "계약 담당", "통보 발송", date(2030, 1, 2))
+    store.set_task_status(tid, "완료", "계약 담당자")
+    assert store.list_tasks(cid)[0]["status"] == "완료"
+    ev = store.events(cid, kind="작업상태")[-1]
+    assert ev["actor"] == "계약 담당자" and ev["detail"] == {"task_id": tid, "title": "통보 발송", "status": "완료"}
+    with pytest.raises(KeyError):
+        store.set_task_status(999, "완료", "a")
