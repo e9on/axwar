@@ -628,3 +628,16 @@ def test_저장된_정책이_무효가_되어도_저장소는_열린다(tmp_path
     assert policy.get("deadline.early_warning_days") != -5
     assert any(e["kind"] == "정책덮어쓰기무시" for e in s2.events(None))
     s2.close()
+
+
+def test_무효_정책_덮어쓰기_경고는_같은_이력당_한_번만(tmp_path):
+    p = tmp_path / "bad2.db"
+    s = open_db(p)
+    s.change_policy("deadline.early_warning_days", 9, "a", "r")
+    s._db.execute("UPDATE policy_changes SET after='-5'")
+    s.close()
+    for _ in range(3):
+        open_db(p).close()
+    s3 = open_db(p)
+    assert len([e for e in s3.events(None) if e["kind"] == "정책덮어쓰기무시"]) == 1
+    s3.close()

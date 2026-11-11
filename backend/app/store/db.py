@@ -552,8 +552,14 @@ class Store:
         policy.set_overrides({k: v[:3] for k, v in latest.items()})
         if ignored:
             logger.error("무효가 된 정책 덮어쓰기를 건너뜀: %s", ignored)
-            with self._tx() as db:
-                self._event(db, None, "정책덮어쓰기무시", "시스템", {"ignored": ignored})
+            with self._tx() as db:  # 같은 이력은 한 번만 이벤트로 남긴다
+                seen = set(json.loads(self._setting(db, "ignored_policy_changes") or "[]"))
+                fresh = [i for i in ignored if i["change_id"] not in seen]
+                if fresh:
+                    self._event(db, None, "정책덮어쓰기무시", "시스템", {"ignored": fresh})
+                    db.execute("INSERT INTO settings (key, value) VALUES ('ignored_policy_changes', ?) "
+                               "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                               (json.dumps(sorted(seen | {i["change_id"] for i in fresh})),))
 
     def change_policy(self, key: str, new_value, actor: str, reason: str) -> None:
         """값을 검증(app.policy)하고 이력에 남긴 뒤 덮어쓰기로 적용한다. 정책 파일은 고치지 않는다."""

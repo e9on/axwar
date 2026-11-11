@@ -89,7 +89,7 @@ def test_통보문_항목이_없으면_파일과_항목_이름을_담은_오류(
 def test_고정피_단위를_읽는다(tmp_path):
     f = tmp_path / "y_exclusive_contract_notice.md"
     f.write_text("당사 **지수(INF-009)**\n\n| 항목 | 내용 |\n|---|---|\n| 보수 구조 | **고정 피 연 1억 2,000만원** + 성과 피 |\n"
-                 "| 현 계약 만료 | 2030-03-31 |\n| **해지·조건변경 통보 기한** | **2030-02-01** |\n| 미통보 시 | 계약 종료 |\n",
+                 "| 현 계약 만료 | 2030-03-31 |\n| **해지·조건변경 통보 기한** | **2030-02-01** |\n| 미통보 시 | 자동 갱신되지 않음 |\n",
                  encoding="utf-8")
     n = loader.parse_contract_notice(f)
     assert n.annual_fixed_krw == 120_000_000 and n.auto_renew is False and n.influencer_code == "INF-009"
@@ -126,6 +126,7 @@ def test_고정피_금액_형식을_읽는다(tmp_path, pay, expected):
 
 
 @pytest.mark.parametrize("pay", [
+    "고정 피 연 28 5억원", "고정 피 연 28억 3억원", "고정 피 연 5천만 28억원", "고정 피 연 1억 2,000원",
     "고정 피 연 28억 어쩌고원", "고정 피 연 협의", "고정 피 연 28..5억원", "고정 피 연 0.0000001원", "고정 피 연 억원",
 ])
 def test_알_수_없는_금액_형식은_파일과_항목_이름을_담은_오류(tmp_path, pay):
@@ -142,15 +143,26 @@ def test_알_수_없는_금액_형식은_파일과_항목_이름을_담은_오�
     ("자동갱신 되지 않고 계약 종료", False),
     ("자동 연장 없음", False),
     ("자동 갱신 조항 없음", False),
-    ("계약 종료", False),
+    ("자동갱신 불가", False),
+    ("자동으로 갱신하지 않음", False),
+    ("자동 연장되지 않으며 계약 종료", False),
+    ("자동 갱신되며, 위약금 없음", True),
+    ("자동 갱신(별도 통보 없음)", True),
+    ("자동 갱신되며 해지 불가", True),
+    ("자동 갱신된다", True),
 ])
 def test_자동_갱신_표현을_읽는다(tmp_path, renew, expected):
     assert loader.parse_contract_notice(_notice(tmp_path, renew=renew)).auto_renew is expected
 
 
-def test_자동_갱신_여부가_애매하면_오류(tmp_path):
+@pytest.mark.parametrize("renew", [
+    "추후 협의", "계약 종료", "1년 연장", "갱신 안 됨",
+    "자동 갱신되며 자동 갱신되지 않음",  # 긍정과 부정이 섞임
+    "자동 갱신 없음, 단 자동 연장됨",
+])
+def test_자동_갱신_여부가_애매하면_오류(tmp_path, renew):
     with pytest.raises(DataFormatError, match="z_exclusive_contract_notice.md.*미통보"):
-        loader.parse_contract_notice(_notice(tmp_path, renew="추후 협의"))
+        loader.parse_contract_notice(_notice(tmp_path, renew=renew))
 
 
 def test_인플루언서는_발신_에이전시가_아니라_크리에이터_문장에서(tmp_path):

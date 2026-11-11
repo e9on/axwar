@@ -194,8 +194,8 @@ _AMOUNT_PART = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(조|억|천만|백만|만|�
 # 한글 금액 단위 변환(원 단위)
 _UNIT = {"조": 10**12, "억": 10**8, "천만": 10**7, "백만": 10**6, "만": 10**4, "천": 10**3, "백": 10**2, "": 1}
 _RENEW = re.compile(r"자동(?:으로)?(?:갱신|연장)")
-_NEGATION = ("않", "없", "아님", "불가", "안됨", "안된")
-_NO_RENEW_WORDS = ("종료", "만료", "해지")
+# 부정은 갱신·연장 동사에 바로 붙은 형태만 인정한다("자동 갱신되며, 위약금 없음"의 '없음'은 갱신과 무관)
+_RENEW_NEGATED = re.compile(r"자동(?:으로)?(?:갱신|연장)(?:조항|규정|약정)?(?:이|은|을)?(?:되지|하지|되진|되질)?(?:않|안|아니|없|불가)")
 
 
 def _money_krw(text: str) -> int | None:
@@ -206,7 +206,12 @@ def _money_krw(text: str) -> int | None:
     if not _AMOUNT_ALL.fullmatch(body):
         return None
     total = Decimal(0)
-    for num, unit in _AMOUNT_PART.findall(body):
+    parts = _AMOUNT_PART.findall(body)
+    ranks = [_UNIT[u] for _, u in parts]
+    # 단위는 큰 쪽에서 작은 쪽으로 한 번씩만(28억 5천만), 단위 없는 숫자는 혼자일 때만 허용
+    if len(parts) > 1 and (any(not u for _, u in parts) or any(a <= b for a, b in zip(ranks, ranks[1:]))):
+        return None
+    for num, unit in parts:
         total += Decimal(num.replace(",", "")) * _UNIT[unit]
     return int(total) if total == total.to_integral_value() and total > 0 else None
 
@@ -264,14 +269,13 @@ def parse_contract_notice(path) -> ContractNotice:
             raise DataFormatError(f"{path.name}의 '{keys[0]}' 항목에서 날짜를 찾지 못함")
         return date.fromisoformat(m.group(0))
 
-    renew_text = re.sub(r"\s+", "", cell("미통보"))
-    m = _RENEW.search(renew_text)
-    if m:
-        auto = not any(w in renew_text[m.end():m.end() + 8] for w in _NEGATION)
-    elif any(w in renew_text for w in _NO_RENEW_WORDS):
-        auto = False
-    else:
-        raise DataFormatError(f"{path.name}의 '미통보 시' 항목에서 자동 갱신 여부를 판단하지 못함: {cell('미통보')!r}")
+    renew_cell = cell("미통보")
+    renew_text = re.sub(r"\s+", "", renew_cell)
+    negated = [m for m in _RENEW.finditer(renew_text) if _RENEW_NEGATED.match(renew_text, m.start())]
+    positive = [m for m in _RENEW.finditer(renew_text) if not _RENEW_NEGATED.match(renew_text, m.start())]
+    if bool(negated) == bool(positive):  # 둘 다 없거나 섞여 있으면 판단하지 않는다
+        raise DataFormatError(f"{path.name}의 '미통보 시' 항목에서 자동 갱신 여부를 판단하지 못함: {renew_cell!r}")
+    auto = bool(positive)
 
     return ContractNotice(
         who.group(2), who.group(1), fixed,
