@@ -3,6 +3,7 @@ import csv
 import re
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 
@@ -157,6 +158,11 @@ def payment_term_notices() -> dict[str, PaymentTermNotice]:
 PLAN_SOURCE = _MKT + "mkt_budget_plan_ms.csv"  # 캠페인 확대 기안이 든 원본 파일
 
 
+def campaign_master_rows() -> list[dict]:
+    """캠페인 마스터(캠페인 -> 인플루언서·판매 채널)."""
+    return read_table(_MST + "m_campaign_ms.csv")
+
+
 def plan_rows() -> list[dict]:
     """캠페인 기안 원본 행(필수 열 검사 포함)."""
     return read_table(PLAN_SOURCE)
@@ -180,17 +186,29 @@ class ContractNotice:
 _CONTRACT_DIR = "02_masil/marketing"
 _CONTRACT_GLOB = "*exclusive_contract_notice*.md"
 _WHO = re.compile(r"([가-힣A-Za-z]+)\(([A-Za-z]+-\d+)\)")
-_FIXED_FEE = re.compile(r"고정\s*피\s*(?:연\s*)?([0-9][0-9,\s조억만원]*)")
-_MONEY_PART = re.compile(r"(\d[\d,]*)\s*(조|억|만)?")
-_UNIT = {"조": 10**12, "억": 10**8, "만": 10**4, None: 1}  # 한글 금액 단위 변환
+_CREATOR = re.compile(r"(?:크리에이터|인플루언서)\s*([가-힣A-Za-z]+)\(([A-Za-z]+-\d+)\)")
+_FEE_START = re.compile(r"고정\s*피\s*(?:연\s*)?")
+_AMOUNT_TOKEN = r"\d[\d,]*(?:\.\d+)?\s*(?:조|억|천만|백만|만|천|백)?"
+_AMOUNT_ALL = re.compile(rf"(?:{_AMOUNT_TOKEN}\s*)+")
+_AMOUNT_PART = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(조|억|천만|백만|만|천|백)?")
+# 한글 금액 단위 변환(원 단위)
+_UNIT = {"조": 10**12, "억": 10**8, "천만": 10**7, "백만": 10**6, "만": 10**4, "천": 10**3, "백": 10**2, "": 1}
+_RENEW = re.compile(r"자동(?:으로)?(?:갱신|연장)")
+_NEGATION = ("않", "없", "아님", "불가", "안됨", "안된")
+_NO_RENEW_WORDS = ("종료", "만료", "해지")
 
 
-def _money_krw(text: str) -> int:
-    """'28억원', '1억 2,000만원' 같은 금액 표기를 원 단위 정수로."""
-    total = 0
-    for num, unit in _MONEY_PART.findall(text):
-        total += int(num.replace(",", "")) * _UNIT[unit]
-    return total
+def _money_krw(text: str) -> int | None:
+    """'28억', '28.5억원', '28억 5천만원', '2,800,000,000원'을 원 단위 정수로. 형식이 다르거나 정수가 아니면 None."""
+    body = text.strip()
+    if body.endswith("원"):
+        body = body[:-1].strip()
+    if not _AMOUNT_ALL.fullmatch(body):
+        return None
+    total = Decimal(0)
+    for num, unit in _AMOUNT_PART.findall(body):
+        total += Decimal(num.replace(",", "")) * _UNIT[unit]
+    return int(total) if total == total.to_integral_value() and total > 0 else None
 
 
 def _table_rows(text: str) -> list[list[str]]:
@@ -202,8 +220,19 @@ def _table_rows(text: str) -> list[list[str]]:
     return rows
 
 
+def _source_name(path: Path) -> str:
+    """등록부 키로 쓰는 출처 이름: 데이터 폴더 기준 상대 경로(밖에 있으면 전체 경로)."""
+    try:
+        return path.resolve().relative_to(data_root().resolve()).as_posix()
+    except ValueError:
+        return path.resolve().as_posix()
+
+
 def parse_contract_notice(path) -> ContractNotice:
-    """전속계약 통보문의 표·문장에서 연 고정 피·만료일·통보 기한·자동 연장을 읽는다. 못 찾으면 파일·항목 이름을 담은 오류."""
+    """전속계약 통보문의 표·문장에서 연 고정 피·만료일·통보 기한·자동 연장을 읽는다.
+
+    못 찾거나 해석이 애매하면 조용히 넘어가지 않고 파일·항목 이름을 담은 DataFormatError.
+    """
     path = Path(path)
     text = path.read_text(encoding="utf-8").replace("*", "")
     rows = _table_rows(text)
@@ -214,13 +243,20 @@ def parse_contract_notice(path) -> ContractNotice:
                 return r[1]
         raise DataFormatError(f"{path.name}에서 '{keys[0]}' 항목을 찾지 못함")
 
-    who = _WHO.search(text)
+    who = _CREATOR.search(text)
+    if not who:  # 발신·수신 줄(에이전시 코드가 있을 수 있음)을 뺀 첫 "이름(코드)"
+        body = "\n".join(ln for ln in text.splitlines() if not ln.strip().startswith(("수신", "발신")))
+        who = _WHO.search(body)
     if not who:
         raise DataFormatError(f"{path.name}에서 인플루언서 이름(코드)을 찾지 못함")
     pay = cell("보수")
-    fee = _FIXED_FEE.search(pay)
-    if not fee:
-        raise DataFormatError(f"{path.name}에서 고정 피 금액 문구를 찾지 못함")
+    start = _FEE_START.search(pay)
+    if not start:
+        raise DataFormatError(f"{path.name}의 '보수 구조' 항목에서 고정 피 문구를 찾지 못함: {pay!r}")
+    amount_text = re.split(r"원|\+", pay[start.end():], maxsplit=1)[0]
+    fixed = _money_krw(amount_text)
+    if fixed is None:
+        raise DataFormatError(f"{path.name}의 '보수 구조' 항목의 고정 피 금액을 해석하지 못함: {pay!r}")
 
     def day(*keys: str) -> date:
         m = _DATE.search(cell(*keys))
@@ -228,10 +264,19 @@ def parse_contract_notice(path) -> ContractNotice:
             raise DataFormatError(f"{path.name}의 '{keys[0]}' 항목에서 날짜를 찾지 못함")
         return date.fromisoformat(m.group(0))
 
+    renew_text = re.sub(r"\s+", "", cell("미통보"))
+    m = _RENEW.search(renew_text)
+    if m:
+        auto = not any(w in renew_text[m.end():m.end() + 8] for w in _NEGATION)
+    elif any(w in renew_text for w in _NO_RENEW_WORDS):
+        auto = False
+    else:
+        raise DataFormatError(f"{path.name}의 '미통보 시' 항목에서 자동 갱신 여부를 판단하지 못함: {cell('미통보')!r}")
+
     return ContractNotice(
-        who.group(2), who.group(1), _money_krw(fee.group(1)),
+        who.group(2), who.group(1), fixed,
         pay.split("+", 1)[1].strip() if "+" in pay else "",
-        day("통보 기한"), day("만료"), "자동 갱신" in cell("미통보"), path.name)
+        day("통보 기한"), day("만료"), auto, _source_name(path))
 
 
 def contract_notices() -> dict[str, ContractNotice]:

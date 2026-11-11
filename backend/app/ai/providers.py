@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import time
@@ -25,6 +26,7 @@ from typing import Callable, Protocol
 from app import config, policy
 
 TOKENS_PER_PRICE_UNIT = 1_000_000
+logger = logging.getLogger(__name__)
 HTTP_TIMEOUT_SEC = 120
 HTTP_ATTEMPTS = 6
 TASKS = ("review", "reply", "writer")
@@ -352,15 +354,30 @@ class BudgetedProvider:
         daily_cap = policy.get("ai.daily_cap_usd") if self.daily_cap_usd is None else self.daily_cap_usd
         day = self.today()
         model = getattr(self.inner, "model", None) or _priciest_model()
-        rid = self.ledger.reserve(estimate_usd(model, system, user), day, total_cap, daily_cap)
+        estimate = estimate_usd(model, system, user)
+        rid = self.ledger.reserve(estimate, day, total_cap, daily_cap)
         try:
             c = self.inner.complete(system, user)
-            _, price_in, price_out = policy.model_price(c.model)
-            usd = (c.in_tok * price_in + c.out_tok * price_out) / TOKENS_PER_PRICE_UNIT
-        except BaseException:
+        except BaseException:  # 호출 자체가 실패했을 때만 예약을 돌려준다
             self.ledger.release(rid)
             raise
-        self.ledger.settle(rid, c.model, c.in_tok, c.out_tok, usd)
+        # 여기부터는 호출이 이미 성공(과금 가능). 정산에 문제가 있어도 결과를 돌려주고 예비 모델을 부르지 않는다.
+        try:
+            _, price_in, price_out = policy.model_price(c.model)
+            usd = (c.in_tok * price_in + c.out_tok * price_out) / TOKENS_PER_PRICE_UNIT
+        except ValueError:
+            usd = estimate  # 단가를 모르면 예상 비용으로 정산(보수적)
+        try:
+            self.ledger.settle(rid, c.model, c.in_tok, c.out_tok, usd)
+        except Exception as e:  # noqa: BLE001
+            # 예약이 예상 비용으로 한도에 계속 잡혀 있다(보수적). 기록만 남긴다.
+            logger.error("정산 실패(예약 %s은 예상 비용으로 남김): %s", rid, e)
+            note = getattr(self.ledger, "note_settle_failure", None)
+            if note is not None:
+                try:
+                    note(rid, e)
+                except Exception:  # noqa: BLE001
+                    logger.exception("정산 실패 기록도 실패")
         return c
 
 

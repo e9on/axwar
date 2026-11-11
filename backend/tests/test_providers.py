@@ -407,3 +407,113 @@ def test_real모드는_장부없이_만들수_없다(monkeypatch):
     with pytest.raises(ValueError, match="실제 AI 모드는 DB 비용 장부가 필요함"):
         make_provider("review")
     assert not hasattr(providers, "_LEDGER")
+
+
+# ---- 정산 실패·동시 호출 (수정 회차 1) ----
+
+class BrokenSettle(MemoryCostLedger):
+    """settle이 항상 실패하는 장부."""
+
+    def settle(self, *a, **k):
+        raise RuntimeError("database is locked")
+
+
+def test_정산이_실패해도_결과를_돌려주고_예비를_부르지_않는다(caplog):
+    ledger = BrokenSettle()
+    day = date(2030, 1, 2)
+    main, backup = Stub(), Stub(model="gemini-3.1-flash-lite")
+    p = FallbackProvider(BudgetedProvider(main, ledger, today=lambda: day),
+                         BudgetedProvider(backup, ledger, today=lambda: day))
+    with caplog.at_level("ERROR"):
+        c = p.complete("s", "u")
+    assert c.text == "ok" and main.calls == 1 and backup.calls == 0
+    assert any("정산 실패" in r.message for r in caplog.records)
+    # 예약은 예상 비용으로 집계된 채 남는다(보수적)
+    assert ledger.spent(day) == pytest.approx(providers.estimate_usd(HAIKU, "s", "u"))
+
+
+def test_정산_실패는_장부에_알린다():
+    notes = []
+
+    class Noting(BrokenSettle):
+        def note_settle_failure(self, reservation_id, error):
+            notes.append((reservation_id, str(error)))
+
+    BudgetedProvider(Stub(), Noting(), today=lambda: date(2030, 1, 2)).complete("s", "u")
+    assert notes and "database is locked" in notes[0][1]
+
+
+def test_호출_뒤_단가_조회가_실패하면_예상_비용으로_정산한다():
+    class OddModel(Stub):
+        def complete(self, system, user):
+            self.calls += 1
+            return Completion("ok", 10, 10, "단가표에없는모델")
+
+    ledger = MemoryCostLedger()
+    day = date(2030, 1, 2)
+    c = BudgetedProvider(OddModel(), ledger, today=lambda: day).complete("s", "u")
+    assert c.text == "ok" and len(ledger.rows) == 1
+    assert ledger.spent(day) == pytest.approx(providers.estimate_usd(HAIKU, "s", "u"))
+
+
+class GapLock:
+    """락을 놓은 직후 잠깐 쉬는 락: 락을 나눠 잡는 잘못된 구현에서 다른 스레드가 반드시 그 틈에 끼어들게 한다."""
+
+    def __init__(self, inner=None):
+        import threading
+        self._inner = inner or threading.Lock()
+
+    def __enter__(self):
+        self._inner.acquire()
+        return self
+
+    def __exit__(self, *exc):
+        import time
+        self._inner.release()
+        time.sleep(0.02)
+
+
+def _slow_caps(monkeypatch, *modules):
+    """확인과 기록 사이에 틈을 만든다: 한도 판정 뒤에 잠깐 쉰다."""
+    import time
+    orig = providers.check_caps
+
+    def slow(*a, **k):
+        orig(*a, **k)
+        time.sleep(0.02)
+
+    for m in modules:
+        monkeypatch.setattr(m, "check_caps", slow)
+
+
+def test_예산_제공자는_느린_호출이_겹쳐도_한도를_넘지_않는다(monkeypatch):
+    import threading
+    import time
+    _slow_caps(monkeypatch, providers)
+    est = providers.estimate_usd(HAIKU, "s", "u")
+    ledger = MemoryCostLedger()
+    ledger._lock = GapLock()
+    barrier = threading.Barrier(20)
+    day = date(2030, 1, 2)
+
+    class Slow(Stub):
+        def complete(self, system, user):
+            time.sleep(0.3)  # 모든 스레드가 예약을 시도한 뒤에야 끝난다
+            return super().complete(system, user)
+
+    inner = Slow()
+    p = BudgetedProvider(inner, ledger, total_cap_usd=est * 3.5, daily_cap_usd=10.0, today=lambda: day)
+    results = []
+
+    def work():
+        barrier.wait()
+        try:
+            p.complete("s", "u")
+            results.append("ok")
+        except BudgetExceeded:
+            results.append("no")
+
+    threads = [threading.Thread(target=work) for _ in range(20)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert results.count("ok") == 3 and inner.calls == 3

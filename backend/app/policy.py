@@ -24,6 +24,7 @@ _SCHEMA: dict[str, type] = {
     "ai.total_cap_usd": float,
     "ai.daily_cap_usd": float,
     "ai.max_tokens": int,
+    "ai.reservation_stale_seconds": int,
     "ai.effort": str,
     "ai.anthropic_version": str,
     "ai.review_model": str,
