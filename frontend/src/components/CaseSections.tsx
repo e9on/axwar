@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import Badge from './Badge'
-import type { AiText, ApproverChange, CaseDetailData, CaseEvent, CaseRequest, Escalation, Judgment } from '../caseTypes'
+import type { AiText, ApproverChange, CaseDetailData, CaseEvent, CaseRequest, Escalation, ReplyJudgment } from '../caseTypes'
 import { koDate } from '../date'
 
 /** 결재선이 바뀐 이력: 상신은 "A → B, 상신(의견): 이유", 그 밖의 권한 이동은 "A → B: 이유" */
@@ -24,16 +24,20 @@ export function ChangeLines({ escalations, changes }: { escalations: Escalation[
   )
 }
 
-function interpretation(j: Judgment): string {
-  const r = j.result
-  const parts = [r.stance ?? '해석 없음']
-  if (r.qty_limit !== null && r.qty_limit !== undefined) parts.push(`수량 한도 ${r.qty_limit.toLocaleString('ko-KR')}개`)
-  if (r.next_date) parts.push(`다음 날짜 ${koDate(r.next_date)}`)
+function interpretation(j: ReplyJudgment): string {
+  const parts = [j.stance ?? '해석 없음']
+  if (j.qty_limit !== null && j.qty_limit !== undefined) parts.push(`수량 한도 ${j.qty_limit.toLocaleString('ko-KR')}개`)
+  if (j.next_date) parts.push(`다음 날짜 ${koDate(j.next_date)}`)
   return parts.join(' · ')
 }
 
-/** 부서 요청과 회신. 회신마다 AI 해석 결과와 사람 확인 여부를 붙인다. */
-export function Requests({ requests, judgments }: { requests: CaseRequest[]; judgments: Judgment[] }) {
+function humanText(j: ReplyJudgment): string {
+  if (!j.needs_human) return '사람 확인 불필요'
+  return j.human_confirmed ? `사람이 확인함${j.confirmed_by ? ` (${j.confirmed_by})` : ''}` : '사람 확인 필요'
+}
+
+/** 부서 요청과 회신. 회신마다 서버가 이어 준 AI 해석(judgment)과 사람 확인 정보를 붙인다. */
+export function Requests({ requests }: { requests: CaseRequest[] }) {
   if (requests.length === 0) return <p className="muted">부서에 보낸 요청이 없어요</p>
   return (
     <ul className="reqs">
@@ -45,8 +49,7 @@ export function Requests({ requests, judgments }: { requests: CaseRequest[]; jud
           <p className="req-text">{r.text}</p>
           {r.replies.length === 0 && <p className="muted">아직 회신이 없어요</p>}
           {r.replies.map((p) => {
-            const j = judgments.find((x) => x.kind === '회신해석' && x.input_summary === `${r.dept} 회신: ${p.text}`)
-            const human = j ? (j.needs_human ? (r.status === '처리됨' ? '사람이 확인함' : '사람 확인 필요') : '사람 확인 불필요') : null
+            const j = p.judgment
             return (
               <div className="reply" key={p.id}>
                 <p>
@@ -54,11 +57,13 @@ export function Requests({ requests, judgments }: { requests: CaseRequest[]; jud
                   {p.text}
                   {p.attachments > 0 && <span className="muted"> · 첨부 {p.attachments}건</span>}
                 </p>
-                {j && (
+                {j ? (
                   <p className="interp">
                     <Badge kind="AI" />
-                    해석: {interpretation(j)} <span className="muted">· {j.model} · {human}</span>
+                    해석: {interpretation(j)} <span className="muted">· {j.model} · {humanText(j)}</span>
                   </p>
+                ) : (
+                  <p className="interp muted">해석 기록 없음</p>
                 )}
               </div>
             )

@@ -78,12 +78,10 @@ export default function CaseDetailPage() {
   const detail = useLoad<CaseDetailData>(detailPath, [version])
   const d = detail.data
   const evidence = useLoad<EvidenceData>(d ? `/api/cases/${id}/evidence` : null, [version])
-  const isDemoPlan = !!d && d.case.origin === ORIGIN_DEMO && d.case.kind !== KIND_CONTRACT
-  const registry = useLoad<{ raw?: { note?: string } }>(isDemoPlan ? `/api/plans/${d.case.ref_id}` : null, [])
 
-  const reload = () => {
-    detail.retry()
-    evidence.retry()
+  /** 상세와 근거를 다시 읽는다. 둘 다 끝나면 풀린다(결정 버튼이 그때까지 잠긴다) */
+  const reload = async () => {
+    await Promise.all([detail.retry(), evidence.retry()])
   }
 
   const back = (
@@ -129,7 +127,7 @@ export default function CaseDetailPage() {
   const viewerRole = d.viewer?.role ?? null
   const adjusted = adjustedAmount(d)
   const shownDay = contract ? f.expiry : (f.phase1_date ?? f.settlement_date)
-  const note = registry.data?.raw?.note
+  const note = c.note
 
   const canMakeBriefing = !!d.viewer?.can_decide || !!d.viewer?.can_decide_phase2
   async function makeBriefing() {
@@ -137,7 +135,7 @@ export default function CaseDetailPage() {
     setMaking(true)
     try {
       await api.post(`/api/cases/${id}/briefing`, { actor: person.name })
-      reload()
+      await reload()
     } catch {
       // 알림 줄이 이미 보여 줌
     } finally {
@@ -194,7 +192,7 @@ export default function CaseDetailPage() {
               </span>
             </div>
           </div>
-          <ApprovalStamps label="결재란" roles={d.rule.required_roles} approved={d.rule.approved_roles} mineRole={phase2Wait ? null : viewerRole} status={status} />
+          <ApprovalStamps label="결재란" roles={d.rule.required_roles} approved={d.rule.approved_roles} viewerRole={viewerRole} canAct={!phase2Wait && !!d.viewer?.can_decide} status={status} />
         </div>
 
         <ChangeLines escalations={d.escalations} changes={d.approver_changes} />
@@ -235,7 +233,8 @@ export default function CaseDetailPage() {
                 label="2차 결재란"
                 roles={d.phase2.required_roles}
                 approved={d.phase2.approved_roles}
-                mineRole={phase2Wait ? viewerRole : null}
+                viewerRole={viewerRole}
+                canAct={phase2Wait && !!d.viewer?.can_decide_phase2}
                 status={status}
               />
             )}
@@ -256,7 +255,7 @@ export default function CaseDetailPage() {
         )}
 
         <h3>부서 요청과 회신</h3>
-        <Requests requests={d.requests} judgments={d.judgments} />
+        <Requests requests={d.requests} />
 
         <AiBlock
           title="AI 브리핑"

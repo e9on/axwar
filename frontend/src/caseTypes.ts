@@ -1,6 +1,6 @@
 /** 건 상세·근거 API 응답의 모양(backend flow.case_detail, case_evidence). 화면이 쓰는 것만 적는다. */
 
-export type Hit = { rule_id: string; text: string; source: string; badge: string; stage?: string }
+export type Hit = { rule_id: string; text: string; source: string; badge: string; stage?: string; superseded?: boolean }
 
 export type Escalation = {
   stage: string
@@ -15,7 +15,18 @@ export type Escalation = {
 
 export type ApproverChange = { before: string[]; after: string[]; reason: string; at: string }
 
-export type Reply = { id: number; text: string; attachments: number; created_at: string }
+export type ReplyJudgment = {
+  id: number
+  stance: string | null
+  qty_limit: number | null
+  next_date: string | null
+  needs_human: boolean
+  confidence: number | null
+  model: string
+  human_confirmed: boolean
+  confirmed_by: string | null
+}
+export type Reply = { id: number; text: string; attachments: number; created_at: string; judgment: ReplyJudgment | null }
 export type CaseRequest = {
   id: number
   dept: string
@@ -43,6 +54,16 @@ export type CaseEvent = { id: number; sim_date: string; kind: string; actor: str
 
 export type Task = { id: number; dept: string; title: string; due: string; status: string; detail: string }
 
+/** 분할 승인이 확정되면 만들어질 값(서버 계산) */
+export type SplitPreview = {
+  phase1_qty: number
+  phase1_date: string | null
+  phase1_amount_krw: number
+  phase2_qty: number
+  phase2_date: string | null
+  phase2_amount_krw: number
+}
+
 export type Split = { phase1_qty: number; phase1_date: string | null; phase2_qty: number; phase2_date: string | null }
 
 export type Phase2 = {
@@ -61,7 +82,7 @@ export type Phase2 = {
 }
 
 export type CaseDetailData = {
-  case: { id: number; kind: string; ref_id: string; status: string; origin: string; title?: string }
+  case: { id: number; kind: string; ref_id: string; status: string; origin: string; title?: string; note?: string | null; source_plan_id?: string | null }
   facts: {
     amount_krw?: number
     plan_total_krw?: number
@@ -97,6 +118,13 @@ export type CaseDetailData = {
     can_escalate: boolean
     can_escalate_phase2: boolean
     can_decide_phase2: boolean
+    /** 지금 보낼 수 있는 1차 결정 값 */
+    actions?: string[]
+    /** 막힌 결정과 그 이유 */
+    blocked?: { action: string; reason: string }[]
+    /** 지금 보낼 수 있는 2차 결정 값 */
+    actions_phase2?: string[]
+    split_preview?: SplitPreview | null
   }
 }
 
@@ -111,6 +139,7 @@ export type SignalLine = {
   key: string
   label: string
   value: number | null
+  unit?: string | null
   compare: string
   level: 'red' | 'yellow' | 'green' | 'unmeasurable'
   badge: string
@@ -122,15 +151,17 @@ export type IndicatorLine = {
   key: string
   label: string
   value: number | boolean | null
+  unit?: string | null
   rank: number | null
   of: number | null
   compare_label: string | null
   compare_value: number | null
+  compare_unit?: string | null
   badge: string
   detail: Detail
 }
-export type CostRow = { key: string; label: string; amount: number; badge: string; detail: Detail }
-export type RuleLine = { rule_id: string; text: string; source: string; badge: string; stage?: string; detail: Detail }
+export type CostRow = { key: string; label: string; amount: number; unit?: string | null; badge: string; detail: Detail }
+export type RuleLine = { rule_id: string; text: string; source: string; badge: string; stage?: string; superseded?: boolean; detail: Detail }
 
 export type EvidenceData = {
   available: boolean

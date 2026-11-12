@@ -1,6 +1,6 @@
 import { useId, useState, type ReactNode } from 'react'
 import Badge from './Badge'
-import { anyValue, num, splitPath, won } from '../format'
+import { anyValue, splitPath, unitValue } from '../format'
 import type { Detail, EvidenceData, IndicatorLine, SignalLine } from '../caseTypes'
 import './EvidenceList.css'
 
@@ -87,14 +87,15 @@ type RowProps = {
   note?: string
   kind: 'rule' | 'signal' | 'indicator' | 'cost'
   assumed?: boolean
+  superseded?: boolean
   children: ReactNode
 }
 
 /** 줄 하나 = 펼침 버튼 + 펼쳐지는 칸. 누르면 아래가 열리고 다시 누르면 닫힌다. */
-function Row({ id, open, toggle, detail, note, kind, assumed, children }: RowProps) {
+function Row({ id, open, toggle, detail, note, kind, assumed, superseded, children }: RowProps) {
   const panel = `${id}-detail`
   return (
-    <li className="erow" data-open={open} data-assumed={assumed ? 'true' : undefined}>
+    <li className="erow" data-open={open} data-assumed={assumed ? 'true' : undefined} data-superseded={superseded ? 'true' : undefined}>
       <button type="button" className={`ebtn ${kind}`} aria-expanded={open} aria-controls={panel} onClick={() => toggle(id)}>
         {children}
         <span className="chev" aria-hidden="true">
@@ -109,12 +110,12 @@ function Row({ id, open, toggle, detail, note, kind, assumed, children }: RowPro
 }
 
 function signalValue(s: SignalLine): string {
-  return s.value === null || s.level === 'unmeasurable' ? '측정 불가' : num(s.value)
+  return s.value === null || s.level === 'unmeasurable' ? '측정 불가' : unitValue(s.value, s.unit)
 }
 
 function indicatorValue(i: IndicatorLine): string {
   if (i.value === null) return '측정 불가'
-  const v = typeof i.value === 'boolean' ? (i.value ? '있음' : '없음') : num(i.value)
+  const v = typeof i.value === 'boolean' ? (i.value ? '있음' : '없음') : unitValue(i.value, i.unit)
   return i.rank !== null && i.of !== null ? `${v} (${i.rank}위/${i.of})` : v
 }
 
@@ -131,8 +132,10 @@ export default function EvidenceList({ data }: { data: EvidenceData }) {
   const rid = (name: string) => `${uid}-${name}`.replace(/:/g, '')
   const props = (name: string) => ({ id: rid(name), open: open.has(rid(name)), toggle })
 
+  // 상신 뒤 처음 판정(superseded)은 아래로: 지금 결재선을 만든 줄이 맨 위
+  const approverHits = [...data.rule.approver_hits].sort((x, y) => Number(!!x.superseded) - Number(!!y.superseded))
   const ruleLines = [
-    ...data.rule.approver_hits.map((h) => ({ ...h, group: 'a' })),
+    ...approverHits.map((h) => ({ ...h, group: 'a' })),
     ...data.rule.phase2_approver_hits.map((h) => ({ ...h, group: 'p2' })),
     ...data.rule.indicator_hits.map((h) => ({ ...h, group: 'i' })),
   ]
@@ -146,9 +149,10 @@ export default function EvidenceList({ data }: { data: EvidenceData }) {
         ) : (
           <ul className="elist rule-box">
             {ruleLines.map((h, i) => (
-              <Row key={`${h.group}${i}`} {...props(`rule-${h.group}${i}`)} detail={h.detail} kind="rule" assumed={h.badge === '가정'}>
+              <Row key={`${h.group}${i}`} {...props(`rule-${h.group}${i}`)} detail={h.detail} kind="rule" assumed={h.badge === '가정'} superseded={h.superseded}>
                 <span className="ecell text">
                   <Badge kind={h.badge} />
+                  {h.superseded && <span className="stage">처음 판정 </span>}
                   {h.group === 'p2' && <span className="stage">2차 </span>}
                   {h.group === 'i' && <span className="stage">지표 </span>}
                   {h.text}
@@ -169,7 +173,7 @@ export default function EvidenceList({ data }: { data: EvidenceData }) {
         <>
           <section aria-labelledby={rid('h-sig')}>
             <h3 id={rid('h-sig')}>위험 신호</h3>
-            <div className="ehead signal" aria-hidden="true">
+            <div className="ehead signal">
               <span>신호</span>
               <span>지표</span>
               <span className="n">값</span>
@@ -205,7 +209,7 @@ export default function EvidenceList({ data }: { data: EvidenceData }) {
                   <span className="ecell n">{indicatorValue(k)}</span>
                   <span className="ecell cmp">
                     <Badge kind={k.badge} />
-                    {k.compare_label && k.compare_value !== null && `${k.compare_label} ${num(k.compare_value)}`}
+                    {k.compare_label && k.compare_value !== null && `${k.compare_label} ${unitValue(k.compare_value, k.compare_unit ?? k.unit)}`}
                   </span>
                 </Row>
               ))}
@@ -219,7 +223,7 @@ export default function EvidenceList({ data }: { data: EvidenceData }) {
               {data.cost_breakdown.rows.map((r) => (
                 <Row key={r.key} {...props(`cost-${r.key}`)} detail={r.detail} kind="cost" assumed={r.badge === '가정'}>
                   <span className="ecell">{r.label}</span>
-                  <span className="ecell n">{won(r.amount)}</span>
+                  <span className="ecell n">{unitValue(r.amount, r.unit ?? 'krw')}</span>
                   <span className="ecell cmp">
                     <Badge kind={r.badge} />
                   </span>
@@ -234,7 +238,7 @@ export default function EvidenceList({ data }: { data: EvidenceData }) {
               <ul className="elist">
                 <Row {...props('be')} detail={data.breakeven.detail} kind="indicator" assumed={data.breakeven.badge === '가정'}>
                   <span className="ecell">{data.breakeven.label}</span>
-                  <span className="ecell n">{data.breakeven.value === null ? '측정 불가' : `${num(data.breakeven.value * 100)}%`}</span>
+                  <span className="ecell n">{data.breakeven.value === null ? '측정 불가' : unitValue(data.breakeven.value, data.breakeven.unit ?? 'ratio')}</span>
                   <span className="ecell cmp">
                     <Badge kind={data.breakeven.badge} />
                     {data.breakeven.compare}

@@ -1,10 +1,32 @@
 /** 화면에 보이는 숫자·값 글자 만들기 */
+const PERCENT = 100 // 비율(0~1) → 백분율 단위 변환
 export function num(v: number): string {
   return Number.isInteger(v) ? v.toLocaleString('ko-KR') : v.toLocaleString('ko-KR', { maximumFractionDigits: 3 })
 }
 
 export function won(v: number): string {
   return `${num(v)}원`
+}
+
+/** 서버가 근거 줄마다 붙이는 단위(unit)에 따른 값 글자. 모르는 단위나 단위 없음은 숫자 그대로. */
+export function unitValue(v: number, unit: string | null | undefined): string {
+  const fixed = (n: number, d: number) => n.toLocaleString('ko-KR', { minimumFractionDigits: d, maximumFractionDigits: d })
+  switch (unit) {
+    case 'ratio':
+      return `${fixed(v * PERCENT, 2)}%` // 0~1 비율 → 백분율 단위 변환
+    case 'percent':
+      return `${fixed(v, 2)}%`
+    case 'krw':
+      return won(Math.round(v))
+    case 'multiple':
+      return fixed(v, 3)
+    case 'count':
+      return num(Math.round(v))
+    case 'days':
+      return `${num(v)}일`
+    default:
+      return num(v)
+  }
 }
 
 /** 입력값·정책 값처럼 모양이 정해지지 않은 값 */

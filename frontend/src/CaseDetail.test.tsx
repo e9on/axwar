@@ -12,7 +12,7 @@ const PEOPLE = [
 const DETAIL_PATH = (who: string) => `/api/cases/7?viewer=${encodeURIComponent(who)}`
 
 const detailOf = (viewer: object, over: Record<string, unknown> = {}) => ({
-  case: { id: 7, kind: '기안', ref_id: 'DEMO-PLAN-001', status: '승인 대기', origin: '시연', title: '초혜핏 선케어 캠페인2 · 초혜핏 (시연용)' },
+  case: { id: 7, kind: '기안', ref_id: 'DEMO-PLAN-001', status: '승인 대기', origin: '시연', title: '초혜핏 선케어 캠페인2 · 초혜핏 (시연용)', note: '시연용 가정: 원본 기안을 복사해 요청액만 바꿈', source_plan_id: 'PLAN-019' },
   facts: {
     amount_krw: 8_000_000,
     plan_total_krw: 8_000_000,
@@ -41,13 +41,16 @@ const detailOf = (viewer: object, over: Record<string, unknown> = {}) => ({
   requests: [
     {
       id: 1, dept: '물류', purpose: '물류 처리 능력', text: '처리량을 알려 주세요', status: '처리됨', attach_required: false,
-      replies: [{ id: 1, text: '전량 가능합니다', attachments: 0, created_at: '2026-07-01' }],
+      replies: [
+        {
+          id: 1, text: '전량 가능합니다', attachments: 0, created_at: '2026-07-01',
+          judgment: { id: 1, stance: '수용', qty_limit: null, next_date: null, needs_human: false, confidence: 1, model: 'fake-해석기', human_confirmed: false, confirmed_by: null },
+        },
+      ],
     },
   ],
   tasks: [],
-  judgments: [
-    { id: 1, kind: '회신해석', model: 'fake-해석기', sim_date: '2026-07-01', input_summary: '물류 회신: 전량 가능합니다', needs_human: false, confidence: 1, result: { stance: '수용' } },
-  ],
+  judgments: [],
   history: [
     { id: 1, sim_date: '2026-07-01', kind: '사건생성', actor: '시스템', detail: {} },
     { id: 2, sim_date: '2026-07-02', kind: '요청생성', actor: '시스템', detail: {} },
@@ -58,8 +61,18 @@ const detailOf = (viewer: object, over: Record<string, unknown> = {}) => ({
   ...over,
 })
 
-const MAY = { person: 'Masil 대표', role: 'Masil 대표', can_decide: true, can_escalate: true, can_escalate_phase2: false, can_decide_phase2: false }
-const NOT = { person: '마케팅팀장', role: '마케팅팀', can_decide: false, can_escalate: false, can_escalate_phase2: false, can_decide_phase2: false }
+const PREVIEW = { phase1_qty: 410, phase1_date: '2026-09-15', phase1_amount_krw: 5_100_000, phase2_qty: 233, phase2_date: '2026-10-06', phase2_amount_krw: 2_900_000 }
+const MAY = {
+  person: 'Masil 대표', role: 'Masil 대표', can_decide: true, can_escalate: true, can_escalate_phase2: false, can_decide_phase2: false,
+  actions: ['승인', '분할승인', '거절'], blocked: [], actions_phase2: [], split_preview: PREVIEW,
+}
+const NOT = {
+  person: '마케팅팀장', role: '마케팅팀', can_decide: false, can_escalate: false, can_escalate_phase2: false, can_decide_phase2: false,
+  actions: [], blocked: [], actions_phase2: [], split_preview: null,
+}
+const SHORT_REASON = '재고 부족으로 1차 수량이 제한되는 건이라 분할 승인만 가능'
+const MAY_SHORT = { ...MAY, actions: ['분할승인', '거절'], blocked: [{ action: '승인', reason: SHORT_REASON }] }
+const MAY_P2 = { ...MAY, can_decide: false, can_decide_phase2: true, can_escalate: false, can_escalate_phase2: true, actions: [], actions_phase2: ['승인', '거절'], split_preview: null }
 
 const D = (formula: string, over: object = {}) => ({ formula, inputs: [], sources: [], policies: [], ...over })
 const EVIDENCE = {
@@ -68,7 +81,7 @@ const EVIDENCE = {
   influencer_id: 'INF-002',
   signals: [
     {
-      key: 'forecast_gap', label: '예상 ROAS 괴리', value: 10.4, compare: '명목 ROAS 최대 6.66', level: 'red', badge: '계산', judgment: '참고',
+      key: 'forecast_gap', label: '예상 ROAS 괴리', value: 10.4, unit: 'multiple', compare: '명목 ROAS 최대 6.66', level: 'red', badge: '계산', judgment: '참고',
       exclude_reason: '예상 GMV 기반이라 판정에서 뺌',
       detail: D('예상 ROAS = 기안 예상 GMV ÷ 요청 예산', {
         inputs: [{ label: '요청 예산', value: 4807921 }, { label: '과대 예상', value: true }],
@@ -76,24 +89,28 @@ const EVIDENCE = {
       }),
     },
     {
-      key: 'spend_concentration', label: '광고비 쏠림(HHI)', value: 2461.7, compare: '기준 1800 초과', level: 'green', badge: '가정', judgment: '판정', exclude_reason: '',
+      key: 'spend_concentration', label: '광고비 쏠림(HHI)', value: 2461.7, unit: 'multiple', compare: '기준 1800 초과', level: 'green', badge: '가정', judgment: '판정', exclude_reason: '',
       detail: D('HHI = 비중 제곱의 합', {
         policies: [{ key: 'signals.hhi_limit', value: 1800, source: '가정: 원본에 없음', description: '쏠림이 위험인 기준' }],
       }),
     },
+    { key: 'repurchase', label: '재구매율', value: 0.12345, unit: 'ratio', compare: '기준 0.2', level: 'yellow', badge: '계산', judgment: '판정', exclude_reason: '', detail: D('재구매 ÷ 전체') },
     { key: 'cannibalization', label: '다른 채널 잠식', value: null, compare: '측정 불가', level: 'unmeasurable', badge: '계산', judgment: '판정', exclude_reason: '', detail: D('고객이 나뉘어 측정 불가') },
   ],
   key_indicators: [
-    { key: 'real_roas', label: '실질 ROAS', value: 3.7, rank: 1, of: 10, compare_label: null, compare_value: null, badge: '계산', detail: D('실질 ROAS 식') },
+    { key: 'real_roas', label: '실질 ROAS', value: 3.7, unit: 'multiple', rank: 1, of: 10, compare_label: null, compare_value: null, badge: '계산', detail: D('실질 ROAS 식') },
   ],
   cost_breakdown: {
     note: '표본 금액이라 실제 계약액과 곱하지 않음',
-    rows: [{ key: 'gmv', label: '매출(GMV)', amount: 121676523, badge: '계산', detail: D('귀속 주문 GMV 합') }],
+    rows: [{ key: 'gmv', label: '매출(GMV)', amount: 121676523, unit: 'krw', badge: '계산', detail: D('귀속 주문 GMV 합') }],
   },
-  breakeven: { key: 'be', label: '본전에 필요한 기록 밖 판매', value: 0, compare: '0이면 이미 본전 이상', level: 'green', badge: '계산', judgment: '판정', exclude_reason: '', detail: D('필요 비율 식') },
+  breakeven: { key: 'be', label: '본전에 필요한 기록 밖 판매', value: 0.256, unit: 'ratio', compare: '0이면 이미 본전 이상', level: 'green', badge: '계산', judgment: '판정', exclude_reason: '', detail: D('필요 비율 식') },
   attribution_note: '마지막 클릭 후 7일 기준',
   rule: {
-    approver_hits: [{ rule_id: 'plan_within_delegation', text: '건별 한도 이하라 마케팅팀 전결', source: 'approval_authority_policy.md', badge: '원본', detail: D('한도 비교') }],
+    approver_hits: [
+      { rule_id: 'escalation', text: '마케팅팀장이 Masil 대표에게 올림(승인 권고): 대표 확인이 필요함', source: '상신 기록', badge: '의견', detail: D('상신 기록') },
+      { rule_id: 'plan_within_delegation', text: '건별 한도 이하라 마케팅팀 전결', source: 'approval_authority_policy.md', badge: '원본', superseded: true, detail: D('한도 비교') },
+    ],
     indicator_hits: [],
     phase2_approver_hits: [],
   },
@@ -105,7 +122,6 @@ function Setup(viewer: object, who: string, extra: Record<string, { status?: num
     'GET /api/clock': { json: { date: '2026-09-05', mode: '시연' } },
     [`GET ${DETAIL_PATH(who)}`]: { json: detailOf(viewer, over) },
     'GET /api/cases/7/evidence': { json: EVIDENCE },
-    'GET /api/plans/DEMO-PLAN-001': { json: { raw: { note: '시연용 가정: 원본 기안을 복사해 요청액만 바꿈' } } },
     ...extra,
   })
 }
@@ -217,9 +233,13 @@ describe('건 상세', () => {
     await userEvent.click(await screen.findByRole('button', { name: /^분할 승인/ }))
     const dlg = screen.getByRole('dialog')
     expect(within(dlg).getByText(/일반 승인/)).toBeInTheDocument()
-    expect(within(dlg).getByText(/1차에 643개/)).toBeInTheDocument()
-    expect(within(dlg).getByText(/1차 400개/)).toBeInTheDocument()
-    expect(within(dlg).getByText(/2차로 넘어가는 수량 243개/)).toBeInTheDocument()
+    // 수량·금액·날짜는 서버 split_preview 값 그대로(facts.split의 400/243과 다른 값으로 확인)
+    expect(within(dlg).getByText(/1차 410개/)).toBeInTheDocument()
+    expect(within(dlg).getByText(/5,100,000원/)).toBeInTheDocument()
+    expect(within(dlg).getByText(/9월 15일/)).toBeInTheDocument()
+    expect(within(dlg).getByText(/2차로 넘어가는 수량 233개/)).toBeInTheDocument()
+    expect(within(dlg).getByText(/2,900,000원/)).toBeInTheDocument()
+    expect(within(dlg).getByText(/10월 6일/)).toBeInTheDocument()
     expect(calls.some((c) => c.method === 'POST')).toBe(false)
     await userEvent.click(within(dlg).getByRole('button', { name: '분할 승인 확정' }))
     await waitFor(() => expect(calls.find((c) => c.method === 'POST')?.body).toEqual({ actor: 'Masil 대표', action: '분할승인', comment: '' }))
@@ -405,5 +425,290 @@ describe('건 상세', () => {
     await userEvent.click(screen.getByRole('button', { name: '다음 날로' }))
     await waitFor(() => expect(calls.filter((c) => c.path === DETAIL_PATH('Masil 대표')).length).toBe(2))
     expect(await screen.findByText('2일')).toBeInTheDocument()
+  })
+})
+
+describe('결정 버튼은 서버가 알려 준 것만', () => {
+  it('막힌_승인은_버튼_대신_이유_문장이_보이고_눌리지_않는다', async () => {
+    const { calls } = Setup(MAY_SHORT, 'Masil 대표')
+    mount('Masil 대표')
+    expect(await screen.findByText(new RegExp(SHORT_REASON))).toBeInTheDocument()
+    const approve = screen.queryByRole('button', { name: '승인' })
+    if (approve) {
+      expect(approve).toBeDisabled()
+      await userEvent.click(approve)
+    }
+    expect(calls.some((c) => c.method === 'POST')).toBe(false)
+    expect(screen.getByRole('button', { name: /^분할 승인/ })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '거절' })).toBeEnabled()
+  })
+
+  it('분할_확인_창은_일반_승인이_막힌_이유를_보여_준다', async () => {
+    Setup(MAY_SHORT, 'Masil 대표')
+    mount('Masil 대표')
+    await userEvent.click(await screen.findByRole('button', { name: /^분할 승인/ }))
+    const dlg = screen.getByRole('dialog')
+    expect(within(dlg).getByText(/일반 승인은 지금 할 수 없어요/)).toBeInTheDocument()
+    expect(within(dlg).getByText(new RegExp(SHORT_REASON))).toBeInTheDocument()
+  })
+
+  it('actions에_없는_분할승인_버튼은_없다', async () => {
+    Setup({ ...MAY, actions: ['승인', '거절'], split_preview: null }, 'Masil 대표')
+    mount('Masil 대표')
+    await screen.findByRole('button', { name: '승인' })
+    expect(screen.queryByRole('button', { name: /^분할 승인/ })).toBeNull()
+  })
+
+  it('결정권자인데_actions가_비면_눌러_볼_버튼이_없다', async () => {
+    Setup({ ...MAY, actions: [] }, 'Masil 대표')
+    mount('Masil 대표')
+    await screen.findByText(/Masil 대표로 결재합니다/)
+    expect(screen.queryByRole('button', { name: '승인' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '거절' })).toBeNull()
+  })
+
+  it('2차_승인_대기에서는_actions_phase2대로_phase2_decision으로_보낸다', async () => {
+    const over = { case: { id: 7, kind: '기안', ref_id: 'P-1', status: '2차 승인 대기', origin: '화면' } }
+    const { calls } = Setup(MAY_P2, 'Masil 대표', { 'POST /api/cases/7/phase2/decision': { json: { changed: true, status: '2차 집행' } } }, over)
+    mount('Masil 대표')
+    await userEvent.click(await screen.findByRole('button', { name: '승인' }))
+    expect(screen.queryByRole('button', { name: /^분할 승인/ })).toBeNull()
+    await waitFor(() => expect(calls.find((c) => c.path === '/api/cases/7/phase2/decision')?.body).toEqual({ actor: 'Masil 대표', action: '승인', comment: '' }))
+  })
+
+  it('2차_상신은_stage_2차로_보낸다', async () => {
+    const over = { case: { id: 7, kind: '기안', ref_id: 'P-1', status: '2차 승인 대기', origin: '화면' } }
+    const { calls } = Setup(MAY_P2, 'Masil 대표', { 'POST /api/cases/7/escalate': { json: { changed: true } } }, over)
+    mount('Masil 대표')
+    await userEvent.click(await screen.findByRole('button', { name: '위로 올리기' }))
+    const dlg = screen.getByRole('dialog')
+    await userEvent.click(within(dlg).getByRole('radio', { name: '승인 권고' }))
+    await userEvent.type(within(dlg).getByRole('textbox'), '확인 바람')
+    await userEvent.click(within(dlg).getByRole('button', { name: '올리기 확정' }))
+    await waitFor(() => expect(calls.find((c) => c.path === '/api/cases/7/escalate')?.body).toEqual({ actor: 'Masil 대표', stage: '2차', opinion: '승인 권고', reason: '확인 바람' }))
+  })
+
+  it('2차_거절은_이유와_함께_phase2_decision', async () => {
+    const over = { case: { id: 7, kind: '기안', ref_id: 'P-1', status: '2차 승인 대기', origin: '화면' } }
+    const { calls } = Setup(MAY_P2, 'Masil 대표', { 'POST /api/cases/7/phase2/decision': { json: { changed: true } } }, over)
+    mount('Masil 대표')
+    await userEvent.click(await screen.findByRole('button', { name: '거절' }))
+    await userEvent.type(screen.getByRole('textbox'), '반품이 많아요')
+    await userEvent.click(screen.getByRole('button', { name: '거절 확정' }))
+    await waitFor(() => expect(calls.find((c) => c.path === '/api/cases/7/phase2/decision')?.body).toEqual({ actor: 'Masil 대표', action: '거절', comment: '반품이 많아요' }))
+  })
+})
+
+describe('보내는 중', () => {
+  it('다시_읽기가_끝날_때까지_결정_버튼이_모두_꺼지고_연타해도_한_번만_나간다', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => (release = r))
+    let reads = 0
+    const { calls } = Setup(MAY, 'Masil 대표', { 'POST /api/cases/7/decision': { json: { changed: true, status: '승인' } } })
+    const base = globalThis.fetch as unknown as (i: RequestInfo | URL, n?: RequestInit) => Promise<Response>
+    vi.stubGlobal('fetch', async (i: RequestInfo | URL, n?: RequestInit) => {
+      if (String(i) === DETAIL_PATH('Masil 대표') && ++reads === 2) await gate
+      return base(i, n)
+    })
+    mount('Masil 대표')
+    const approve = await screen.findByRole('button', { name: '승인' })
+    await userEvent.click(approve)
+    await userEvent.click(approve)
+    await userEvent.click(approve)
+    await waitFor(() => expect(reads).toBe(2))
+    expect(screen.getByRole('button', { name: '승인' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '거절' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /^분할 승인/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '위로 올리기' })).toBeDisabled()
+    expect(screen.getByText(/보내는 중/)).toBeInTheDocument()
+    release()
+    await waitFor(() => expect(screen.getByRole('button', { name: '승인' })).toBeEnabled())
+    expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1)
+  })
+
+  it('서버가_409로_막으면_그_문장이_알림으로_보이고_버튼이_다시_켜진다', async () => {
+    Setup(MAY, 'Masil 대표', { 'POST /api/cases/7/decision': { status: 409, json: { detail: '이미 승인한 건이에요' } } })
+    mount('Masil 대표')
+    await userEvent.click(await screen.findByRole('button', { name: '승인' }))
+    expect((await screen.findAllByText('이미 승인한 건이에요')).length).toBeGreaterThan(0)
+    expect(screen.getByRole('button', { name: '승인' })).toBeEnabled()
+  })
+
+  it('거절_상신_실패도_문장이_보인다', async () => {
+    Setup(MAY, 'Masil 대표', {
+      'POST /api/cases/7/decision': { status: 403, json: { detail: '승인권자가 아니에요' } },
+      'POST /api/cases/7/escalate': { status: 409, json: { detail: '이미 올린 건이에요' } },
+    })
+    mount('Masil 대표')
+    await userEvent.click(await screen.findByRole('button', { name: '거절' }))
+    await userEvent.type(screen.getByRole('textbox'), '사유')
+    await userEvent.click(screen.getByRole('button', { name: '거절 확정' }))
+    const dlg = screen.getByRole('dialog')
+    expect(await within(dlg).findByText('승인권자가 아니에요')).toBeInTheDocument()
+    await userEvent.click(within(dlg).getByRole('button', { name: '취소' }))
+    await userEvent.click(screen.getByRole('button', { name: '위로 올리기' }))
+    const d2 = screen.getByRole('dialog')
+    await userEvent.click(within(d2).getByRole('radio', { name: '승인 권고' }))
+    await userEvent.type(within(d2).getByRole('textbox'), '사유')
+    await userEvent.click(within(d2).getByRole('button', { name: '올리기 확정' }))
+    expect(await within(d2).findByText('이미 올린 건이에요')).toBeInTheDocument()
+  })
+})
+
+describe('대화창', () => {
+  it('열면_첫_입력으로_초점이_가고_Esc로_닫히면_연_버튼으로_돌아온다', async () => {
+    Setup(MAY, 'Masil 대표')
+    mount('Masil 대표')
+    const reject = await screen.findByRole('button', { name: '거절' })
+    await userEvent.click(reject)
+    const dlg = screen.getByRole('dialog')
+    expect(within(dlg).getByRole('textbox')).toHaveFocus()
+    await userEvent.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.getByRole('button', { name: '거절' })).toHaveFocus()
+  })
+
+  it('분할_확인_창은_확정_버튼으로_초점이_간다', async () => {
+    Setup(MAY, 'Masil 대표')
+    mount('Masil 대표')
+    await userEvent.click(await screen.findByRole('button', { name: /^분할 승인/ }))
+    expect(within(screen.getByRole('dialog')).getByRole('button', { name: '분할 승인 확정' })).toHaveFocus()
+  })
+
+  it('Tab은_창_안에서만_돈다', async () => {
+    Setup(MAY, 'Masil 대표')
+    mount('Masil 대표')
+    await userEvent.click(await screen.findByRole('button', { name: '위로 올리기' }))
+    const dlg = screen.getByRole('dialog')
+    for (let i = 0; i < 8; i++) {
+      await userEvent.tab()
+      expect(dlg.contains(document.activeElement)).toBe(true)
+    }
+    for (let i = 0; i < 8; i++) {
+      await userEvent.tab({ shift: true })
+      expect(dlg.contains(document.activeElement)).toBe(true)
+    }
+  })
+})
+
+describe('회신 해석은 서버가 이은 judgment로', () => {
+  const twoReplies = (a: unknown, b: unknown) => ({
+    requests: [
+      {
+        id: 1, dept: '물류', purpose: '물류 처리 능력', text: '처리량을 알려 주세요', status: '처리됨', attach_required: false,
+        replies: [
+          { id: 1, text: '가능합니다', attachments: 0, created_at: '2026-07-01', judgment: a },
+          { id: 2, text: '가능합니다', attachments: 0, created_at: '2026-07-02', judgment: b },
+        ],
+      },
+    ],
+  })
+  const J = (id: number, stance: string, extra: object = {}) => ({
+    id, stance, qty_limit: null, next_date: null, needs_human: false, confidence: 0.9, model: 'm', human_confirmed: false, confirmed_by: null, ...extra,
+  })
+
+  it('같은_글_두_회신도_각자_자기_해석', async () => {
+    Setup(MAY, 'Masil 대표', {}, twoReplies(J(1, '수용'), J(2, '조건부', { qty_limit: 300 })))
+    mount('Masil 대표')
+    const replies = (await screen.findAllByText('가능합니다')).map((t) => t.closest('.reply') as HTMLElement)
+    expect(within(replies[0]).getByText(/해석: 수용/)).toBeInTheDocument()
+    expect(within(replies[0]).queryByText(/조건부/)).toBeNull()
+    expect(within(replies[1]).getByText(/해석: 조건부 · 수량 한도 300개/)).toBeInTheDocument()
+  })
+
+  it('judgment가_null이면_해석_기록_없음', async () => {
+    Setup(MAY, 'Masil 대표', {}, twoReplies(null, J(2, '수용')))
+    mount('Masil 대표')
+    const replies = (await screen.findAllByText('가능합니다')).map((t) => t.closest('.reply') as HTMLElement)
+    expect(within(replies[0]).getByText('해석 기록 없음')).toBeInTheDocument()
+  })
+
+  it('사람_확인은_judgment의_human_confirmed와_확인한_사람만', async () => {
+    Setup(MAY, 'Masil 대표', {}, twoReplies(J(1, '불명', { needs_human: true, human_confirmed: true, confirmed_by: '캠페인 담당자' }), J(2, '불명', { needs_human: true })))
+    mount('Masil 대표')
+    const replies = (await screen.findAllByText('가능합니다')).map((t) => t.closest('.reply') as HTMLElement)
+    expect(within(replies[0]).getByText(/사람이 확인함 \(캠페인 담당자\)/)).toBeInTheDocument()
+    expect(within(replies[1]).getByText(/사람 확인 필요/)).toBeInTheDocument()
+    expect(within(replies[1]).queryByText(/확인함/)).toBeNull()
+  })
+})
+
+describe('근거 값 단위', () => {
+  it('단위에_따라_형식이_다르다', async () => {
+    Setup(MAY, 'Masil 대표')
+    mount('Masil 대표')
+    await evidenceReady()
+    const row = (name: RegExp) => screen.getByRole('button', { name })
+    expect(row(/재구매율/)).toHaveTextContent('12.35%')
+    expect(row(/예상 ROAS 괴리/)).toHaveTextContent('10.400')
+    expect(row(/매출\(GMV\)/)).toHaveTextContent('121,676,523원')
+    expect(row(/본전에 필요한/)).toHaveTextContent('25.60%')
+  })
+})
+
+describe('결재선 이유', () => {
+  it('상신_줄이_맨_위이고_옛_규칙_줄은_처음_판정으로_흐리다', async () => {
+    Setup(MAY, 'Masil 대표')
+    mount('Masil 대표')
+    await evidenceReady()
+    const rows = within(document.querySelector('.rule-box') as HTMLElement).getAllByRole('button')
+    expect(rows[0]).toHaveTextContent('마케팅팀장이 Masil 대표에게 올림')
+    expect(rows[0]).not.toHaveTextContent('처음 판정')
+    expect(rows[1]).toHaveTextContent('처음 판정')
+    expect(rows[1].closest('li')).toHaveAttribute('data-superseded', 'true')
+  })
+
+  it('옛_줄이_앞에_와도_상신_줄을_위로_올린다', async () => {
+    const ev = JSON.parse(JSON.stringify(EVIDENCE))
+    ev.rule.approver_hits.reverse()
+    Setup(MAY, 'Masil 대표', { 'GET /api/cases/7/evidence': { json: ev } })
+    mount('Masil 대표')
+    await evidenceReady()
+    const rows = within(document.querySelector('.rule-box') as HTMLElement).getAllByRole('button')
+    expect(rows[0]).toHaveTextContent('올림')
+  })
+})
+
+describe('낮은 항목', () => {
+  it('열린_건인데_승인할_사람이_없으면_아직_열려_있다고_말한다', async () => {
+    const open = { rule: { approvers: [], hits: [], required_roles: ['마케팅팀'], approved_roles: ['마케팅팀'], pending_roles: [] }, case: { id: 7, kind: '기안', ref_id: 'P-1', status: '승인 대기', origin: '화면' } }
+    Setup(NOT, '마케팅팀장', {}, open)
+    mount('마케팅팀장')
+    expect(await screen.findByText(/아직 열려 있는 건이에요/)).toBeInTheDocument()
+    expect(screen.queryByText(/결정이 끝난 건이에요/)).toBeNull()
+  })
+
+  it('다른_종료_상태도_남은_칸에_상태가_적힌다', async () => {
+    const closed = { rule: { approvers: [], hits: [], required_roles: ['마케팅팀', 'Masil 대표'], approved_roles: ['마케팅팀'], pending_roles: [] }, case: { id: 7, kind: '기안', ref_id: 'P-1', status: '1차 차단', origin: '화면' } }
+    Setup(NOT, '마케팅팀장', {}, closed)
+    mount('마케팅팀장')
+    const stamps = await screen.findByRole('list', { name: '결재란' })
+    expect(within(stamps).getByRole('listitem', { name: 'Masil 대표: 1차 차단' })).toBeInTheDocument()
+  })
+
+  it('대리_결재자는_자기_역할이_칸에_없어도_내_차례가_뜬다', async () => {
+    const p2 = {
+      plan: { qty: 100, date: '2026-10-05' }, approvers: ['그룹 CEO'], hits: [], required_roles: ['그룹 CEO'], pending_roles: ['그룹 CEO'], approved_roles: [],
+      gate: { open: true }, deadline: null, deny_date: '2026-10-01', approval_deadline: null, decision: null, result: null,
+    }
+    const over = { case: { id: 7, kind: '기안', ref_id: 'P-1', status: '2차 승인 대기', origin: '화면' }, phase2: p2 }
+    Setup(MAY_P2, 'Masil 대표', {}, over)
+    mount('Masil 대표')
+    const stamps = await screen.findByRole('list', { name: '2차 결재란' })
+    expect(within(stamps).getByRole('listitem', { name: '그룹 CEO: 내 차례' })).toBeInTheDocument()
+  })
+
+  it('위험_신호_열_머리는_보조기기에도_읽힌다', async () => {
+    Setup(MAY, 'Masil 대표')
+    mount('Masil 대표')
+    await evidenceReady()
+    expect(document.querySelector('.ehead')).not.toHaveAttribute('aria-hidden')
+  })
+
+  it('시연_메모는_case_note에서_읽고_따로_기안을_읽지_않는다', async () => {
+    const { calls } = Setup(MAY, 'Masil 대표')
+    mount('Masil 대표')
+    expect(await screen.findByText(/원본 기안을 복사해 요청액만 바꿈/)).toBeInTheDocument()
+    expect(calls.some((c) => c.path.startsWith('/api/plans'))).toBe(false)
   })
 })
