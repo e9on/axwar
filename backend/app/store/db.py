@@ -632,16 +632,18 @@ class Store:
     def list_plans(self) -> list[dict]:
         return [{**dict(r), "raw": json.loads(r["raw"])} for r in self._all("SELECT * FROM plans ORDER BY id")]
 
-    def add_plan(self, fields: dict, actor: str, origin: str = "화면") -> int:
+    def add_plan(self, fields: dict, actor: str, origin: str = "화면", extra: dict | None = None) -> int:
+        """extra(시연용 기안의 note·base)는 raw(원본 값 묶음)에 함께 남겨 화면·응답에서 시연용 가정임이 보이게 한다."""
         if origin not in ORIGINS:
             raise ValueError(f"알 수 없는 출처 구분: {origin!r}")
-        extra = set(fields) - set(_PLAN_FIELDS)
-        if extra or "plan_id" not in fields:
-            raise ValueError(f"기안 항목 오류: 없는 항목 {sorted(extra)} 또는 plan_id 누락")
+        unknown = set(fields) - set(_PLAN_FIELDS)
+        if unknown or "plan_id" not in fields:
+            raise ValueError(f"기안 항목 오류: 없는 항목 {sorted(unknown)} 또는 plan_id 누락")
         row = {**{f: None for f in _PLAN_FIELDS}, "source_file": "", **_clean(fields)}
         with self._tx() as db:
-            new_id = self._insert_plan(db, row, fields, origin)
-            self._event(db, None, "기안등록", actor, {"plan_id": fields["plan_id"], "origin": origin})
+            new_id = self._insert_plan(db, row, {**fields, **(extra or {})}, origin)
+            self._event(db, None, "기안등록", actor, {"plan_id": fields["plan_id"], "origin": origin,
+                                                    **(extra or {})})
             return new_id
 
     @staticmethod

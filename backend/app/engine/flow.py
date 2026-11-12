@@ -324,13 +324,19 @@ class Engine:
         return plan["requested_budget_krw"]
 
     @staticmethod
-    def _volume(plan: dict) -> dict:
+    def _source_id(plan: dict) -> str:
+        """원본 데이터(물량·지표·일별 곡선)에서 이 기안을 찾는 ID. 시연용 기안은 복사해 온 원본 기안(base)을 따른다."""
+        return (plan.get("raw") or {}).get("base") or plan["plan_id"]
+
+    @classmethod
+    def _volume(cls, plan: dict) -> dict:
         """원본 표본이 있는 기안만 물량 공식(calc.volume)으로 계산. 없으면 담당자 입력 필요."""
-        if plan["source_file"] == loader.PLAN_SOURCE:
+        src = cls._source_id(plan)
+        if plan["source_file"] == loader.PLAN_SOURCE or src != plan["plan_id"]:
             vols = {v.plan_id: v for v in volume_calc.all_plan_volumes()}
-            v = vols.get(plan["plan_id"])
+            v = vols.get(src)
             if v is not None:
-                load = volume_calc.daily_load(plan["plan_id"])
+                load = volume_calc.daily_load(src)
                 peak = max(load, key=lambda d: (load[d], -d.toordinal()))
                 return {"units": round(v.plan_units), "peak_units": round(load[peak]), "peak_day": peak.isoformat(),
                         "low_confidence": v.low_confidence, "product_line": v.product_line,
@@ -343,7 +349,7 @@ class Engine:
         missing = [k for k in ("requested_budget_krw", "settlement_date", "contract_deadline") if plan[k] is None]
         if missing:
             raise ValueError(f"기안 {plan['plan_id']}에 비어 있는 항목: {missing}")
-        ind = plan_indicators(plan["plan_id"])
+        ind = plan_indicators(self._source_id(plan))
         total = self._plan_total(plan)
         pf = PlanFacts(plan["plan_id"], plan["campaign_id"] or "", plan["influencer_id"] or "",
                        plan["requested_budget_krw"], total, on or _d(plan["settlement_date"]),
@@ -379,6 +385,7 @@ class Engine:
         vol = self._volume(plan)
         facts = {
             "plan_id": plan_id, "campaign_id": plan["campaign_id"], "influencer_id": plan["influencer_id"],
+            "source_plan_id": self._source_id(plan),
             "channel": plan["channel"], "amount_krw": plan["requested_budget_krw"], "plan_total_krw": total,
             "expected_gmv_krw": plan["expected_gmv_krw"], "settlement_date": plan["settlement_date"],
             "deadline": plan["contract_deadline"], "direction": "확대",
@@ -431,8 +438,12 @@ class Engine:
         sc = scenarios.load(scenario, self.demo_dir)
         scenarios.check_refs(self.store, sc)
         self.store.reset(scenarios.SEED_ACTOR)
+        demos = {d["id"]: d for d in sc.demo_plans}
         for pid in sc.plans:
-            scenarios.register_plan(self.store, pid)
+            if pid in demos:
+                scenarios.register_demo_plan(self.store, demos[pid])
+            else:
+                scenarios.register_plan(self.store, pid)
         for code in (*sc.contracts, *sc.register_contracts):  # 등록만 하는 계약은 사건을 열지 않는다
             scenarios.register_contract(self.store, code)
         ids = [self.open_plan(pid, scenarios.SEED_ACTOR) for pid in sc.plans]
@@ -1196,7 +1207,7 @@ class Engine:
         demand: dict[str, int] = {}
         for pid, f in active.items():
             moved = (_d(f["settlement_date"]) - _d(f.get("curve_anchor") or f["settlement_date"])).days
-            q = round(loads.get(day - timedelta(days=moved), {}).get(pid, 0))
+            q = round(loads.get(day - timedelta(days=moved), {}).get(f.get("source_plan_id") or pid, 0))
             if q > 0:
                 demand[pid] = q
         return demand, {pid: active[pid]["volume"]["product_line"] for pid in demand}

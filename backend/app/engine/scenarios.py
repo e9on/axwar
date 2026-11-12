@@ -7,6 +7,9 @@
   title, description: 문자열
   plans: [기안 ID], contracts: [인플루언서 코드]
   register_contracts: [인플루언서 코드] (선택) 등록부에만 넣는 계약 — 사건은 열지 않는다(2차 집행의 계약 만료·갱신 판정용)
+  demo_plans: [{id, base, override, note}] (선택) 시연 전용 기안 — 원본 기안(base)을 복사하고 override 값(기안 등록부 열)만 바꿔
+    등록부에 origin '시연'으로 넣는다(원본 파일은 고치지 않음, 초기화 때 지워짐). id는 원본 기안 ID와 겹치면 안 되고,
+    plans에 넣어 사건을 열 수 있다. note는 "시연용 가정: ..." 설명(등록부 raw·기안등록 이벤트에 남아 화면에 드러남).
   requests: [{plan|contract, dept, text, attach_required?, purpose?}]
   script: [{action, plan|contract, date?, ...}]
     회신  dept, text, attachments?          (SCM 응답도 dept="SCM" 회신)
@@ -30,6 +33,7 @@ from pathlib import Path
 
 from app import config
 from app.data import loader
+from app.store import db as _db
 from app.store.db import Store
 
 ROLES = ("캠페인 담당", "마케팅팀", "Masil 대표", "CEO", "이사회", "그룹", "계약 담당",
@@ -56,6 +60,7 @@ class Scenario:
     requests: tuple[dict, ...]
     script: tuple[dict, ...]
     register_contracts: tuple[str, ...] = ()
+    demo_plans: tuple[dict, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -123,6 +128,43 @@ def _check_target(name: str, where: str, item: dict, plans: list, contracts: lis
         raise _fail(name, f"{where}의 기안 {item['plan']!r}이 plans에 없음")
     if has_contract and item["contract"] not in contracts:
         raise _fail(name, f"{where}의 계약 {item['contract']!r}이 contracts에 없음")
+
+
+def _check_demo_plans(name: str, rows) -> tuple[dict, ...]:
+    if not isinstance(rows, list):
+        raise _fail(name, "demo_plans는 목록이어야 함")
+    source = _source_plans()
+    editable = set(_db._PLAN_EDITABLE)
+    seen: set[str] = set()
+    for i, d in enumerate(rows):
+        where = f"demo_plans[{i}]"
+        if not isinstance(d, dict):
+            raise _fail(name, f"{where}는 객체여야 함")
+        for k in ("id", "base", "override", "note"):
+            if k not in d:
+                raise _fail(name, f"{where}에 {k} 없음")
+        if not isinstance(d["id"], str) or not d["id"].strip():
+            raise _fail(name, f"{where}의 id가 잘못됨")
+        if d["id"] in source:
+            raise _fail(name, f"{where}의 id {d['id']!r}가 원본 기안 ID와 겹침")
+        if d["id"] in seen:
+            raise _fail(name, f"{where}의 id {d['id']!r}가 중복됨")
+        seen.add(d["id"])
+        if d["base"] not in source:
+            raise _fail(name, f"{where}의 base {d['base']!r}가 원본 기안 파일에 없음")
+        if not isinstance(d["override"], dict):
+            raise _fail(name, f"{where}의 override는 객체여야 함")
+        bad = sorted(set(d["override"]) - editable)
+        if bad:
+            raise _fail(name, f"{where}의 override에 기안 등록부에 없는 항목 {bad} (고칠 수 있는 항목: {', '.join(sorted(editable))})")
+        for k, v in d["override"].items():
+            if k in _db._DATE_COLUMNS:
+                _check_date(name, f"{where}.override.{k}", v)
+            elif k in _db._INT_COLUMNS and (not isinstance(v, int) or isinstance(v, bool) or v < 0):
+                raise _fail(name, f"{where}의 override.{k}는 0 이상 정수여야 함: {v!r}")
+        if not isinstance(d["note"], str) or not d["note"].strip():
+            raise _fail(name, f"{where}의 note(시연용 가정 설명)가 비어 있음")
+    return tuple(rows)
 
 
 def _check_step(name: str, i: int, s, plans: list, contracts: list) -> None:
@@ -212,6 +254,7 @@ def load(name: str, demo_dir: str | Path | None = None) -> Scenario:
     missing = [k for k in _TOP_KEYS if k not in body]
     if missing:
         raise _fail(name, f"항목이 없음: {', '.join(missing)}")
+    demo_plans = _check_demo_plans(name, body.get("demo_plans", []))
     plans, contracts = body["plans"], body["contracts"]
     reg = body.get("register_contracts", [])
     for k, v in (("plans", plans), ("contracts", contracts), ("register_contracts", reg)):
@@ -229,7 +272,7 @@ def load(name: str, demo_dir: str | Path | None = None) -> Scenario:
     for i, s in enumerate(body["script"]):
         _check_step(name, i, s, plans, contracts)
     return Scenario(name, str(body["title"]), str(body["description"]), tuple(plans), tuple(contracts),
-                    tuple(body["requests"]), tuple(body["script"]), tuple(reg))
+                    tuple(body["requests"]), tuple(body["script"]), tuple(reg), demo_plans)
 
 
 def _source_plans() -> dict[str, dict]:
@@ -249,11 +292,12 @@ def check_refs(store: Store, sc: Scenario) -> None:
     """시연 파일이 고른 기안·계약이 등록부나 원본에 있는지(초기화 전에 확인한다)."""
     source = _source_plans()
     missing_plans = []
+    demo_ids = {d["id"] for d in sc.demo_plans}
     for pid in sc.plans:
         try:
             store.get_plan(pid)
         except KeyError:
-            if pid not in source:
+            if pid not in source and pid not in demo_ids:
                 missing_plans.append(pid)
     missing_contracts = [c for c in (*sc.contracts, *sc.register_contracts) if registry_contract(store, c) is None and _notice(c) is None]
     if missing_plans:
@@ -275,6 +319,18 @@ def register_plan(store: Store, plan_id: str) -> int:
               "expected_gmv_krw": r["expected_gmv_krw"], "settlement_date": r["settlement_date"],
               "contract_deadline": r["contract_deadline"], "source_file": loader.PLAN_SOURCE}
     return store.add_plan(fields, SEED_ACTOR, origin="시연")
+
+
+def register_demo_plan(store: Store, demo: dict) -> int:
+    """시연 전용 기안: 원본 기안(base)을 복사하고 override만 바꿔 origin='시연'으로 넣는다. note도 함께 남김."""
+    base = _source_plans()[demo["base"]]
+    camp = next((c for c in loader.campaign_master_rows() if c["campaign_id"] == base["campaign_id"]), {})
+    fields = {"plan_id": demo["id"], "campaign_id": base["campaign_id"], "influencer_id": camp.get("influencer_id"),
+              "channel": camp.get("sales_channel"), "requested_budget_krw": base["requested_budget_krw"],
+              "expected_gmv_krw": base["expected_gmv_krw"], "settlement_date": base["settlement_date"],
+              "contract_deadline": base["contract_deadline"], "source_file": ""}  # 별도 문서가 없는 기안: 총액은 자기 금액
+    fields.update(demo["override"])
+    return store.add_plan(fields, SEED_ACTOR, origin="시연", extra={"note": demo["note"], "base": demo["base"]})
 
 
 def register_contract(store: Store, influencer_code: str) -> int:

@@ -118,13 +118,17 @@ def _run(store, name, *responses):
 
 
 def test_상신_대본은_상신_이벤트와_재결재로_끝난다(store):
-    eng, (cid,), out = _run(store, "scenario_1_escalate", ACCEPT, ACCEPT)
+    eng = Engine(store, provider=FakeProvider([ACCEPT, ACCEPT]))
+    (cid,) = eng.seed("scenario_1_escalate")
+    assert store.get_case(cid)["facts"]["approvers"] == ["마케팅팀"]  # 규칙 판정은 마케팅팀 전결
+    out = [eng.play(s) for s in scenarios.load("scenario_1_escalate").script]
     c = store.get_case(cid)
     assert c["status"] == "1차 집행" and store.get_clock() == date(2026, 9, 7)
+    assert c["facts"]["approvers"] == ["Masil 대표"]
     ups = store.events(cid, kind="상신")
-    assert len(ups) == 1 and ups[0]["actor"] == "Masil 대표" and ups[0]["detail"]["opinion"] == "승인 권고"
-    assert out[2]["to"] == "CEO" and out[2]["required_roles"] == ["CEO"]
-    assert c["facts"]["approved_roles"] == ["CEO"]  # 상신한 Masil 대표는 결재선에서 빠지고 CEO가 다시 결재
+    assert len(ups) == 1 and ups[0]["actor"] == "마케팅팀장" and ups[0]["detail"]["opinion"] == "승인 권고"
+    assert out[2]["to"] == "Masil 대표" and out[2]["required_roles"] == ["Masil 대표"]
+    assert c["facts"]["approved_roles"] == ["Masil 대표"]  # 상신한 마케팅팀은 결재선에서 빠지고 Masil 대표가 다시 결재
     assert {(t["dept"], t["title"]) for t in store.list_tasks(cid)} >= {("물류", "물류 출고"), ("CS", "CS 대비")}
 
 
