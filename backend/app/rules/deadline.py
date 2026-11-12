@@ -18,7 +18,7 @@ def deny_date(deadline: date, buffer_days: int | None = None) -> date:
 
 
 def approval_deadline(deadline: date, buffer_days: int | None = None) -> date:
-    """승인 마감일 = 기본 거부 실행일 - 1일(그날까지 승인·상신 가능)."""
+    """마지막 승인일 = 기본 거부 실행일 - 1일(그날까지 승인·상신 가능, 이날 남은 승인권자에게 알림)."""
     return deny_date(deadline, buffer_days) - timedelta(days=1)
 
 
