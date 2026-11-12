@@ -15,6 +15,8 @@
     반품  change_of_mind, color(건수)
     공지  actor                              (캠페인 담당이 1차 수량을 소비자에게 공지: 재고·물류 예약)
     발송  actor                              (계약 담당이 조건변경 통보문을 상대에게 발송)
+    상신  actor, stage("1차"|"2차"), opinion(승인 권고|반대 권고), reason   (승인권자가 자기 권한을 넘는다며 상급자에게 올림)
+    예외 승인  actor, qty, reason            (반품으로 2차가 자동 보류된 건을 2차 승인권자 중 최고 역할이 이유를 적어 승인)
     기준일 date(대상 없음)
   date가 있으면 그 날짜로 기준일을 옮긴 뒤 행동한다.
 """
@@ -34,8 +36,11 @@ ROLES = ("캠페인 담당", "마케팅팀", "Masil 대표", "CEO", "이사회",
          "물류", "SCM", "CS", "품질", "에이전시", "인플루언서 측")
 DECISIONS = ("승인", "분할승인", "거절")
 ACTION_FIELDS = {"회신": ("dept", "text"), "결정": ("actor", "decision"), "리뷰": ("reviews",),
-                 "반품": ("change_of_mind", "color"), "판매": ("actor", "orders", "returns"), "공지": ("actor",), "발송": ("actor",), "기준일": ("date",)}
-TARGETED = ("회신", "결정", "리뷰", "반품", "판매", "공지", "발송")
+                 "반품": ("change_of_mind", "color"), "판매": ("actor", "orders", "returns"), "공지": ("actor",), "발송": ("actor",), "상신": ("actor", "stage", "opinion", "reason"),
+                 "예외 승인": ("actor", "qty", "reason"), "기준일": ("date",)}
+TARGETED = ("회신", "결정", "리뷰", "반품", "판매", "공지", "발송", "상신", "예외 승인")
+UP_STAGES = ("1차", "2차")
+UP_OPINIONS = ("승인 권고", "반대 권고")
 _TOP_KEYS = ("title", "description", "plans", "contracts", "requests", "script")
 _NAME = re.compile(r"^[\w-]+$")
 SEED_ACTOR = "시연"
@@ -143,6 +148,22 @@ def _check_step(name: str, i: int, s, plans: list, contracts: list) -> None:
     elif action in ("공지", "발송"):
         if not isinstance(s["actor"], str) or not s["actor"].strip():
             raise _fail(name, f"{where}의 actor가 잘못됨")
+    elif action == "상신":
+        if not isinstance(s["actor"], str) or not s["actor"].strip():
+            raise _fail(name, f"{where}의 actor가 잘못됨")
+        if s["stage"] not in UP_STAGES:
+            raise _fail(name, f"{where}의 stage는 {' 또는 '.join(UP_STAGES)}여야 함: {s['stage']!r}")
+        if s["opinion"] not in UP_OPINIONS:
+            raise _fail(name, f"{where}의 opinion은 {' 또는 '.join(UP_OPINIONS)} 중 하나여야 함: {s['opinion']!r}")
+        if not isinstance(s["reason"], str) or not s["reason"].strip():
+            raise _fail(name, f"{where}의 reason이 비어 있음")
+    elif action == "예외 승인":
+        if not isinstance(s["actor"], str) or not s["actor"].strip():
+            raise _fail(name, f"{where}의 actor가 잘못됨")
+        if not isinstance(s["qty"], int) or isinstance(s["qty"], bool) or s["qty"] < 1:
+            raise _fail(name, f"{where}의 qty는 1 이상 정수여야 함")
+        if not isinstance(s["reason"], str) or not s["reason"].strip():
+            raise _fail(name, f"{where}의 reason이 비어 있음")
     elif action == "결정":
         if s["decision"] not in DECISIONS:
             raise _fail(name, f"{where}의 decision은 {', '.join(DECISIONS)} 중 하나여야 함: {s['decision']!r}")

@@ -72,17 +72,16 @@ P_LOGISTICS, P_CONTENT = "물류 처리 능력", "콘텐츠 수정"
 P_STOCK, P_NOTICE = "안전재고 사용", "통보 회신"  # SCM의 안전재고 사용 응답 / 인플루언서 측의 통보 회신
 
 # 역할
-LOGISTICS, CS, CAMPAIGN, CONTRACT_OWNER = "물류", "CS", "캠페인 담당", "계약 담당"
 SCM, MARKETING, PARTNER = "SCM", "마케팅팀", "인플루언서 측"
 LIVE = "라이브"  # 원본 판매 채널 값: 라이브 방송 판매는 전용 코드로 효과를 가른다
 # 거절이 "애매한 회신"이 아니라 그 부서의 결정인 요청 목적(SCM이 안전재고 사용을 거절하는 것은 정해진 답)
 DEFINITIVE_REFUSAL = (P_STOCK,)
 # 값이 역할 목록(쉼표로 구분)인 정책 항목: 바꿀 때 모르는 역할을 넣을 수 없다
+ROLE_KEYS = ("roles.campaign", "roles.contract", "roles.logistics", "roles.cs")  # 값이 역할 하나인 정책 항목: 사람 목록에 있는 역할이어야 한다
 ROLE_LIST_KEYS = ("admin.policy_editors", "admin.review_inputters", "admin.return_inputters", "admin.registry_editors")
 # 조건변경 통보 재협상안(설계 5.2): 성과 피 기준을 총매출이 아니라 공제 후 순액으로. 고정 피 금액은 시스템이 정하지 않는다.
 NET_BASE = "공제 후 순액"
 NET_DEDUCTIONS = ("반품 환불", "쿠폰", "채널 수수료")
-OWNER = {KIND_PLAN: CAMPAIGN, KIND_CONTRACT: CONTRACT_OWNER}
 # 승인권자 표기(rules.approver) → 승인하는 역할. 보고만 받는 표기는 승인 대상이 아니다.
 APPROVER_ROLE = {"이사회 의결": "이사회", "그룹 확인": "그룹"}
 REPORT_ONLY = {"그룹 보고": "그룹"}
@@ -93,6 +92,7 @@ CHANGE_OF_MIND, COLOR_RETURN = "단순변심", "색상불만"  # 원본 반품 �
 COLOR_REVIEW = "색상불일치"  # 리뷰 해석 사유 값
 NO_VOLUME = "추정 불가 — 담당자 입력 필요"
 ALLOC_HOLD, ALLOC_FULL, ALLOC_PARTIAL = "보류", "전량", "조건부"
+TASK_VOLUME = "물량 입력"  # 원본 표본이 없는 기안의 물량을 담당자가 넣는 작업(제목)
 EV_WARN, EV_REPORT, EV_REAPPROVE, EV_DRIFT = "조기경고", "그룹보고", "재승인알림", "등록부변경경고"
 EV_SPLIT, EV_STOCK, EV_ANNOUNCE, EV_BLOCK = "분할안변경", "재고부족", "공지", "1차차단"
 EV_UNBLOCK = "차단해제"  # 등록부 집행일을 고쳐 1차 차단이 풀림(사용자 결정 2026-11-11)
@@ -111,7 +111,7 @@ P2_REJECT, P2_DENY, P2_EXECUTED = "거절", "기본 거부", "집행"  # phase2_
 P2_NONE = "2차 없음"  # 2차 취소·판매율 조절 0개로 2차가 없어진 건이 반품 관찰을 마치고 완료될 때의 결과
 EV_P2_SHIFT = "2차집행일연기"  # 승인 기간을 확보하려고 2차 집행일을 민 일
 EV_UP, EV_UP_VOID = "상신", "상신무효"  # 승인권자가 자기 권한을 넘는다며 상급자에게 올림 / 등록부 변경 등으로 결재선이 다시 정해져 무효
-UP_OPINIONS = ("승인 권고", "반대 권고")
+UP_OPINIONS = scenarios.UP_OPINIONS
 UP_LABEL = {v: k for k, v in APPROVER_ROLE.items()}  # 역할 -> 승인권자 표기(이사회 -> 이사회 의결)
 P2_DECISIONS = (D_APPROVE, D_REJECT)  # 2차 결정은 분할 승인이 없다
 CHOICE_CONTINUE, CHOICE_CANCEL = "2차 계속", "2차 취소"
@@ -208,8 +208,45 @@ class Engine:
         self._handlers = {P_LOGISTICS: self._on_logistics, P_CONTENT: self._on_content_fix,
                           P_STOCK: self._on_stock, P_NOTICE: self._on_notice}
         self._lock = threading.RLock()
+        self._check_roles()
 
     # ---------------------------------------------------------------- 기반
+
+    # 담당 역할 이름은 코드가 아니라 정책(roles.*)에서 호출 시점에 읽는다
+    @property
+    def campaign(self) -> str:
+        return policy.get("roles.campaign")
+
+    @property
+    def contract_owner(self) -> str:
+        return policy.get("roles.contract")
+
+    @property
+    def logistics(self) -> str:
+        return policy.get("roles.logistics")
+
+    @property
+    def cs(self) -> str:
+        return policy.get("roles.cs")
+
+    def _volume_due(self, deadline: date) -> date:
+        """물량 입력 기한 = 마지막 승인일 - volume.input_lead_days(물량이 들어온 뒤 결재할 시간). 오늘보다 이르면 오늘."""
+        return max(self._today(), approval_deadline(deadline) - timedelta(days=policy.get("volume.input_lead_days")))
+
+    def _sync_volume_task(self, case_id: int, deadline: date, actor: str) -> None:
+        for t in self.store.list_tasks(case_id):
+            if t["title"] == TASK_VOLUME and t["status"] != "완료":
+                self.store.set_task_due(t["id"], self._volume_due(deadline), actor)
+
+    def _owner(self, kind: str) -> str:
+        return self.campaign if kind == KIND_PLAN else self.contract_owner
+
+    def _check_roles(self) -> None:
+        """정책의 담당 역할이 사람 목록에 모두 있는지(없으면 무엇이 빠졌는지 알린다)."""
+        have = set(self.people.people.values())
+        missing = [f"{k}={policy.get(k)!r}" for k in ROLE_KEYS if policy.get(k) not in have]
+        if missing:
+            raise ValueError(f"사람 목록에 없는 담당 역할이 정책에 있음: {', '.join(missing)} — 사람 목록의 역할: {', '.join(sorted(have))}")
 
     def _provider(self, task: str) -> Provider:
         if self._fixed is not None:
@@ -336,9 +373,9 @@ class Engine:
         }
         cid = self.store.create_case(KIND_PLAN, plan_id, facts, S_DRAFT)
         if vol["units"] is None:
-            self._task_once(cid, CAMPAIGN, "물량 입력", _d(plan["contract_deadline"]),
+            self._task_once(cid, self.campaign, TASK_VOLUME, self._volume_due(_d(plan["contract_deadline"])),
                             f"{plan_id}: {NO_VOLUME}. 입력 전에는 물류·재고 할당 판정을 보류한다")
-        self.store.add_request(cid, LOGISTICS, self._logistics_text(plan, vol), False, purpose=P_LOGISTICS)
+        self.store.add_request(cid, self.logistics, self._logistics_text(plan, vol), False, purpose=P_LOGISTICS)
         self.store.set_status(cid, S_WAIT_REPLY, actor, "물류 처리 능력 회신 요청")
         return cid
 
@@ -427,6 +464,10 @@ class Engine:
         elif action == "리뷰":
             g = self.add_reviews(cid, [(p, t) for p, t in step["reviews"]])
             out = {"case_id": cid, "status": self.store.get_case(cid)["status"], "gate": asdict(g)}
+        elif action == "상신":
+            out = self.escalate(cid, step["actor"], step["stage"], step["opinion"], step["reason"])
+        elif action == "예외 승인":
+            out = self.approve_phase2_exception(cid, step["actor"], step["qty"], step["reason"])
         elif action == "판매":
             out = self.record_phase1_sales(cid, step["actor"], step["orders"], step["returns"])
         else:
@@ -468,6 +509,8 @@ class Engine:
     def change_policy(self, actor: str, key: str, value, reason: str) -> None:
         """정책 값을 바꾼다(검증·이력은 저장소). 편집 역할 목록을 바꿀 때는 모르는 역할을 넣을 수 없다."""
         self._require_policy_editor(actor, "정책")
+        if key in ROLE_KEYS and str(value).strip() not in set(self.people.people.values()):
+            raise ValueError(f"담당 역할은 사람 목록에 있는 역할이어야 함: {value!r}")
         if key in ROLE_LIST_KEYS:
             names = [r.strip() for r in str(value).split(",") if r.strip()]
             bad = [r for r in names if r not in scenarios.ROLES]
@@ -691,6 +734,8 @@ class Engine:
         if case["kind"] == KIND_PLAN and "phase1_date" in changes:
             self._notify_date(case_id, "1차", changes["phase1_date"]["before"], changes["phase1_date"]["after"],
                               "등록부 집행일 수정", actor)
+        if case["kind"] == KIND_PLAN and "deadline" in changes:
+            self._sync_volume_task(case_id, _d(f["deadline"]), actor)  # 확정 기한이 바뀌면 물량 입력 기한도 맞춘다
         if case["kind"] == KIND_PLAN and "settlement_date" in changes and f.get("logistics"):
             self._recheck_stock(case_id)  # 집행일이 바뀌었으니 재고 점검·분할안을 새 날짜로 다시 돌린다
             f = self.store.get_case(case_id)["facts"]
@@ -719,7 +764,7 @@ class Engine:
             text = f"{case['ref_id']} {reason}"
             for role in _required_roles(f):
                 self.store.add_event(case["id"], EV_BLOCK, actor, {"target": role, "text": text})
-            self._task_once(case["id"], CAMPAIGN, "1차 차단 확인", self._today(), text)
+            self._task_once(case["id"], self.campaign, "1차 차단 확인", self._today(), text)
             return []
         f["phase1_blocked"] = None
         self.store.update_facts(case["id"], f, actor, "집행일 변경: 1차 차단 해제")
@@ -805,7 +850,7 @@ class Engine:
             return
         case = self.store.get_case(case_id)
         f = case["facts"]
-        roles = [CAMPAIGN, LOGISTICS, CS]
+        roles = [self.campaign, self.logistics, self.cs]
         if f.get(STAGES[stage][0]):
             roles += [r for r in _required_roles(f, stage) if r not in roles]
         label = "1차" if stage == "1차" else "2차"
@@ -845,12 +890,12 @@ class Engine:
         if not deadline_actions(_d(f["deadline"]), d, approved=False):
             return None
         text = f"{case['ref_id']} 확정 기한 {_md(_d(f['deadline']))} 전 SCM 회신 사람 확인 미처리(승인은 모였으나 SCM 회신 해석을 사람이 확인해야 확정됨)"
-        self.store.add_event(case["id"], EV_WARN, "시스템", {"target": CAMPAIGN, "pending": [], "text": text,
+        self.store.add_event(case["id"], EV_WARN, "시스템", {"target": self.campaign, "pending": [], "text": text,
                                                          "deadline": f["deadline"], "scm_human": True,
                                                          "request_ids": fresh})
         f["scm_human_warned_on"] = {**warned, **{str(rid): d.isoformat() for rid in fresh}}  # 요청별 방치 올림 기준 시점
         self.store.update_facts(case["id"], f, "시스템", "SCM 사람 확인 미처리 경고")
-        return {"date": d.isoformat(), "case_id": case["id"], "action": "조기경고", "target": CAMPAIGN, "text": text}
+        return {"date": d.isoformat(), "case_id": case["id"], "action": "조기경고", "target": self.campaign, "text": text}
 
     # ---------------------------------------------------------------- 방치 올림 (추가 결정 9)
 
@@ -899,7 +944,7 @@ class Engine:
             if not on:
                 continue
             case = self.store.get_case(case["id"])  # 앞 요청의 올림 기록이 반영된 사실로
-            got = self._escalate_stale(case, self._human_key(rid), _d(on), OWNER[KIND_PLAN], _required_roles(f), "경고",
+            got = self._escalate_stale(case, self._human_key(rid), _d(on), self._owner(KIND_PLAN), _required_roles(f), "경고",
                                        d, "SCM 회신 사람 확인 방치")
             if got:
                 out.append(got)
@@ -927,7 +972,7 @@ class Engine:
         if case["status"] != S_PHASE2_HOLD or f.get("phase2_decision") or task is None:
             return []
         roles = _required_roles(f, "2차") if f.get(STAGES["2차"][0]) else _required_roles(f)
-        got = self._escalate_stale(case, STALE_PHASE2_HOLD, _d(task["due"]), CAMPAIGN, roles, "작업 생성", d,
+        got = self._escalate_stale(case, STALE_PHASE2_HOLD, _d(task["due"]), self.campaign, roles, "작업 생성", d,
                                    "2차 보류 판단 방치")
         return [got] if got else []
 
@@ -940,8 +985,8 @@ class Engine:
             raise ValueError("사람 확인 상태인 요청만 처리할 수 있음")
         role = self.role_of(actor)
         key = self._human_key(request_id) if req["purpose"] == P_STOCK else req["purpose"]
-        if not self._can_handle(case["facts"], key, role, OWNER[case["kind"]]):
-            raise PermissionError(f"{actor}({role})는 이 사람 확인을 처리할 수 없음 — {OWNER[case['kind']]}"
+        if not self._can_handle(case["facts"], key, role, self._owner(case["kind"])):
+            raise PermissionError(f"{actor}({role})는 이 사람 확인을 처리할 수 없음 — {self._owner(case['kind'])}"
                                   "(또는 방치로 올려 받은 사람)만")
         return self.reply(request_id, text, attachments)
 
@@ -980,7 +1025,10 @@ class Engine:
         if case["kind"] == KIND_PLAN:
             self.store.set_status(case["id"], S_HOLD, "시스템", "확정 보류(철회)")
             status = S_HOLD
-            self._task_once(case["id"], CAMPAIGN, "확정 보류(철회) 처리", d,
+            for t in self.store.list_tasks(case["id"]):  # 확정하지 않으니 남은 물량 입력은 필요 없다
+                if t["title"] == TASK_VOLUME and t["status"] != "완료":
+                    self.store.set_task_status(t["id"], "완료", "시스템")
+            self._task_once(case["id"], self.campaign, "확정 보류(철회) 처리", d,
                             f"{case['ref_id']}: 기한 {deadline}까지 승인이 없어 확정하지 않음. 상대측에 보류·철회를 알림")
         else:
             status = self._draft_notice(case, d)
@@ -996,13 +1044,13 @@ class Engine:
         if not f.get("notice_overdue_warned_on"):
             text = (f"{case['ref_id']} 통보 기한 {_md(_d(f['deadline']))}이 지났는데 조건변경 통보가 발송되지 않음 — "
                     "통보하지 않으면 계약이 자동 갱신됨")
-            self.store.add_event(case["id"], EV_WARN, "시스템", {"target": CONTRACT_OWNER, "pending": [], "text": text,
+            self.store.add_event(case["id"], EV_WARN, "시스템", {"target": self.contract_owner, "pending": [], "text": text,
                                                              "deadline": f["deadline"], "notice_overdue": True})
             f["notice_overdue_warned_on"] = d.isoformat()
             self.store.update_facts(case["id"], f, "시스템", "통보 기한 초과 경고")
-            out.append({"date": d.isoformat(), "case_id": case["id"], "action": "조기경고", "target": CONTRACT_OWNER,
+            out.append({"date": d.isoformat(), "case_id": case["id"], "action": "조기경고", "target": self.contract_owner,
                         "text": text})
-        got = self._escalate_stale(self.store.get_case(case["id"]), STALE_NOTICE, _d(f["deadline"]), CONTRACT_OWNER,
+        got = self._escalate_stale(self.store.get_case(case["id"]), STALE_NOTICE, _d(f["deadline"]), self.contract_owner,
                                    _required_roles(f), "통보 기한", d, "조건변경 통보 미발송")
         return out + ([got] if got else [])
 
@@ -1050,7 +1098,7 @@ class Engine:
         self.store.set_request_status(request_id, R_HUMAN, "AI", why)
         if req["purpose"] == P_NOTICE:
             self.store.set_status(case["id"], S_HUMAN, "AI", why)
-        self._task_once(case["id"], OWNER[case["kind"]], "회신 사람 확인", self._today(),
+        self._task_once(case["id"], self._owner(case["kind"]), "회신 사람 확인", self._today(),
                         f"{req['dept']} 회신 '{text}' — {why}. 사람이 확인해 주세요")
         return {**base, "ignored": False, "needs_human": True, "changed": False,
                 "status": self.store.get_case(case["id"])["status"], "judgment": result}
@@ -1298,7 +1346,7 @@ class Engine:
         text = f"{case['ref_id']} {reason}"
         for role in _required_roles(f):
             self.store.add_event(case_id, EV_BLOCK, actor, {"target": role, "text": text})
-        self._task_once(case_id, CAMPAIGN, "1차 차단 확인", self._today(), text)
+        self._task_once(case_id, self.campaign, "1차 차단 확인", self._today(), text)
 
     def _scm_timeout(self, case: dict, d: date) -> list[dict]:
         """SCM이 안전재고 사용 요청에 요청 후 scm.no_reply_days일이 지나도 답이 없으면 거절로 처리한다(사용자 결정).
@@ -1335,8 +1383,8 @@ class Engine:
     def adjust_phase1(self, case_id: int, actor: str, qty: int) -> dict:
         """캠페인 담당이 승인 전 분할안의 1차 수량을 줄인다. SCM이 거절한 건은 수량만 줄여 진행할 수 없다(PermissionError)."""
         role = self.role_of(actor)
-        if role != CAMPAIGN:
-            raise PermissionError(f"{actor}({role})는 1차 수량을 조정할 수 없음 — {CAMPAIGN}만")
+        if role != self.campaign:
+            raise PermissionError(f"{actor}({role})는 1차 수량을 조정할 수 없음 — {self.campaign}만")
         case = self.store.get_case(case_id)
         f = case["facts"]
         if (f.get("scm") or {}).get("state") == SCM_REFUSED:
@@ -1363,8 +1411,8 @@ class Engine:
         """캠페인 담당이 1차 수량을 소비자에게 공지한다. 시스템은 예약 가능 여부만 확인하고, 공지하면 그 수량을
         재고·물류에서 먼저 떼어 잠근다(공지 수량 고정). 모자라면 공지를 막는다(공지 후 미배송은 소비자 피해)."""
         role = self.role_of(actor)
-        if role != CAMPAIGN:
-            raise PermissionError(f"{actor}({role})는 공지할 수 없음 — 공지는 {CAMPAIGN}가 한다")
+        if role != self.campaign:
+            raise PermissionError(f"{actor}({role})는 공지할 수 없음 — 공지는 {self.campaign}가 한다")
         case = self.store.get_case(case_id)
         f = case["facts"]
         if case["kind"] != KIND_PLAN or not f.get("phase1"):
@@ -1417,7 +1465,7 @@ class Engine:
         self.store.set_status(case["id"], S_NOTICE_DRAFT, "AI", "조건변경 통보 초안 생성" if t.ok else "AI 초안 실패")
         note = "통보 초안을 확인하고 발송해 주세요" if t.ok else "AI 초안이 실패했으니 통보문을 직접 작성해 발송해 주세요"
         deadline = _d(f["deadline"])
-        self._task_once(case["id"], CONTRACT_OWNER, "통보 발송", deadline if d <= deadline else d,
+        self._task_once(case["id"], self.contract_owner, "통보 발송", deadline if d <= deadline else d,
                         f"{case['ref_id']}: {note}(통보 기한 {_md(deadline)}까지)")
         return S_NOTICE_DRAFT
 
@@ -1427,8 +1475,8 @@ class Engine:
         role = self.role_of(actor)
         case = self.store.get_case(case_id)
         f = case["facts"]
-        if not self._can_handle(f, STALE_NOTICE, role, CONTRACT_OWNER):
-            raise PermissionError(f"{actor}({role})는 통보를 발송할 수 없음 — {CONTRACT_OWNER}(또는 방치로 올려 받은 사람)만")
+        if not self._can_handle(f, STALE_NOTICE, role, self.contract_owner):
+            raise PermissionError(f"{actor}({role})는 통보를 발송할 수 없음 — {self.contract_owner}(또는 방치로 올려 받은 사람)만")
         base = {"case_id": case_id, "actor": actor}
         if case["kind"] != KIND_CONTRACT:
             raise ValueError("전속계약 건이 아님")
@@ -1494,7 +1542,7 @@ class Engine:
                 self.store.set_status(case_id, S_CHANGE_OK, actor, comment or "승인권자 거절 — 조건변경 통보로 진행")
                 return {**base, "changed": True, "status": self._draft_notice(case, self._today())}
             self.store.set_status(case_id, S_REJECTED, actor, comment or "승인권자 거절")
-            self._task_once(case_id, CAMPAIGN, "확정 보류(철회) 처리", self._today(),
+            self._task_once(case_id, self.campaign, "확정 보류(철회) 처리", self._today(),
                             f"{case['ref_id']}: 승인권자({role})가 거절해 확정하지 않음. 상대측에 보류·철회를 알림")
             return {**base, "changed": True, "status": S_REJECTED}
         if case["status"] == S_WAIT_REPLY:
@@ -1556,8 +1604,8 @@ class Engine:
         d1 = _d(f["phase1"]["date"])
         qty = f["phase1"]["qty"]
         qty_text = f"{qty:,}개" if qty is not None else f"수량 미정({NO_VOLUME})"
-        self._task_once(case_id, LOGISTICS, "물류 출고", d1, f"{case['ref_id']} {_md(d1)}부터 1차 {qty_text} 출고")
-        self._task_once(case_id, CS, "CS 대비", d1, f"{case['ref_id']} {_md(d1)}부터 1차 {qty_text} — 반품·문의 대비")
+        self._task_once(case_id, self.logistics, "물류 출고", d1, f"{case['ref_id']} {_md(d1)}부터 1차 {qty_text} 출고")
+        self._task_once(case_id, self.cs, "CS 대비", d1, f"{case['ref_id']} {_md(d1)}부터 1차 {qty_text} — 반품·문의 대비")
         self.store.set_status(case_id, S_PHASE1, "시스템", "1차 집행 시작")
         if f["phase2"]:
             self.store.set_status(case_id, S_PHASE2_LOCK, "시스템", OBSERVE_NOTE)
@@ -1579,7 +1627,7 @@ class Engine:
         actor가 없으면 시연 대본 재생이라 시연 모드에서만, 운영에서는 admin.review_inputters 역할만(거부면 저장도 AI 호출도 없음)."""
         self._require_inputter(actor, "admin.review_inputters", "리뷰")
         case = self.store.get_case(case_id)
-        owner = OWNER[case["kind"]]
+        owner = self._owner(case["kind"])
         color = human = 0
         for product, text in reviews:
             self.store.add_review(case_id, product, text)
@@ -1646,7 +1694,7 @@ class Engine:
                 "그래도 2차를 하려면 2차 승인권자 중 최고 역할이 이유를 적어 예외 승인해야 함")
         self.store.add_event(case_id, EV_P2_HOLD, "시스템", {"cause": "반품", "reasons": list(g.reasons),
                                                           "voided_roles": voided or [], "text": text})
-        self._task_once(case_id, CAMPAIGN, STALE_PHASE2_HOLD, self._today(), text)
+        self._task_once(case_id, self.campaign, STALE_PHASE2_HOLD, self._today(), text)
 
     def _regress_from_wait(self, case: dict, g: GateResult) -> None:
         """2차 승인 대기 중 게이트가 다시 닫혔다(M8): 받은 2차 승인을 무효로 하고, 반품 자동 보류면 2차 보류, 리뷰 잠금이면 2차 잠금."""
@@ -1910,8 +1958,8 @@ class Engine:
         판정(2차 수량 조절·보류·품절 기록)은 2차 게이트가 열릴 때: 반품 보류·리뷰 잠금·관찰 기간이 먼저다.
         HTTP 연결은 Task 12."""
         role = self.role_of(actor)
-        if role != CAMPAIGN:
-            raise PermissionError(f"{actor}({role})는 1차 판매 실적을 입력할 수 없음 — {CAMPAIGN}만")
+        if role != self.campaign:
+            raise PermissionError(f"{actor}({role})는 1차 판매 실적을 입력할 수 없음 — {self.campaign}만")
         for label, v in (("주문 수", orders), ("반품 수", returns)):
             if not isinstance(v, int) or isinstance(v, bool) or v < 0:
                 raise ValueError(f"{label}는 0 이상 정수여야 함: {v!r}")
@@ -1961,8 +2009,8 @@ class Engine:
         if f.get("phase2_decision"):
             raise ValueError("이미 판단한 건 — 판단은 한 번만")
         role = self.role_of(actor)
-        if not self._can_handle(f, STALE_PHASE2_HOLD, role, CAMPAIGN):
-            raise PermissionError(f"{actor}({role})는 2차 보류를 판단할 수 없음 — {CAMPAIGN}(또는 방치로 올려 받은 사람)만")
+        if not self._can_handle(f, STALE_PHASE2_HOLD, role, self.campaign):
+            raise PermissionError(f"{actor}({role})는 2차 보류를 판단할 수 없음 — {self.campaign}(또는 방치로 올려 받은 사람)만")
         if not isinstance(reason, str) or not reason.strip():
             raise ValueError("판단 이유 문장이 필요함")
         return case, f, rec
@@ -2187,8 +2235,8 @@ class Engine:
             if label in REPORT_ONLY:
                 self.store.add_event(case_id, EV_REPORT, "시스템",
                                      {"target": REPORT_ONLY[label], "text": f"{ref} 2차 승인 보고", "stage": "2차"})
-        self._task_once(case_id, LOGISTICS, "물류 출고(2차)", d2, f"{ref} {_md(d2)}부터 2차 {qty:,}개 출고")
-        self._task_once(case_id, CS, "CS 대비(2차)", d2, f"{ref} {_md(d2)}부터 2차 {qty:,}개 — 반품·문의 대비")
+        self._task_once(case_id, self.logistics, "물류 출고(2차)", d2, f"{ref} {_md(d2)}부터 2차 {qty:,}개 출고")
+        self._task_once(case_id, self.cs, "CS 대비(2차)", d2, f"{ref} {_md(d2)}부터 2차 {qty:,}개 — 반품·문의 대비")
         return S_PHASE2_EXEC
 
     def _phase2_stand_in(self, f: dict, role: str, pending: list[str]) -> list[str]:
@@ -2289,7 +2337,7 @@ class Engine:
         ref = case["ref_id"]
         sales = f.get("sales")
         if not sales:
-            self._task_once(case_id, CAMPAIGN, "1차 판매 실적 입력", today,
+            self._task_once(case_id, self.campaign, "1차 판매 실적 입력", today,
                             f"{ref} 2차를 열려면 1차 주문 수·반품 수가 필요함(판매율 = (주문-반품) ÷ 1차 {f['phase1']['qty']:,}개)")
             return []
         p1q, net = f["phase1"]["qty"], sales["net"]
@@ -2310,7 +2358,7 @@ class Engine:
             f["phase2_sellthrough"] = rec
             self.store.update_facts(case_id, f, "시스템", "판매율 하한 미만: 2차 보류")
             self.store.set_status(case_id, S_PHASE2_HOLD, "시스템", f"{ref} {core}")
-            self._task_once(case_id, CAMPAIGN, "2차 보류 판단", today, f"{ref} {core}")
+            self._task_once(case_id, self.campaign, "2차 보류 판단", today, f"{ref} {core}")
         elif rate >= 1:
             rec |= {"outcome": SELL_SOLDOUT, "qty_after": qty_b, "amount_after": amt_b, "excess": max(0, net - p1q)}
             core = (f"{basis}: 1차 전량 판매(품절) — 2차 계획 {qty_b:,}개 유지, 넘친 수요 {rec['excess']:,}개는 "
@@ -2560,9 +2608,9 @@ class Engine:
                 add(approval_deadline(_d(f["deadline"])).isoformat(), "알림", f"{c['ref_id']} 마지막 승인일(내일 기본 거부)",
                     c["id"], pending)
                 add(f["deadline"], "확정 기한", f"{c['ref_id']} 확정 기한", c["id"], pending)
-                add(f.get("phase1_date") or f["settlement_date"], "집행일", f"{c['ref_id']} 집행일", c["id"], [CAMPAIGN])
+                add(f.get("phase1_date") or f["settlement_date"], "집행일", f"{c['ref_id']} 집행일", c["id"], [self.campaign])
                 if f.get("phase2") and f["phase2"].get("date"):
-                    add(f["phase2"]["date"], "2차 집행일", f"{c['ref_id']} 2차 집행일", c["id"], [CAMPAIGN])
+                    add(f["phase2"]["date"], "2차 집행일", f"{c['ref_id']} 2차 집행일", c["id"], [self.campaign])
                 if c["status"] == S_PHASE2_WAIT:
                     add(approval_deadline(_d(f["phase2_deadline"])).isoformat(), "2차 알림",
                         f"{c['ref_id']} 2차 마지막 승인일(내일 기본 거부)", c["id"], _pending_roles(f, "2차"))
@@ -2571,11 +2619,11 @@ class Engine:
                 add(approval_deadline(_d(f["deadline"])).isoformat(), "알림", f"{c['ref_id']} 마지막 승인일(내일 기본 거부)",
                     c["id"], pending)
                 add(f["deadline"], "통보 기한", f"{c['ref_id']} 해지·조건변경 통보 기한", c["id"], pending)
-                add(f["expiry"], "계약 만료", f"{c['ref_id']} 계약 만료", c["id"], [CONTRACT_OWNER])
+                add(f["expiry"], "계약 만료", f"{c['ref_id']} 계약 만료", c["id"], [self.contract_owner])
         for k in self.store.list_contracts():
             if k["id"] not in with_case:
-                add(k["notice_deadline"], "통보 기한", f"{k['influencer_code']} 해지·조건변경 통보 기한", None, [CONTRACT_OWNER])
-                add(k["expiry_date"], "계약 만료", f"{k['influencer_code']} 계약 만료", None, [CONTRACT_OWNER])
+                add(k["notice_deadline"], "통보 기한", f"{k['influencer_code']} 해지·조건변경 통보 기한", None, [self.contract_owner])
+                add(k["expiry_date"], "계약 만료", f"{k['influencer_code']} 계약 만료", None, [self.contract_owner])
         shown = {c["id"] for c in self._cases()}
         for t in self.store.all_tasks():
             if t["status"] == "대기" and t["case_id"] in shown:

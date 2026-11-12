@@ -379,6 +379,18 @@ class Store:
             self._event(db, row["case_id"], "작업상태", actor,
                         {"task_id": task_id, "title": row["title"], "status": status})
 
+    def set_task_due(self, task_id: int, due: date, actor: str) -> None:
+        """작업 기한을 바꾼다(같은 값이면 아무것도 하지 않는다). 바꾼 사람과 함께 이벤트로 남긴다."""
+        with self._tx() as db:
+            row = db.execute("SELECT case_id, title, due FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if row is None:
+                raise KeyError(f"작업 없음: {task_id}")
+            if row["due"] == due.isoformat():
+                return
+            db.execute("UPDATE tasks SET due=? WHERE id=?", (due.isoformat(), task_id))
+            self._event(db, row["case_id"], "작업기한", actor,
+                        {"task_id": task_id, "title": row["title"], "before": row["due"], "after": due.isoformat()})
+
     def all_tasks(self, dept: str | None = None) -> list[dict]:
         """모든 사건의 작업(dept가 있으면 그 부서만)."""
         rows = (self._all("SELECT * FROM tasks ORDER BY id") if dept is None

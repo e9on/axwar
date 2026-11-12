@@ -44,6 +44,11 @@ _SCHEMA: dict[str, type] = {
     "admin.return_inputters": str,
     "admin.registry_editors": str,
     "phase2.min_approval_days": int,
+    "roles.campaign": str,
+    "roles.contract": str,
+    "roles.logistics": str,
+    "roles.cs": str,
+    "volume.input_lead_days": int,
 }
 
 # 0 초과 1 이하여야 하는 비율 항목(1.5 같은 값이 들어가면 규칙이 거꾸로 동작한다)

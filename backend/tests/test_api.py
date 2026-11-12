@@ -376,7 +376,7 @@ def test_기준일_뒤로_409(store):
 def test_시연_파일_목록과_없는_시연은_404(store):
     c, _, _ = client(store)
     names = {s["name"] for s in ok(c.get("/api/demo/scenarios"))}
-    assert {"scenario_1", "scenario_2", "scenario_2_reject", "scenario_2_sales", "scenario_3"} <= names
+    assert {"scenario_1", "scenario_2", "scenario_2_reject", "scenario_2_sales", "scenario_3", "scenario_1_escalate", "scenario_3_reject", "scenario_2_exception"} <= names
     s = next(x for x in ok(c.get("/api/demo/scenarios")) if x["name"] == "scenario_1")
     assert s["title"] and s["script"] and "description" in s
     assert "시연 파일" in detail_of(c.post("/api/demo/reset", json={"scenario": "없는장면"}), 404)
@@ -733,3 +733,9 @@ def test_상신_API_2차_승인_단계(store):
     d = ok(c.get(f"/api/cases/{cid}?viewer=그룹 CEO"))
     assert d["viewer"]["can_decide_phase2"] is True and d["escalations"][0]["stage"] == "2차"
     assert d["phase2"]["deadline"] == "2026-08-28" and d["phase2"]["plan"]["date"] == "2026-08-28"
+
+
+def test_조건_API가_새_역할_항목을_가정으로_보인다(store):
+    c, _, _ = client(store)
+    keys = {r["key"] for r in ok(c.get("/api/assumptions"))}
+    assert {"roles.campaign", "roles.contract", "roles.logistics", "roles.cs", "volume.input_lead_days"} <= keys
