@@ -43,15 +43,17 @@ function second(column: string, it: Item): { meta: string; text: string; seal: b
 }
 
 export default function TodoList() {
-  const { person } = useViewer()
+  const { person, failed: viewerFailed, retry: retryViewer } = useViewer()
   const { version } = useClock()
   const go = useCaseLink()
-  const { data, error, loading, retry } = useLoad<Todo>(person ? `/api/todo/${encodeURIComponent(person.name)}` : null, [person?.name, version])
+  const { data, error, retry } = useLoad<Todo>(person ? `/api/todo/${encodeURIComponent(person.name)}` : null, [person?.name, version])
 
   let body
-  if (error) {
+  if (!person && viewerFailed) {
+    body = <LoadFailed retry={retryViewer} message="보는 사람을 불러오지 못했어요" buttonName="보는 사람 다시 시도" />
+  } else if (error) {
     body = <LoadFailed retry={retry} />
-  } else if (loading || !data) {
+  } else if (!data) {
     body = <p className="muted">불러오는 중</p>
   } else {
     const filled = COLUMNS.filter((c) => Array.isArray(data[c]) && (data[c] as Item[]).length > 0)
@@ -87,6 +89,7 @@ export default function TodoList() {
 
   return (
     <section className="todo" aria-label="할 일">
+      <h2>할 일</h2>
       {body}
     </section>
   )

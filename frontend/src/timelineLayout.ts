@@ -1,3 +1,4 @@
+// hardcode-allow: 1.1 (굵은 글씨가 넓어지는 폭 배율 — 스타일 추정)
 /** 일정 띠 배치 계산(그리는 일과 분리). 날짜는 YYYY-MM-DD 문자열, 계산은 UTC 일수로. */
 
 export type CalEvent = { date: string; end: string | null; kind: string; label: string; case_id: number | null; roles: string[] }
@@ -7,7 +8,6 @@ export const dayNum = (iso: string): number => {
   const [y, m, d] = iso.split('-').map(Number)
   return Date.UTC(y, m - 1, d) / DAY
 }
-const iso = (n: number): string => new Date(n * DAY).toISOString().slice(0, 10)
 
 /** 달력 응답과 오늘을 모두 담는 범위를 월 단위로 넓힌다. start는 첫 달 1일, end는 마지막 달 다음 달 1일(포함하지 않음). */
 export function monthRange(dates: string[]): { start: string; end: string } {
@@ -29,16 +29,35 @@ export function monthsIn(start: string, end: string): { label: string; at: strin
   return out
 }
 
+/** 표시 크기. CSS가 이 값을 변수(--dot-*)로 받아 쓰므로 폭 추정과 실제 모양이 늘 같다. */
+export const DOT_PAD_PX = 8 // 표시 안쪽 좌우 여백(토큰 --s-2와 같은 값)
+export const DOT_BORDER_PX = 2 // 가장 굵은 테두리(알림)
+export const DOT_CHAR_PX = 12 // 글자 크기(토큰 --t-1과 같은 값), 한글 한 자 폭
+export const DOT_MAX_PX = 190 // 한 줄 최대 폭. 넘으면 두 줄
+export const DOT_GAP_PX = 6
+export const BOLD_RATIO = 1.1
+
 /** 날짜의 가로 위치(0~100%) */
 export const pct = (date: string, start: string, end: string): number =>
   ((dayNum(date) - dayNum(start)) / (dayNum(end) - dayNum(start))) * 100
+
+/** 띠(시작~끝, 끝날 포함)의 왼쪽 위치와 폭(%). */
+export function bandSpan(date: string, end: string, start: string, rangeEnd: string): { left: number; width: number } {
+  const total = dayNum(rangeEnd) - dayNum(start)
+  const left = ((dayNum(date) - dayNum(start)) / total) * 100
+  const right = ((dayNum(end) + 1 - dayNum(start)) / total) * 100
+  return { left, width: right - left }
+}
+
+/** 표시의 왼쪽 끝(px): 날짜 위치에 두되 트랙 오른쪽 끝을 넘으면 안쪽으로만 민다. */
+export const placeLeft = (x: number, w: number, trackWidth: number): number =>
+  Math.max(0, Math.min(x, trackWidth - w))
 
 export type Mark = {
   key: string
   date: string
   kind: string
   text: string // 보이는 글
-  title: string // 설명(접근 이름)
   events: CalEvent[]
   mine: boolean
 }
@@ -57,9 +76,9 @@ export function toMarks(events: CalEvent[], role: string | undefined, minGroup: 
     const mine = key.endsWith('|true')
     if (list.length >= minGroup) {
       const text = `${list[0].kind} ${list.length}건`
-      marks.push({ key, date: list[0].date, kind: list[0].kind, text, title: `${list[0].date} ${text}`, events: list, mine })
+      marks.push({ key, date: list[0].date, kind: list[0].kind, text, events: list, mine })
     } else {
-      list.forEach((e, i) => marks.push({ key: `${key}#${i}`, date: e.date, kind: e.kind, text: e.label, title: `${e.date} ${e.label}`, events: [e], mine }))
+      list.forEach((e, i) => marks.push({ key: `${key}#${i}`, date: e.date, kind: e.kind, text: e.label, events: [e], mine }))
     }
   }
   return marks.sort((a, b) => a.date.localeCompare(b.date) || a.key.localeCompare(b.key))

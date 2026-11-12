@@ -3,6 +3,8 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import App from './App'
+import css from './pages/Home.css?raw'
+import { DOT_PAD_PX } from './timelineLayout'
 import { fakeServer } from './test/fakeServer'
 
 const PEOPLE = [
@@ -173,5 +175,134 @@ describe('메인 화면', () => {
     fail = false
     await userEvent.click(screen.getAllByRole('button', { name: '다시 시도' })[0])
     expect(await screen.findByRole('heading', { name: '승인 대기' })).toBeInTheDocument()
+  })
+  it('일정_표시의_접근_이름에_날짜와_내용이_있다', async () => {
+    fakeServer(routes())
+    mount()
+    expect(await screen.findByRole('button', { name: /7월 16일.*P-2 확정 기한/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /7월 15일.*P-1 마지막 승인일.*내 차례.*알림/ })).toBeInTheDocument()
+  })
+
+  it('눈금이_정확한_날짜_위치에_있다', async () => {
+    fakeServer(routes())
+    mount()
+    await screen.findByRole('button', { name: /P-2 확정 기한/ })
+    const ticks = screen.getAllByTestId('tick')
+    const lefts = ticks.map((t) => parseFloat((t as HTMLElement).style.left))
+    // 범위 7/1~9/1(62일)에서 7/16은 15일째
+    expect(lefts.some((l) => Math.abs(l - (15 / 62) * 100) < 0.001)).toBe(true)
+  })
+
+  it('하회_띠의_시작과_폭이_끝날을_포함한다', async () => {
+    fakeServer(routes())
+    mount()
+    const band = await screen.findByTestId('band')
+    expect(parseFloat(band.style.left)).toBeCloseTo((19 / 62) * 100, 3)
+    expect(parseFloat(band.style.width)).toBeCloseTo((22 / 62) * 100, 3)
+  })
+
+  it('기준일을_읽지_못하면_다시_시도가_보인다', async () => {
+    let fail = true
+    fakeServer({
+      ...routes(),
+      'GET /api/clock': () => (fail ? { status: 500, json: { detail: '내부 오류' } } : { json: { date: '2026-07-12', mode: '시연' } }),
+    })
+    mount()
+    expect(await screen.findByText('기준일을 불러오지 못했어요')).toBeInTheDocument()
+    fail = false
+    await userEvent.click(screen.getByRole('button', { name: '기준일 다시 시도' }))
+    expect(await screen.findByRole('button', { name: /P-1 확정 기한/ })).toBeInTheDocument()
+  })
+
+  it('보는_사람을_읽지_못하면_할_일_칸에_다시_시도가_보인다', async () => {
+    let fail = true
+    fakeServer({
+      ...routes(),
+      'GET /api/people': () => (fail ? { status: 500, json: { detail: '내부 오류' } } : { json: PEOPLE }),
+    })
+    mount()
+    expect(await screen.findByText('보는 사람을 불러오지 못했어요')).toBeInTheDocument()
+    fail = false
+    await userEvent.click(screen.getByRole('button', { name: '보는 사람 다시 시도' }))
+    expect(await screen.findByText('지금 할 일이 없어요')).toBeInTheDocument()
+  })
+
+  it('보는_사람을_바꾸면_할_일을_다시_읽는다', async () => {
+    const other = '/api/todo/' + encodeURIComponent('Masil 대표')
+    const { calls } = fakeServer({
+      ...routes({ ...EMPTY_TODO, '승인 대기': [item(1, 'P-1')] }),
+      ['GET ' + other]: { json: { ...EMPTY_TODO, 작업: [item(2, 'P-2', { title: '물량 입력', due: '2026-07-14' })] } },
+    })
+    mount()
+    expect(await screen.findByRole('heading', { name: '승인 대기' })).toBeInTheDocument()
+    await userEvent.selectOptions(screen.getByLabelText('보는 사람'), 'Masil 대표')
+    expect(await screen.findByRole('heading', { name: '작업' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: '승인 대기' })).toBeNull()
+    expect(calls.filter((c) => c.path === other)).toHaveLength(1)
+  })
+
+  it('마감_알림만_도장색으로_표시된다', async () => {
+    fakeServer(routes({
+      ...EMPTY_TODO,
+      알림: [
+        item(1, 'P-1', { kind: '마감 알림', stage: '1차', text: '내일 기본 거부돼요' }),
+        item(2, 'P-2', { kind: '일반 알림', stage: '1차', text: '참고하세요' }),
+      ],
+    }))
+    mount()
+    expect((await screen.findByText('내일 기본 거부돼요')).dataset.seal).toBe('true')
+    expect(screen.getByText('참고하세요').dataset.seal).toBe('false')
+  })
+
+  it('기준일을_바꿔도_묶음_펼침이_유지된다', async () => {
+    const { calls } = fakeServer({
+      ...routes(EMPTY_TODO, [1, 2, 3].map((n) => ev('2026-07-16', '확정 기한', `P-${n} 확정 기한`, n, []))),
+      'POST /api/clock': { json: { date: '2026-07-13', mode: '시연', actions: [] } },
+    })
+    mount()
+    await userEvent.click(await screen.findByRole('button', { name: /확정 기한 3건/ }))
+    expect(screen.getByRole('list', { name: /목록/ })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '다음 날로' }))
+    await waitFor(() => expect(calls.filter((c) => c.path === '/api/calendar')).toHaveLength(2))
+    expect(screen.getByRole('list', { name: /목록/ })).toBeInTheDocument()
+    expect(screen.queryByText('불러오는 중')).toBeNull()
+  })
+
+  it('긴_일정_이름은_접근_이름에_전체가_있고_폭_추정_여백이_CSS와_같은_값이다', async () => {
+    const long = 'P-9 마지막 승인일 내일 기본 거부 됩니다 꼭 확인하세요'
+    fakeServer(routes(EMPTY_TODO, [ev('2026-07-15', '알림', long, 9, [])]))
+    mount()
+    const b = await screen.findByRole('button', { name: new RegExp(long) })
+    const track = b.parentElement as HTMLElement
+    expect(track.style.getPropertyValue('--dot-px')).toBe(`${DOT_PAD_PX}px`)
+  })
+
+  it('오늘_이후_일정이_없으면_안내가_보인다', async () => {
+    narrow(true)
+    fakeServer(routes(EMPTY_TODO, [ev('2026-07-01', '집행일', '지난 집행일', 9, [])]))
+    mount()
+    expect(await screen.findByText('오늘 이후 일정이 없어요')).toBeInTheDocument()
+  })
+
+  it('좁은_화면_내_차례와_알림은_접근_이름에도_드러난다', async () => {
+    narrow(true)
+    fakeServer(routes())
+    mount()
+    const list = await screen.findByRole('list', { name: '날짜 목록' })
+    expect(within(list).getByRole('button', { name: /P-1 마지막 승인일.*내 차례/ })).toBeInTheDocument()
+  })
+
+  it('제목_단계가_h1_h2_h3_순서다', async () => {
+    fakeServer(routes({ ...EMPTY_TODO, '승인 대기': [item(1, 'P-1')] }))
+    mount()
+    await screen.findByRole('heading', { name: '승인 대기' })
+    expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument()
+    expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual(['일정', '할 일'])
+  })
+
+  it('스타일: 초점이_잘리지_않고_지난_일정은_투명도를_쓰지_않는다', () => {
+    expect(css.length).toBeGreaterThan(100)
+    expect(css).not.toMatch(/\.track\s*\{[^}]*overflow:\s*hidden/)
+    expect(css).not.toMatch(/data-past[^}]*opacity/)
   })
 })

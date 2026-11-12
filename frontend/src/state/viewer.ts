@@ -4,27 +4,44 @@ import { api } from '../api'
 
 export type Person = { name: string; role: string }
 
-type ViewerValue = { person: Person | null; setPerson: (name: string) => void; people: Person[] }
+type ViewerValue = {
+  person: Person | null
+  setPerson: (name: string) => void
+  people: Person[]
+  /** 사람 목록을 읽지 못했는지, 다시 읽기 */
+  failed: boolean
+  retry: () => void
+}
 
 const ViewerContext = createContext<ViewerValue | null>(null)
 
 /** 지금 보는 사람. URL 쿼리 ?as= 와 같이 움직인다. 없거나 모르는 이름이면 목록 첫 사람. */
 export function ViewerProvider({ children }: { children: ReactNode }) {
   const [people, setPeople] = useState<Person[]>([])
+  const [failed, setFailed] = useState(false)
+  const [tries, setTries] = useState(0)
   const [params, setParams] = useSearchParams()
 
   useEffect(() => {
     let alive = true
     api.get<Person[]>('/api/people').then(
       (list) => {
-        if (alive) setPeople(list)
+        if (alive) {
+          setPeople(list)
+          setFailed(false)
+        }
       },
-      () => undefined, // 알림 줄이 이미 보여 줌
+      () => alive && setFailed(true), // 알림 줄도 보여 줌
     )
     return () => {
       alive = false
     }
-  }, [])
+  }, [tries])
+
+  const retry = () => {
+    setFailed(false)
+    setTries((n) => n + 1)
+  }
 
   const asked = params.get('as')
   const person = people.find((p) => p.name === asked) ?? people[0] ?? null
@@ -35,7 +52,7 @@ export function ViewerProvider({ children }: { children: ReactNode }) {
     setParams(next)
   }
 
-  return createElement(ViewerContext.Provider, { value: { person, setPerson, people } }, children)
+  return createElement(ViewerContext.Provider, { value: { person, setPerson, people, failed, retry } }, children)
 }
 
 export function useViewer(): ViewerValue {

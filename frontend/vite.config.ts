@@ -11,5 +11,6 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     globals: false,
+    css: true, // 스타일 규칙을 글로 검사하는 시험이 있음
   },
 })

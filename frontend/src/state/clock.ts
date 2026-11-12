@@ -8,6 +8,9 @@ type ClockValue = {
   mode: string | null
   /** 기준일이 바뀔 때마다 1씩 커지는 숫자. 다른 화면은 이 값이 바뀌면 다시 읽는다. */
   version: number
+  /** 기준일을 읽지 못했는지, 다시 읽기 */
+  failed: boolean
+  retry: () => void
   advance: (to: string) => Promise<void>
 }
 
@@ -16,18 +19,28 @@ const ClockContext = createContext<ClockValue | null>(null)
 export function ClockProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<{ date: string | null; mode: string | null }>({ date: null, mode: null })
   const [version, setVersion] = useState(0)
+  const [failed, setFailed] = useState(false)
+  const [tries, setTries] = useState(0)
 
   useEffect(() => {
     let alive = true
     api.get<ClockReply>('/api/clock').then(
       (reply) => {
-        if (alive) setState({ date: reply.date, mode: reply.mode })
+        if (alive) {
+          setState({ date: reply.date, mode: reply.mode })
+          setFailed(false)
+        }
       },
-      () => undefined,
+      () => alive && setFailed(true), // 알림 줄도 보여 줌
     )
     return () => {
       alive = false
     }
+  }, [tries])
+
+  const retry = useCallback(() => {
+    setFailed(false)
+    setTries((n) => n + 1)
   }, [])
 
   const advance = useCallback(async (to: string) => {
@@ -40,7 +53,7 @@ export function ClockProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  return createElement(ClockContext.Provider, { value: { ...state, version, advance } }, children)
+  return createElement(ClockContext.Provider, { value: { ...state, version, failed, retry, advance } }, children)
 }
 
 export function useClock(): ClockValue {

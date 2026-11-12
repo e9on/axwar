@@ -1,5 +1,6 @@
-.home { display: block; }
+.home { display: block; --bw: 2px; --col-min: 280px; --date-col: 6em; } /* 선 굵기·할 일 칸 최소 폭·날짜 열 폭: 이 화면 안에서만 쓰는 값 */
 .muted { color: var(--c-ink-3); }
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 /* 일정 띠 (시안 B) */
 .tl { background: var(--c-sheet); border-bottom: 1px solid var(--c-rule); padding: var(--s-4) var(--s-5) var(--s-5); }
@@ -7,11 +8,12 @@
 .tl-head h2 { font-size: var(--t-3); font-weight: var(--w-bold); }
 .tl-head span { color: var(--c-ink-3); font-size: var(--t-1); }
 
-.track-wrap { --tl-top: calc(var(--s-7) + var(--s-2)); --tl-row: calc(var(--s-5) + var(--s-2)); }
+/* 표시 한 칸: 글자 두 줄까지. --dot-px·--dot-border·--dot-font는 Timeline.tsx가 폭 추정과 같은 값으로 채운다. */
+.track-wrap { --tl-top: calc(var(--s-7) + var(--s-2)); }
 .track {
+  --tl-dot: calc(var(--dot-font) * 2.5 + var(--s-3)); --tl-row: calc(var(--tl-dot) + var(--s-2));
   position: relative;
   height: calc(var(--tl-top) + var(--rows, 1) * var(--tl-row));
-  overflow: hidden;
 }
 .month {
   position: absolute; top: 0; bottom: 0;
@@ -22,15 +24,15 @@
 }
 .band {
   position: absolute; top: var(--s-4); bottom: 0;
-  background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--c-band) 30%, transparent) 0 6px, color-mix(in srgb, var(--c-band) 12%, transparent) 6px 12px);
-  border-left: 2px solid var(--c-band); border-right: 2px solid var(--c-band);
+  background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--c-band) 30%, transparent) 0 var(--s-2), color-mix(in srgb, var(--c-band) 12%, transparent) var(--s-2) var(--s-4));
+  border-left: var(--bw) solid var(--c-band); border-right: var(--bw) solid var(--c-band);
 }
 .band span {
   position: absolute; top: calc(var(--s-5) + var(--s-1)); left: var(--s-2);
   font-size: var(--t-1); font-weight: var(--w-bold); color: var(--c-band-ink);
   background: var(--c-sheet); padding: 0 var(--s-1); border-radius: var(--r-1); white-space: nowrap;
 }
-.today { position: absolute; top: var(--s-4); bottom: 0; border-left: 2px solid var(--c-ink); z-index: 2; pointer-events: none; }
+.today { position: absolute; top: var(--s-4); bottom: 0; border-left: var(--bw) solid var(--c-ink); z-index: 2; pointer-events: none; }
 .today span {
   position: absolute; top: 0; left: var(--s-1);
   font-size: var(--t-1); font-weight: var(--w-bold);
@@ -39,14 +41,25 @@
 
 .dot {
   position: absolute; z-index: 3; box-sizing: border-box;
-  height: var(--s-5); padding: 0 var(--s-2);
+  display: flex; align-items: center;
+  height: var(--tl-dot); padding: 0 var(--dot-px);
   border: 1px solid var(--c-rule); border-radius: var(--r-1);
   background: var(--c-sheet); color: var(--c-ink-3);
-  font-size: var(--t-1); font-weight: var(--w-medium); line-height: 1;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left;
+  font-size: var(--dot-font); font-weight: var(--w-medium); line-height: 1.25;
+  text-align: left;
 }
+.dot .t { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+/* 눈금: 표시 왼쪽 끝이 밀려도 정확한 날짜 위치에 남는다 */
+.tick {
+  position: absolute; z-index: 1; width: 0;
+  top: calc(var(--tl-top) - var(--s-2));
+  height: calc(var(--s-2) + var(--row, 0) * var(--tl-row) + var(--tl-dot));
+  border-left: 1px solid var(--c-ink-3);
+}
+.tick[data-mine="true"] { border-left-color: var(--c-navy); }
+.tick[data-alert="true"] { border-left-color: var(--c-seal); }
 .dot[data-mine="true"] { background: var(--c-navy); border-color: var(--c-navy); color: var(--c-sheet); font-weight: var(--w-bold); }
-.dot[data-alert="true"] { border: 2px solid var(--c-seal); color: var(--c-seal); }
+.dot[data-alert="true"] { border: var(--dot-border) solid var(--c-seal); color: var(--c-seal); }
 .dot[data-alert="true"][data-mine="true"] { color: var(--c-sheet); }
 .dot[aria-disabled="true"] { cursor: default; }
 .dot:hover:not([aria-disabled="true"]) { border-color: var(--c-ink); }
@@ -60,10 +73,11 @@
 /* 할 일 (시안 A의 결재판 목록) */
 .todo {
   padding: var(--s-5);
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--s-5) var(--s-6);
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--col-min), 1fr)); gap: var(--s-5) var(--s-6);
   align-items: start;
 }
-.todo > .muted, .todo > .load-failed { grid-column: 1 / -1; }
+.todo > h2, .todo > .muted, .todo > .load-failed { grid-column: 1 / -1; }
+.todo > h2 { font-size: var(--t-4); }
 .col h3 { font-size: var(--t-2); color: var(--c-ink-2); font-weight: var(--w-bold); margin-bottom: var(--s-2); }
 .col ul { list-style: none; margin: 0; padding: 0; }
 .todo button {
@@ -82,13 +96,13 @@
 .date-list { list-style: none; margin: var(--s-3) 0 0; padding: 0; }
 .date-list button {
   display: flex; gap: var(--s-3); width: 100%; text-align: left; align-items: baseline;
-  background: none; border: 0; border-bottom: 1px solid var(--c-rule); padding: var(--s-2) 0; color: var(--c-ink-3);
+  background: none; border: 0; border-bottom: 1px solid var(--c-rule); padding: var(--s-2) 0; color: var(--c-ink);
 }
-.date-list .d { flex: none; min-width: 5.5em; font-variant-numeric: tabular-nums; }
+.date-list .d { flex: none; min-width: var(--date-col); font-variant-numeric: tabular-nums; }
+.date-list button[data-past="true"] { color: var(--c-ink-3); }
 .date-list button[data-mine="true"] { color: var(--c-navy); font-weight: var(--w-bold); }
 .date-list button[data-alert="true"] .l { color: var(--c-seal); font-weight: var(--w-bold); }
-.date-list button[data-past="true"] { opacity: 0.7; }
-.date-list-wrap .band { position: relative; top: 0; height: var(--s-6); border-left-width: 2px; }
+.date-list-wrap .band { position: relative; top: 0; height: var(--s-6); border-left-width: var(--bw); }
 .date-list-wrap .band span { top: 50%; transform: translateY(-50%); }
 .more { margin-top: var(--s-3); border: 1px solid var(--c-ink); border-radius: var(--r-2); background: var(--c-sheet); padding: var(--s-1) var(--s-3); font-weight: var(--w-bold); }
 

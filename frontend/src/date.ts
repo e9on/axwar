@@ -15,3 +15,9 @@ export function addDays(iso: string, days: number): string {
 export function withWeekday(iso: string): string {
   return `${iso} (${WEEKDAYS[parse(iso).getUTCDay()]})`
 }
+
+/** "9월 7일" 모양(스크린리더가 날짜를 읽기 쉽게). */
+export function koDate(iso: string): string {
+  const [, m, d] = iso.split('-').map(Number)
+  return `${m}월 ${d}일`
+}
