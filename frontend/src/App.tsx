@@ -35,7 +35,7 @@ function TopBar() {
         {demo && date && (
           <span className="clock-move">
             <button type="button" onClick={() => advance(addDays(date, 1))} title="기준일을 하루 뒤(다음 날)로 옮겨요">
-              하루 뒤로
+              다음 날로
             </button>
             <input type="date" aria-label="이동할 날짜" value={target} onChange={(e) => setTarget(e.target.value)} />
             <button type="button" disabled={!target} onClick={() => advance(target)}>

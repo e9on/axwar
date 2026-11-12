@@ -56,7 +56,7 @@ describe('화면 골격', () => {
       'POST /api/clock': { json: { date: '2026-07-13', mode: '시연', actions: [] } },
     })
     mount('/')
-    await userEvent.click(await screen.findByRole('button', { name: '하루 뒤로' }))
+    await userEvent.click(await screen.findByRole('button', { name: '다음 날로' }))
     await waitFor(() =>
       expect(calls).toContainEqual({ method: 'POST', path: '/api/clock', body: { date: '2026-07-13' } }),
     )
@@ -70,7 +70,7 @@ describe('화면 골격', () => {
     })
     mount('/')
     expect(await screen.findByText(/2026-07-12/)).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '하루 뒤로' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '다음 날로' })).toBeNull()
     expect(screen.queryByLabelText('이동할 날짜')).toBeNull()
   })
 
