@@ -21,6 +21,7 @@ class AiText:
     text: str
     model: str
     ok: bool
+    ledger_id: int | None = None  # 비용 장부 행 ID(예산 제공자를 거쳤을 때)
 
 
 def _fmt(v) -> str:
@@ -45,8 +46,8 @@ def _digits(text: str) -> set[str]:
     return {m.replace(",", "") for m in _NUMBER.findall(text)}
 
 
-def _fail(model: str = "") -> AiText:
-    return AiText(FALLBACK_TEXT, model, False)
+def _fail(model: str = "", ledger_id: int | None = None) -> AiText:
+    return AiText(FALLBACK_TEXT, model, False, ledger_id)
 
 
 def _write(p: Provider, system: str, user: str) -> AiText:
@@ -56,12 +57,12 @@ def _write(p: Provider, system: str, user: str) -> AiText:
         return _fail()
     text = (c.text or "").strip()
     if not text or c.stop_reason == "max_tokens":
-        return _fail(c.model)
+        return _fail(c.model, c.ledger_id)
     allowed = _digits(user)
     for n in _digits(text):
         if len(n) >= MIN_CHECKED_DIGITS and n not in allowed:
-            return _fail(c.model)
-    return AiText(text, c.model, True)
+            return _fail(c.model, c.ledger_id)
+    return AiText(text, c.model, True, c.ledger_id)
 
 
 def briefing(p: Provider, facts: dict) -> AiText:

@@ -103,3 +103,15 @@ def test_소수_사실은_반올림하지_않고_그대로_넘긴다():
     briefing(p, {"재구매율": 0.085, "손익분기 숨은 매출 비율": 0.247})
     user = p.calls[0][1]
     assert "0.085" in user and "0.247" in user
+
+
+def test_글쓰기_결과는_장부_행_ID를_싣는다():
+    class P:
+        model = "m"
+
+        def complete(self, system, user):
+            return Completion("요약입니다", 1, 1, "m", ledger_id=9)
+
+    assert briefing(P(), FACTS).ledger_id == 9
+    assert briefing(FakeProvider(["요약입니다"]), FACTS).ledger_id is None
+    assert briefing(FakeProvider([RuntimeError("x")]), FACTS).ledger_id is None

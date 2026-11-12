@@ -23,6 +23,7 @@ class GateResult:
     auto_stopped: bool
     reasons: tuple[str, ...]
     actions: tuple[str, ...]
+    blocked: bool = False  # 갱신 미확정인데 2차 집행일이 계약 만료 뒤(또는 날짜 없음): 시간이 지나도 못 연다
 
 
 def make_split(
@@ -104,7 +105,8 @@ def phase2_gate(
         reasons.append("리뷰 색상불일치 표시, 콘텐츠 수정 미확인")
         actions.extend(["콘텐츠 수정 요청", "사람 확인"])
 
-    if not renewal_confirmed and phase2_date > contract_end:
+    blocked = not renewal_confirmed and phase2_date > contract_end
+    if blocked:
         reasons.append("갱신 미확정인데 2차 집행일이 계약 만료 뒤")
 
-    return GateResult(not reasons, auto_stopped, tuple(reasons), tuple(actions))
+    return GateResult(not reasons, auto_stopped, tuple(reasons), tuple(actions), blocked)

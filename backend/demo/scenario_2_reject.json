@@ -1,0 +1,42 @@
+{
+  "title": "장면 2. 조건 변경 — SCM 거절",
+  "description": "장면 2와 같되 SCM이 안전재고 사용을 거절한다. 장부를 입고 다음 날부터 앞으로 돌려 라인 여유가 1차 수량 이상 생기는 첫날로 1차를 연기하고, 그런 날이 장부 전망 안에 없거나 계약 만료(갱신 미확정) 뒤면 1차는 차단된다. 시연 조작판에서 SCM 응답만 바꿔 두 갈래를 비교한다.",
+  "plans": [
+    "PLAN-001"
+  ],
+  "contracts": [],
+  "register_contracts": [
+    "INF-001"
+  ],
+  "requests": [],
+  "script": [
+    {
+      "action": "회신",
+      "plan": "PLAN-001",
+      "dept": "물류",
+      "text": "평소 하루 20,000개, 최대 26,000개까지 처리할 수 있습니다.",
+      "attachments": 0
+    },
+    {
+      "action": "결정",
+      "plan": "PLAN-001",
+      "actor": "그룹 CEO",
+      "decision": "분할승인",
+      "comment": "covenant 하회 구간 건, 1차를 분할해 진행"
+    },
+    {
+      "action": "결정",
+      "plan": "PLAN-001",
+      "actor": "이사회",
+      "decision": "분할승인",
+      "comment": "지표 반대 근거 확인, 분할 승인"
+    },
+    {
+      "action": "회신",
+      "plan": "PLAN-001",
+      "dept": "SCM",
+      "text": "안전재고는 쓸 수 없습니다. 거절합니다.",
+      "attachments": 0
+    }
+  ]
+}

@@ -60,6 +60,7 @@ class ReviewJudgment:
     needs_human: bool
     model: str
     raw: str
+    ledger_id: int | None = None  # 비용 장부 행 ID(예산 제공자를 거쳤을 때)
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,7 @@ class ReplyJudgment:
     confidence: float | None
     model: str
     raw: str
+    ledger_id: int | None = None
 
 
 def _call(p: Provider, system: str, user: str) -> tuple[Completion | None, str, str]:
@@ -84,6 +86,10 @@ def _call(p: Provider, system: str, user: str) -> tuple[Completion | None, str, 
     return c, c.model, c.text
 
 
+def _lid(c: Completion | None) -> int | None:
+    return None if c is None else c.ledger_id
+
+
 def _confidence(out: dict | None) -> float | None:
     v = (out or {}).get("confidence")
     return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
@@ -93,7 +99,7 @@ def interpret_review(p: Provider, product: str, text: str) -> ReviewJudgment:
     c, model, raw = _call(p, prompts.REVIEW_SYSTEM, prompts.review_user({"product": product, "text": text}))
     out = None if c is None or c.stop_reason == "max_tokens" else parse(c.text)
     if out is None:
-        return ReviewJudgment(FALLBACK_REASON, FALLBACK_SENTIMENT, False, None, True, model, raw)
+        return ReviewJudgment(FALLBACK_REASON, FALLBACK_SENTIMENT, False, None, True, model, raw, _lid(c))
     reason, sentiment = norm("reason", out.get("reason")), norm("sentiment", out.get("sentiment"))
     gap = out.get("content_gap")
     valid = (reason in ALLOWED["reason"] and sentiment in ALLOWED["sentiment"]
@@ -101,7 +107,7 @@ def interpret_review(p: Provider, product: str, text: str) -> ReviewJudgment:
     return ReviewJudgment(reason if reason in ALLOWED["reason"] else FALLBACK_REASON,
                           sentiment if sentiment in ALLOWED["sentiment"] else FALLBACK_SENTIMENT,
                           norm("content_gap", gap) is True, _confidence(out),
-                          not valid, model, raw)
+                          not valid, model, raw, _lid(c))
 
 
 def _to_date(v) -> tuple[date | None, bool]:
@@ -120,7 +126,7 @@ def interpret_reply(p: Provider, dept: str, request: str, reply: str, today: dat
                           prompts.reply_user({"dept": dept, "request": request, "reply": reply}))
     out = None if c is None or c.stop_reason == "max_tokens" else parse(c.text)
     if out is None:
-        return ReplyJudgment(FALLBACK_STANCE, None, None, True, None, model, raw)
+        return ReplyJudgment(FALLBACK_STANCE, None, None, True, None, model, raw, _lid(c))
     stance = norm("stance", out.get("stance"))
     qty = norm("qty_limit", out.get("qty_limit"))
     bad_qty = isinstance(qty, str)
@@ -128,4 +134,4 @@ def interpret_reply(p: Provider, dept: str, request: str, reply: str, today: dat
     human = (norm("needs_human", out.get("needs_human")) is True or stance not in ALLOWED["stance"]
              or stance in ALWAYS_HUMAN_STANCES or bad_qty or bad_date)
     return ReplyJudgment(stance if stance in ALLOWED["stance"] else FALLBACK_STANCE,
-                         None if bad_qty else qty, next_date, human, _confidence(out), model, raw)
+                         None if bad_qty else qty, next_date, human, _confidence(out), model, raw, _lid(c))

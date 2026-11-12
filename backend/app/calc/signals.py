@@ -23,6 +23,10 @@ from app.data.loader import payment_term_notices, read_raw_text, read_table
 
 _MKT = "02_masil/marketing/"
 Level = Literal["red", "yellow", "green", "unmeasurable"]
+# 판정 쓰임: "판정" = 실적 기반이라 지표 반대 판정에 쓴다 | "참고" = 화면 근거로만 보이고 판정에서 뺀다.
+# 참고 신호는 왜 빼는지(exclude_reason)를 정의에 함께 둔다.
+JUDGE, REFERENCE = "판정", "참고"
+FORECAST_EXCLUDE = "예상 GMV 기반 — 설계 4.5: 예상 GMV는 성과 판단에 쓰지 않음"
 
 
 @dataclass(frozen=True)
@@ -45,6 +49,8 @@ class Signal:
     level: Level
     basis: str
     badge: Literal["계산", "가정"]
+    judgment: Literal["판정", "참고"] = JUDGE
+    exclude_reason: str = ""
 
 
 def _campaigns() -> dict[str, dict]:
@@ -179,6 +185,7 @@ def risk_signals(plan_id: str) -> list[Signal]:
         "forecast_gap", "예상 ROAS 괴리", ratio, f"인플루언서 명목 ROAS 최대 {top_nominal:.2f}",
         "red" if ratio > top_nominal else "green",
         "기안 예상 GMV ÷ 요청 예산이 표본 인플루언서별 명목 ROAS(GMV÷광고비) 최대값보다 크면 과대 예상", "계산",
+        REFERENCE, FORECAST_EXCLUDE,
     ))
 
     # 2) 쿠폰 중복
