@@ -20,6 +20,7 @@ _MKT = "02_masil/marketing/"
 _AD = _MKT + "mkt_ad_spend_ms.csv"
 _ORD = _MKT + "mkt_orders_ms.csv"
 _CAMP = "02_masil/master/m_campaign_ms.csv"
+_PLAN = _MKT + "mkt_budget_plan_ms.csv"
 NO_PLAN_BASIS = "원본 기안 파일에 없는 기안이라 지표 근거 없음"
 NO_CONTRACT_BASIS = "캠페인 실적이 원본에 없는 인플루언서라 지표 근거 없음"
 COST_NOTE = "표본 금액이라 실제 계약액과 곱하지 않음"
@@ -55,19 +56,37 @@ def has_performance(influencer_id: str) -> bool:
     return influencer_id in {r.influencer_id for r in influencer_ranking()}
 
 
+def request_shares() -> dict[str, float]:
+    """원본 기안 파일의 인플루언서별 요청액 합이 기안 총액에서 차지하는 비중(%)."""
+    owner = _campaign_influencer()
+    by_inf: dict[str, float] = {}
+    for r in loader.plan_rows():
+        inf = owner[r["campaign_id"]]
+        by_inf[inf] = by_inf.get(inf, 0) + r["requested_budget_krw"]
+    total = sum(by_inf.values())
+    return {i: 100 * v / total for i, v in by_inf.items()}
+
+
 def key_indicators(influencer_id: str) -> list[dict]:
     """설계 4.4 핵심 지표: 실질 ROAS와 순위, 광고비 비중과 순위, 배분 역전, 단순변심 반품률(그 인플루언서 vs 그 외)."""
     ranking = influencer_ranking()
     me = next(r for r in ranking if r.influencer_id == influencer_id)
     n = len(ranking)
     spend_rank = 1 + sum(1 for r in ranking if r.spend_share > me.spend_share)
-    inverted = spend_rank <= n / 2 < me.rank
+    shares = request_shares()
+    my_req = shares.get(influencer_id, 0.0)
+    req_rank = 1 + sum(1 for v in shares.values() if v > my_req)
+    req_n = len(shares)
+    cut = policy.get("signals.reversal_cut")
+    # 기안 요청 비중 순위가 위에서 cut 비율 안, 실질 ROAS 순위가 아래에서 cut 비율 안이면 역전(설계 4.4)
+    inverted = influencer_id in shares and req_rank <= cut * req_n and me.rank > (1 - cut) * n
     mine = return_rate(influencer_id, "단순변심")
     rest = return_rate(None, "단순변심", exclude=influencer_id)
 
-    def line(key, label, value, detail, rank=None, compare_label=None, compare_value=None):
-        return {"key": key, "label": label, "value": value, "rank": rank, "of": n if rank is not None else None,
-                "compare_label": compare_label, "compare_value": compare_value, "badge": "계산",
+    def line(key, label, value, detail, rank=None, compare_label=None, compare_value=None, badge="계산", of=None):
+        return {"key": key, "label": label, "value": value, "rank": rank,
+                "of": (of or n) if rank is not None else None,
+                "compare_label": compare_label, "compare_value": compare_value, "badge": badge,
                 "detail": resolve_detail(detail)}
 
     return [
@@ -78,9 +97,16 @@ def key_indicators(influencer_id: str) -> list[dict]:
             "광고비 비중 = 이 인플루언서 광고비 ÷ 전체 광고비. 큰 순위가 1위",
             (("광고비 비중(%)", me.spend_share), ("순위", spend_rank), ("전체 인플루언서 수", n)),
             (_AD, _CAMP)), rank=spend_rank),
+        line("request_share", "기안 요청 비중(%)", my_req, make_detail(
+            "기안 요청 비중 = 이 인플루언서 캠페인의 기안 요청액 합 ÷ 원본 기안 파일의 기안 총액. 큰 순위가 1위",
+            (("기안 요청 비중(%)", my_req), ("순위", req_rank), ("기안이 있는 인플루언서 수", req_n)),
+            (_PLAN, _CAMP)), rank=req_rank, of=req_n),
         line("allocation_inversion", "배분 역전", inverted, make_detail(
-            "광고비 비중 순위가 상위 절반인데 실질 ROAS 순위가 하위 절반이면 돈을 많이 쓴 곳일수록 성과가 낮은 역전",
-            (("광고비 순위", spend_rank), ("실질 ROAS 순위", me.rank), ("전체 인플루언서 수", n)), STATS_SOURCES)),
+            "기안 요청 비중 순위가 위에서 경계 비율 안인데 실질 ROAS 순위가 아래에서 경계 비율 안이면 "
+            "요청은 많은데 성과는 낮은 역전. 경계 비율은 가정",
+            (("기안 요청 비중 순위", req_rank), ("기안이 있는 인플루언서 수", req_n), ("실질 ROAS 순위", me.rank),
+             ("전체 인플루언서 수", n), ("경계 비율", cut)),
+            (_PLAN, _CAMP, *STATS_SOURCES), ("signals.reversal_cut",)), badge="가정"),
         line("simple_change_return", "단순변심 반품률", mine, make_detail(
             "단순변심 반품률 = 사유가 단순변심인 환불액 ÷ 해당 주문 GMV. 이 인플루언서와 그 외 인플루언서 전체를 비교",
             (("이 인플루언서", mine), ("그 외", rest)), _RET_SRC),

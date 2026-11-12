@@ -155,6 +155,11 @@ def _hits(hits) -> list[dict]:
              **({"detail": h.detail} if h.detail is not None else {})} for h in hits]
 
 
+def _plain(hits: list[dict]) -> list[dict]:
+    """화면용 줄: 풀리지 않은 detail(정책은 키만)을 뺀다. 풀린 근거는 case_evidence에서 본다."""
+    return [{k: v for k, v in h.items() if k != "detail"} for h in hits]
+
+
 def _decision(f: dict, stage: str = "1차") -> ApproverDecision:
     a, h, _, _ = STAGES[stage]
     return ApproverDecision(tuple(f[a]), tuple(RuleHit(**x) for x in f[h]))
@@ -2605,19 +2610,20 @@ class Engine:
         open_ = case["status"] in OPEN[case["kind"]]
         pending = _pending_roles(f) if open_ else []
         p2 = self.phase2_view(case_id) if case["kind"] == KIND_PLAN and f.get("phase2") else None
+        shown = {k: (_plain(v) if k.endswith("_hits") else v) for k, v in f.items()}
         out = {
             "case": {k: case[k] for k in ("id", "kind", "ref_id", "status", "origin", "created_at", "updated_at")},
-            "facts": f,
-            "evidence": {"indicators": {"good": f["indicator_good"], "hits": f["indicator_hits"],
+            "facts": shown,
+            "evidence": {"indicators": {"good": f["indicator_good"], "hits": _plain(f["indicator_hits"]),
                                         "excluded": f["indicator_excluded"]}},
-            "rule": {"approvers": f["approvers"], "hits": f["approver_hits"], "required_roles": _required_roles(f),
+            "rule": {"approvers": f["approvers"], "hits": _plain(f["approver_hits"]), "required_roles": _required_roles(f),
                      "approved_roles": f.get("approved_roles", []), "pending_roles": pending},
             "phase2": p2,
             **self.deadline_view(f.get("deadline")),
             "escalations": f.get("escalations", []),
             **self._texts(case_id, self._fingerprint(self._brief_basis(case))),
             "approver_changes": [{"before": list(c.before), "after": list(c.after), "reason": c.reason,
-                                  "hits": _hits(c.hits), "at": c.at.isoformat()}
+                                  "hits": _plain(_hits(c.hits)), "at": c.at.isoformat()}
                                  for c in self.store.get_approver_changes(case_id)],
             "approvals": self.store.list_approvals(case_id),
             "requests": [{**r, "replies": self.store.list_replies(r["id"])} for r in self.store.list_requests(case_id)],
@@ -2644,15 +2650,17 @@ class Engine:
         out = evidence_calc.evidence(kind, case["ref_id"], f.get("source_plan_id"))
         by_key = {s["key"]: s for s in out["signals"]}
 
-        def line(h: dict, from_signal: bool) -> dict:
+        def line(h: dict, from_signal: bool, stage: str | None = None) -> dict:
             if h.get("detail") is None and from_signal and h["rule_id"] in by_key:
                 resolved = by_key[h["rule_id"]]["detail"]  # 옛 저장 행: 같은 이름의 지금 신호 줄을 따른다
             else:
                 resolved = evidence_calc.resolve_detail(h.get("detail"), h["text"])
-            return {**{k: h[k] for k in ("rule_id", "text", "source", "badge")}, "detail": resolved}
+            return {**{k: h[k] for k in ("rule_id", "text", "source", "badge")}, **({"stage": stage} if stage else {}),
+                    "detail": resolved}
 
         out["rule"] = {"approver_hits": [line(h, False) for h in f["approver_hits"]],
-                       "indicator_hits": [line(h, True) for h in f["indicator_hits"]]}
+                       "indicator_hits": [line(h, True) for h in f["indicator_hits"]],
+                       "phase2_approver_hits": [line(h, False, "2차") for h in f.get("phase2_approver_hits", [])]}
         return out
 
     def calendar(self) -> list[dict]:

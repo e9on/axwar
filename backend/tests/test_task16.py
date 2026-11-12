@@ -216,3 +216,87 @@ def test_한도_규칙_줄은_쓴_정책_키를_담는다():
     assert set(within.hits[0].detail["policy_keys"]) == {"approval.item_limit_krw", "approval.total_limit_krw"}
     c = decide_contract(ContractFacts("I", policy.get("approval.contract_limit_krw") + 1, day, day, "갱신", True), [])
     assert set(c.hits[0].detail["policy_keys"]) == {"approval.contract_limit_krw"}
+
+
+# ---- 수정 회차 1 ----
+def test_배분_역전은_기안_요청_비중_순위로_본다(store):
+    """M1: 요청 비중 = 원본 기안 파일의 인플루언서별 요청액 합 ÷ 기안 총액(INF-001: 50,690,961 / 180,803,272)."""
+    eng, cid = _open_plan(store, "PLAN-001")
+    k = _by_key(eng.case_evidence(cid)["key_indicators"])
+    req = k["request_share"]
+    assert round(req["value"], 2) == 28.04 and req["rank"] == 1 and req["of"] == 10
+    assert k["spend_share"]["rank"] == 1 and round(k["spend_share"]["value"], 1) == 40.6  # 광고비 비중 줄은 따로 남는다
+    inv = k["allocation_inversion"]
+    assert inv["value"] is True and inv["badge"] == "가정"
+    assert {p["key"] for p in inv["detail"]["policies"]} == {"signals.reversal_cut"}
+    assert policy.get("signals.reversal_cut") == 0.5
+    assert policy.entry("signals.reversal_cut")[1].startswith("가정")
+    inputs = {i["label"]: i["value"] for i in inv["detail"]["inputs"]}
+    assert inputs["기안 요청 비중 순위"] == 1 and inputs["실질 ROAS 순위"] == 9
+    assert "mkt_budget_plan_ms.csv" in " ".join(inv["detail"]["sources"])
+
+
+def test_배분_역전_경계는_정책을_따른다(store):
+    eng, cid = _open_plan(store, "PLAN-001")
+    policy.set_overrides({"signals.reversal_cut": (0.05, "시험", "2030-01-01")})  # 상위 5% = 10명 중 0.5위 이내 -> 1위도 밖
+    try:
+        k = _by_key(eng.case_evidence(cid)["key_indicators"])
+        assert k["allocation_inversion"]["value"] is False
+    finally:
+        policy.clear_overrides()
+
+
+def test_2차_결재선_이유도_나온다(store):
+    eng, cid = _open_plan(store, "PLAN-001")
+    assert eng.case_evidence(cid)["rule"]["phase2_approver_hits"] == []
+    f = store.get_case(cid)["facts"]
+    f["phase2_approver_hits"] = [{"rule_id": "x2", "text": "2차 이유", "source": "s", "badge": "계산",
+                                  "detail": {"formula": "f", "inputs": [], "sources": [], "policy_keys": ["cash.horizon_days"]}}]
+    store.update_facts(cid, f, "시험", "2차 결재선")
+    h = eng.case_evidence(cid)["rule"]["phase2_approver_hits"][0]
+    assert h["stage"] == "2차" and h["rule_id"] == "x2"
+    _check_detail(h["detail"])
+    assert {p["key"] for p in h["detail"]["policies"]} == {"cash.horizon_days"}
+
+
+def test_case_detail에는_풀리지_않은_policy_keys가_없다(store):
+    eng, cid = _open_plan(store, "PLAN-001")
+    d = eng.case_detail(cid)
+    hits = (d["facts"]["approver_hits"] + d["facts"]["indicator_hits"] + d["rule"]["hits"]
+            + d["evidence"]["indicators"]["hits"])
+    assert hits and all("detail" not in h for h in hits)
+    assert "policy_keys" not in str(d)
+    assert eng.case_evidence(cid)["rule"]["approver_hits"][0]["detail"]["formula"]  # 저장본은 그대로
+
+
+def test_결제_지연_줄_sources에_캠페인_마스터(store):
+    eng, cid = _open_plan(store, "PLAN-001")
+    sig = _by_key(eng.case_evidence(cid)["signals"])
+    assert "02_masil/master/m_campaign_ms.csv" in sig["slow_payment_channel"]["detail"]["sources"]
+
+
+def _all_sources(ev):
+    out = []
+
+    def walk(x):
+        if isinstance(x, dict):
+            if "sources" in x:
+                out.extend(x["sources"])
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+    walk(ev)
+    return out
+
+
+@pytest.mark.parametrize("plan_id", ["PLAN-001", "PLAN-019"])
+def test_모든_sources_경로는_실제_파일(store, plan_id):
+    from app.config import data_root
+    eng, cid = _open_plan(store, plan_id)
+    srcs = _all_sources(eng.case_evidence(cid))
+    assert len(srcs) > 20
+    root = data_root()
+    for s in set(srcs):
+        assert (root / s).is_file(), s

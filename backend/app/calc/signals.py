@@ -258,7 +258,7 @@ def risk_signals(plan_id: str) -> list[Signal]:
             "지연 채널 매출 비중 = 결제조건이 업계 DSO보다 긴 채널의 GMV ÷ 이 인플루언서 GMV. 통보문이 있는 파트너 채널은 통보문 일수를 쓴다. "
             "비중이 있고 현금 하회 구간이 있으면 🔴, 비중만 있으면 🟡",
             (("지연 채널 GMV", slow), ("이 인플루언서 GMV", total), ("업계 DSO(일)", dso), ("현금 하회 구간 수", len(breaches))),
-            (_ORD, _CHANNEL, _BENCH_IND, *(f"02_masil/financials/{n.source_file}" for n in notices.values()), *_CASH_FILES),
+            (_ORD, _CAMP, _CHANNEL, _BENCH_IND, *(f"02_masil/financials/{n.source_file}" for n in notices.values()), *_CASH_FILES),
             ("cash.horizon_days",)),
     ))
 
