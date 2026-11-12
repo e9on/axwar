@@ -18,7 +18,7 @@ function TopBar() {
 
   return (
     <header className="top">
-      <span className="brand">결재판</span>
+      <span className="brand">Approval Planner</span>
       <div className="who">
         <label>
           보는 사람

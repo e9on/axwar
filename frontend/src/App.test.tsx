@@ -28,6 +28,15 @@ function mount(url: string) {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('화면 골격', () => {
+  it('서비스_이름은_Approval_Planner', async () => {
+    fakeServer({
+      'GET /api/people': { json: PEOPLE },
+      'GET /api/clock': { json: { date: '2026-07-12', mode: '시연' } },
+    })
+    mount('/')
+    expect(await screen.findByText('Approval Planner')).toBeTruthy()
+  })
+
   it('보는_사람을_바꾸면_URL이_바뀐다', async () => {
     fakeServer({
       'GET /api/people': { json: PEOPLE },
