@@ -50,6 +50,21 @@ class CostBreakdown:
     final: int
 
 
+# 신호 값의 단위(각 신호 계산 코드가 실제로 내는 값 기준). ratio = 0~1 비율(화면이 %로), krw = 원, multiple = 배수·ROAS·HHI 등 그대로 숫자.
+# 측정 불가(잠식)는 값이 없어 단위도 없다.
+SIGNAL_UNITS = {
+    "repurchase_rate": "ratio",             # 재구매 고객 ÷ 첫 주문 귀속 고객
+    "post_contribution": "krw",             # 첫 구매 이후 주문 공헌 합
+    "forecast_gap": "multiple",             # 예상 GMV ÷ 요청 예산 = 예상 ROAS
+    "coupon_stacking": "ratio",             # 쿠폰 중복 주문 ÷ 주문
+    "slow_payment_channel": "ratio",        # 지연 채널 GMV ÷ GMV
+    "spend_concentration": "multiple",      # HHI(비중 %의 제곱합) — 점수로 그대로 보임
+    "channel_return_vs_benchmark": "multiple",  # 반품률 ÷ 기준선 배수
+    "trend": "multiple",                    # 실질 ROAS 차이
+    "breakeven_hidden_sales": "ratio",      # 기록 GMV 대비 필요한 기록 밖 판매 비율
+}
+
+
 @dataclass(frozen=True)
 class Signal:
     key: str
@@ -62,6 +77,11 @@ class Signal:
     judgment: Literal["판정", "참고"] = JUDGE
     exclude_reason: str = ""
     detail: dict | None = None  # 펼쳤을 때 보이는 계산식·입력값·원본 파일·정책 키(rules.models.make_detail)
+    unit: str | None = None  # value의 단위. 안 주면 SIGNAL_UNITS에서 신호 키로 찾는다
+
+    def __post_init__(self):
+        if self.unit is None:
+            object.__setattr__(self, "unit", SIGNAL_UNITS.get(self.key))
 
 
 def _campaigns() -> dict[str, dict]:

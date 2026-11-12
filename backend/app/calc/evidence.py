@@ -40,7 +40,7 @@ def resolve_detail(detail: dict | None, fallback_formula: str = "") -> dict:
 
 def signal_line(s: Signal) -> dict:
     return {"key": s.key, "label": s.label, "value": s.value, "compare": s.compare, "level": s.level,
-            "badge": s.badge, "judgment": s.judgment, "exclude_reason": s.exclude_reason,
+            "unit": s.unit, "badge": s.badge, "judgment": s.judgment, "exclude_reason": s.exclude_reason,
             "detail": resolve_detail(s.detail, s.basis)}
 
 
@@ -83,8 +83,9 @@ def key_indicators(influencer_id: str) -> list[dict]:
     mine = return_rate(influencer_id, "단순변심")
     rest = return_rate(None, "단순변심", exclude=influencer_id)
 
-    def line(key, label, value, detail, rank=None, compare_label=None, compare_value=None, badge="계산", of=None):
-        return {"key": key, "label": label, "value": value, "rank": rank,
+    def line(key, label, value, detail, rank=None, compare_label=None, compare_value=None, badge="계산", of=None,
+             unit=None):
+        return {"key": key, "label": label, "value": value, "unit": unit, "rank": rank,
                 "of": (of or n) if rank is not None else None,
                 "compare_label": compare_label, "compare_value": compare_value, "badge": badge,
                 "detail": resolve_detail(detail)}
@@ -92,15 +93,16 @@ def key_indicators(influencer_id: str) -> list[dict]:
     return [
         line("real_roas", "실질 ROAS", me.real_roas, make_detail(
             "실질 ROAS = 마케팅 후 공헌(GMV − 환불 − 원가 − 채널 수수료 − 배송비 − 반품 물류비 − 광고비) ÷ 광고비. 높은 순위가 1위",
-            (("실질 ROAS", me.real_roas), ("순위", me.rank), ("전체 인플루언서 수", n)), STATS_SOURCES), rank=me.rank),
+            (("실질 ROAS", me.real_roas), ("순위", me.rank), ("전체 인플루언서 수", n)), STATS_SOURCES), rank=me.rank,
+             unit="multiple"),
         line("spend_share", "광고비 비중(%)", me.spend_share, make_detail(
             "광고비 비중 = 이 인플루언서 광고비 ÷ 전체 광고비. 큰 순위가 1위",
             (("광고비 비중(%)", me.spend_share), ("순위", spend_rank), ("전체 인플루언서 수", n)),
-            (_AD, _CAMP)), rank=spend_rank),
+            (_AD, _CAMP)), rank=spend_rank, unit="percent"),
         line("request_share", "기안 요청 비중(%)", my_req, make_detail(
             "기안 요청 비중 = 이 인플루언서 캠페인의 기안 요청액 합 ÷ 원본 기안 파일의 기안 총액. 큰 순위가 1위",
             (("기안 요청 비중(%)", my_req), ("순위", req_rank), ("기안이 있는 인플루언서 수", req_n)),
-            (_PLAN, _CAMP)), rank=req_rank, of=req_n),
+            (_PLAN, _CAMP)), rank=req_rank, of=req_n, unit="percent"),
         line("allocation_inversion", "배분 역전", inverted, make_detail(
             "기안 요청 비중 순위가 위에서 경계 비율 안인데 실질 ROAS 순위가 아래에서 경계 비율 안이면 "
             "요청은 많은데 성과는 낮은 역전. 경계 비율은 가정",
@@ -110,7 +112,7 @@ def key_indicators(influencer_id: str) -> list[dict]:
         line("simple_change_return", "단순변심 반품률", mine, make_detail(
             "단순변심 반품률 = 사유가 단순변심인 환불액 ÷ 해당 주문 GMV. 이 인플루언서와 그 외 인플루언서 전체를 비교",
             (("이 인플루언서", mine), ("그 외", rest)), _RET_SRC),
-             compare_label="그 외 인플루언서", compare_value=rest),
+             compare_label="그 외 인플루언서", compare_value=rest, unit="ratio"),
     ]
 
 
@@ -119,7 +121,7 @@ def cost_rows(influencer_id: str) -> dict:
     b = cost_breakdown(influencer_id)
 
     def row(key, label, amount, detail):
-        return {"key": key, "label": label, "amount": amount, "badge": "계산", "detail": resolve_detail(detail)}
+        return {"key": key, "label": label, "amount": amount, "unit": "krw", "badge": "계산", "detail": resolve_detail(detail)}
 
     return {"note": COST_NOTE, "rows": [
         row("gmv", "매출(GMV)", b.gmv, make_detail(

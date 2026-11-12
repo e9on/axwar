@@ -45,7 +45,7 @@ from app.rules.allocate import allocate_day, can_announce, stock_alerts, stockou
 from app.rules.approver import decide_contract, decide_plan, diff_approver
 from app.rules.capacity import parse_capacity
 from app.rules.deadline import approval_deadline, deadline_actions, deny_date, is_lapsed
-from app.rules.models import ApproverChange, ApproverDecision, ContractFacts, PlanFacts, RuleHit
+from app.rules.models import ApproverChange, ApproverDecision, ContractFacts, PlanFacts, RuleHit, make_detail
 from app.rules.split import GateResult, make_split, phase2_gate
 from app.store.db import CASE_DEMO, CASE_OPERATION, CLOCK_LOCKED, MODE_OPERATION, Store
 
@@ -1054,7 +1054,7 @@ class Engine:
         if not self._can_handle(case["facts"], key, role, self._owner(case["kind"])):
             raise PermissionError(f"{actor}({role})는 이 사람 확인을 처리할 수 없음 — {self._owner(case['kind'])}"
                                   "(또는 방치로 올려 받은 사람)만")
-        return self.reply(request_id, text, attachments)
+        return self.reply(request_id, text, attachments, resolved_by=actor)
 
     @_locked
     def submit_reply(self, request_id: int, actor: str, text: str, attachments: int = 0) -> dict:
@@ -1121,7 +1121,7 @@ class Engine:
     # ---------------------------------------------------------------- 회신
 
     @_locked
-    def reply(self, request_id: int, text: str, attachments: int = 0) -> dict:
+    def reply(self, request_id: int, text: str, attachments: int = 0, resolved_by: str | None = None) -> dict:
         """회신 저장 → AI 해석 → (사람 확인 | 목적별 처리 → 상태 변경). 이미 처리된 요청이면 무시."""
         req = self.store.get_request(request_id)
         case = self.store.get_case(req["case_id"])
@@ -1130,9 +1130,11 @@ class Engine:
             reason = "이미 처리된 요청" if req["status"] == R_DONE else "이미 끝난 건"
             return {**base, "ignored": True, "reason": reason, "needs_human": False, "changed": False,
                     "status": case["status"], "judgment": None}
-        self.store.add_reply(request_id, text, attachments)
+        reply_id = self.store.add_reply(request_id, text, attachments)
         j = judge.interpret_reply(self._provider("reply"), req["dept"], req["text"], text, self._today())
-        result = {**asdict(j), "raw": j.raw[:RAW_KEEP]}
+        result = {**asdict(j), "raw": j.raw[:RAW_KEEP], "reply_id": reply_id}
+        if resolved_by:
+            result["resolved_by"] = resolved_by  # 사람 확인으로 다시 넣은 회신 — 확인한 사람
         needs_human = j.needs_human
         if req["purpose"] in DEFINITIVE_REFUSAL and j.stance == "거절":
             needs_human = False  # 그 부서의 거절은 결정이다(해석이 애매한 것이 아님)
@@ -1579,6 +1581,32 @@ class Engine:
 
     # ---------------------------------------------------------------- 결정
 
+    @staticmethod
+    def _approve_block(f: dict, status: str, action: str) -> str | None:
+        """승인·분할 승인이 지금 막혀 있으면 그 이유(한국어), 아니면 None. decide와 건 상세(viewer.blocked)가 같이 쓴다. 거절은 막지 않는다."""
+        if action == D_REJECT:
+            return None
+        if status == S_WAIT_REPLY:
+            return "부서 회신을 기다리는 중이라 아직 승인할 수 없음"
+        st = f.get("stock") or {}
+        if st.get("day_qty") and st.get("share") == 0:
+            return "물류 몫이 0개라 1차 수량이 0이 됨 — 승인할 수 없음(물류와 다시 조율하거나 거절)"
+        if action == D_SPLIT and not f.get("split"):
+            return "분할안이 없어 분할 승인할 수 없음"
+        if action == D_APPROVE and st.get("shortage") and (f.get("scm") or {}).get("state") != SCM_FULL:
+            return "재고 부족으로 1차 수량이 제한되는 건이라 분할 승인만 가능(SCM이 전량 허용하면 승인도 가능)"
+        return None
+
+    def _split_outcome(self, f: dict) -> dict | None:
+        """분할 승인이 확정되면 만들어질 1차·2차 값(_finalize와 건 상세의 split_preview가 같이 씀). 분할안이 없으면 None."""
+        sp = f.get("split")
+        if not sp:
+            return None
+        return {"phase1_qty": sp["phase1_qty"], "phase1_date": sp["phase1_date"],
+                "phase1_amount_krw": self._plan_amount_of(f, sp["phase1_qty"]),
+                "phase2_qty": sp["phase2_qty"], "phase2_date": sp["phase2_date"],
+                "phase2_amount_krw": self._plan_amount_of(f, sp["phase2_qty"]) if sp["phase2_qty"] > 0 else 0}
+
     @_locked
     def decide(self, case_id: int, actor: str, action: str, comment: str = "") -> dict:
         """승인권자의 결정. 승인권자가 아니면 PermissionError, 끝난 건이면 상태 그대로."""
@@ -1610,15 +1638,9 @@ class Engine:
             self._task_once(case_id, self.campaign, "확정 보류(철회) 처리", self._today(),
                             f"{case['ref_id']}: 승인권자({role})가 거절해 확정하지 않음. 상대측에 보류·철회를 알림")
             return {**base, "changed": True, "status": S_REJECTED}
-        if case["status"] == S_WAIT_REPLY:
-            raise ValueError("부서 회신을 기다리는 중이라 아직 승인할 수 없음")
-        st = f.get("stock") or {}
-        if action in (D_APPROVE, D_SPLIT) and st.get("day_qty") and st.get("share") == 0:
-            raise ValueError("물류 몫이 0개라 1차 수량이 0이 됨 — 승인할 수 없음(물류와 다시 조율하거나 거절)")
-        if action == D_SPLIT and not f.get("split"):
-            raise ValueError("분할안이 없어 분할 승인할 수 없음")
-        if action == D_APPROVE and (f.get("stock") or {}).get("shortage") and (f.get("scm") or {}).get("state") != SCM_FULL:
-            raise ValueError("재고 부족으로 1차 수량이 제한되는 건이라 분할 승인만 가능(SCM이 전량 허용하면 승인도 가능)")
+        why = self._approve_block(f, case["status"], action)
+        if why:
+            raise ValueError(why)
         if role in f.get("approved_roles", []):
             return {**base, "changed": False, "status": case["status"], "message": "이미 승인함"}
         self.store.add_approval(case_id, (role,), action, actor, comment)
@@ -1646,9 +1668,9 @@ class Engine:
         if split:
             first = S_SPLIT_APPROVED
             f["phase1"] = {"qty": split["phase1_qty"], "date": split["phase1_date"]}
-            f["phase2"] = ({"qty": split["phase2_qty"], "date": split["phase2_date"],
-                            "amount_krw": self._plan_amount_of(f, split["phase2_qty"])}
-                           if split["phase2_qty"] > 0 else None)
+            sp_out = self._split_outcome(f)
+            f["phase2"] = ({"qty": sp_out["phase2_qty"], "date": sp_out["phase2_date"],
+                            "amount_krw": sp_out["phase2_amount_krw"]} if split["phase2_qty"] > 0 else None)
             if f["phase2"] and f["phase2"]["date"]:
                 self._phase2_approvers(f, case_id)
         else:
@@ -2634,6 +2656,67 @@ class Engine:
         return {"briefing": self._stored_text(case_id, self.BRIEFING, fp),
                 "counterpoints": self._stored_text(case_id, self.COUNTERPOINTS, fp)}
 
+    @staticmethod
+    def _escalation_lines(f: dict, stage: str) -> list[dict]:
+        """지금 결재선을 만든 상신 기록(그 단계의 유효한 상신)을 결재선 이유 줄로 바꾼다. 원래 규칙 판정 줄은 호출한 쪽이 처음 판정으로 표시."""
+        out = []
+        for e in f.get("escalations", []):
+            if e["stage"] != stage or not e["active"]:
+                continue
+            day = _md(_d(e["at"]))
+            text = f"{day} {e['from']}({e['actor']})가 {e['to']}에게 {stage} 상신 — 의견 {e['opinion']}: {e['reason']}"
+            detail = make_detail(
+                "상신 기록: 승인권자가 자기 권한을 넘는다고 판단해 보고 체계의 바로 위 역할에게 올리면 올린 역할이 결재선에서 빠지고 상급자가 들어감",
+                (("올린 사람", e["actor"]), ("올린 역할", e["from"]), ("받는 역할", e["to"]), ("의견", e["opinion"]),
+                 ("이유", e["reason"]), ("날짜", e["at"]), ("상신 전 결재선", "·".join(e.get("base", [])))),
+                ("상신 기록(권한 이동 기록)",))
+            out.append({"rule_id": "escalation", "text": text, "source": "상신 기록", "badge": "의견", "detail": detail})
+        return out
+
+    def _approver_view(self, f: dict, stage: str) -> list[dict]:
+        """결재선 이유 줄: 유효한 상신이 있으면 상신 줄을 맨 앞에 두고 원래 규칙 판정 줄에는 superseded(처음 판정)를 붙인다."""
+        h_key = STAGES[stage][1]
+        ups = self._escalation_lines(f, stage)
+        rule = [{**h, **({"superseded": True} if ups else {})} for h in f.get(h_key, [])]
+        return ups + rule
+
+    def _requests_view(self, case_id: int) -> list[dict]:
+        """요청과 회신. 회신마다 그 회신의 AI 해석(judgment)을 reply_id로 연결한다(옛 기록은 reply_id가 없어 None).
+        사람 확인에 머물렀던 회신은 뒤이어 사람이 처리한 회신(resolved_by)이 있으면 확인됨(확인한 사람)."""
+        by_reply = {}
+        for j in self.store.list_judgments(case_id):
+            rid = j["result"].get("reply_id") if j["kind"] == "회신해석" else None
+            if rid is not None:
+                by_reply[rid] = j
+        out = []
+        for r in self.store.list_requests(case_id):
+            replies = self.store.list_replies(r["id"])
+            confirmers = [by_reply[x["id"]]["result"].get("resolved_by") for x in replies
+                          if x["id"] in by_reply and by_reply[x["id"]]["result"].get("resolved_by")]
+            rows = []
+            for x in replies:
+                j = by_reply.get(x["id"])
+                judgment = None
+                if j:
+                    res = j["result"]
+                    by = res.get("resolved_by") or (confirmers[0] if j["needs_human"] and confirmers else None)
+                    judgment = {"id": j["id"], "stance": res.get("stance"), "qty_limit": res.get("qty_limit"),
+                                "next_date": res.get("next_date"), "needs_human": j["needs_human"],
+                                "confidence": j["confidence"], "model": j["model"],
+                                "human_confirmed": by is not None, "confirmed_by": by}
+                rows.append({**x, "judgment": judgment})
+            out.append({**r, "replies": rows})
+        return out
+
+    def _demo_note(self, case: dict) -> str | None:
+        """시연 기안이면 대본의 note(등록부 raw), 아니면 None."""
+        if case["kind"] != KIND_PLAN:
+            return None
+        try:
+            return (self.store.get_plan(case["ref_id"]).get("raw") or {}).get("note")
+        except KeyError:
+            return None
+
     def case_detail(self, case_id: int, viewer: str | None = None) -> dict:
         """건 상세(설계 6.3): 근거, 규칙 판정, 2차 정보, AI 브리핑(저장본만 — 읽기는 AI를 부르지 않음), 기록, 권한 이동.
         viewer(보는 사람)를 주면 그 사람이 지금 결정할 수 있는지 함께 돌려준다."""
@@ -2645,11 +2728,12 @@ class Engine:
         shown = {k: (_plain(v) if k.endswith("_hits") else v) for k, v in f.items()}
         out = {
             "case": {**{k: case[k] for k in ("id", "kind", "ref_id", "status", "origin", "created_at", "updated_at")},
-                     "title": self.case_title(case)},
+                     "title": self.case_title(case), "note": self._demo_note(case),
+                     "source_plan_id": f.get("source_plan_id")},
             "facts": shown,
             "evidence": {"indicators": {"good": f["indicator_good"], "hits": _plain(f["indicator_hits"]),
                                         "excluded": f["indicator_excluded"]}},
-            "rule": {"approvers": f["approvers"], "hits": _plain(f["approver_hits"]), "required_roles": _required_roles(f),
+            "rule": {"approvers": f["approvers"], "hits": _plain(self._approver_view(f, "1차")), "required_roles": _required_roles(f),
                      "approved_roles": f.get("approved_roles", []), "pending_roles": pending},
             "phase2": p2,
             **self.deadline_view(f.get("deadline")),
@@ -2659,7 +2743,7 @@ class Engine:
                                   "hits": _plain(_hits(c.hits)), "at": c.at.isoformat()}
                                  for c in self.store.get_approver_changes(case_id)],
             "approvals": self.store.list_approvals(case_id),
-            "requests": [{**r, "replies": self.store.list_replies(r["id"])} for r in self.store.list_requests(case_id)],
+            "requests": self._requests_view(case_id),
             "tasks": self.store.list_tasks(case_id),
             "reviews": self.store.list_reviews(case_id),
             "judgments": self.store.list_judgments(case_id),
@@ -2667,7 +2751,14 @@ class Engine:
         }
         if viewer is not None:
             role = self.role_of(viewer)
-            out["viewer"] = {"person": viewer, "role": role, "can_decide": open_ and role in pending,
+            can = open_ and role in pending
+            why = {a: self._approve_block(f, case["status"], a) for a in DECISIONS} if can else {}
+            acts = [a for a in why if not why[a]]
+            can2 = case["status"] == S_PHASE2_WAIT and bool(self._phase2_stand_in(f, role, _pending_roles(f, "2차")))
+            out["viewer"] = {"person": viewer, "role": role, "can_decide": can, "actions": acts,
+                             "blocked": [{"action": a, "reason": r} for a, r in why.items() if r],
+                             "actions_phase2": list(P2_DECISIONS) if can2 else [],
+                             "split_preview": self._split_outcome(f) if D_SPLIT in acts else None,
                              "can_escalate": self._can_escalate(case, role, "1차"),
                              "can_escalate_phase2": self._can_escalate(case, role, "2차"),
                              "can_decide_phase2": case["status"] == S_PHASE2_WAIT and bool(
@@ -2691,9 +2782,11 @@ class Engine:
             return {**{k: h[k] for k in ("rule_id", "text", "source", "badge")}, **({"stage": stage} if stage else {}),
                     "detail": resolved}
 
-        out["rule"] = {"approver_hits": [line(h, False) for h in f["approver_hits"]],
+        out["rule"] = {"approver_hits": [{**line(h, False), **({"superseded": True} if h.get("superseded") else {})}
+                                         for h in self._approver_view(f, "1차")],
                        "indicator_hits": [line(h, True) for h in f["indicator_hits"]],
-                       "phase2_approver_hits": [line(h, False, "2차") for h in f.get("phase2_approver_hits", [])]}
+                       "phase2_approver_hits": [{**line(h, False, "2차"), **({"superseded": True} if h.get("superseded") else {})}
+                                                 for h in self._approver_view(f, "2차")]}
         return out
 
     def calendar(self) -> list[dict]:
