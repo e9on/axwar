@@ -29,6 +29,8 @@
   --c-b-reply: #1A7F37; /* 회신 */
   --c-b-op: #6E7781;    /* 의견 */
   --c-b-ai: #CF222E;    /* AI */
+  --c-b-ink: #FFFFFF;   /* 배지 글씨(가정 배지만 어두운 글씨) */
+  --c-b-asm-ink: #1B2433;
 
   /* 글꼴 */
   --f-doc: 'Gowun Batang', serif;            /* 서류 제목, 큰 남은 날 숫자 */

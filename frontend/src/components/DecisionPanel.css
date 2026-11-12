@@ -1,0 +1,48 @@
+/* 아래 고정 결정 막대 */
+.bar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
+  background: var(--c-sheet); border-top: 2px solid var(--c-rule-strong);
+  padding: var(--s-3) var(--s-7);
+  display: flex; flex-wrap: wrap; gap: var(--s-2) var(--s-3); align-items: center;
+}
+.bar > p { margin: 0 auto 0 0; color: var(--c-ink-2); }
+.bar .muted { color: var(--c-ink-3); }
+.bar .err { flex-basis: 100%; margin: 0; color: var(--c-seal); font-weight: var(--w-medium); }
+.btns { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.btn {
+  border: 1px solid var(--c-ink); background: var(--c-sheet); color: var(--c-ink);
+  padding: var(--s-2) var(--s-5); border-radius: var(--r-2); font-weight: var(--w-bold);
+}
+.btn.pri { background: var(--c-navy); border-color: var(--c-navy); color: var(--c-sheet); }
+.btn.deny { color: var(--c-seal); border-color: var(--c-seal); }
+.btn:disabled { border-color: var(--c-rule); color: var(--c-ink-3); background: var(--c-paper); cursor: not-allowed; }
+
+.dlg-back {
+  position: fixed; inset: 0; z-index: 20;
+  background: color-mix(in srgb, var(--c-ink) 40%, transparent);
+  display: flex; align-items: center; justify-content: center; padding: var(--s-4);
+}
+.dlg {
+  width: min(520px, 100%); max-height: 90vh; overflow: auto;
+  background: var(--c-sheet); border: 2px solid var(--c-rule-strong); box-shadow: var(--sh-float);
+  padding: var(--s-5);
+}
+.dlg h2 { font-size: var(--t-4); margin-bottom: var(--s-3); }
+.dlg .diff p { margin: 0 0 var(--s-2); }
+.dlg textarea {
+  width: 100%; padding: var(--s-2); border: 1px solid var(--c-rule); border-radius: var(--r-2);
+  background: var(--c-sheet); resize: vertical;
+}
+.dlg fieldset { border: 1px solid var(--c-rule); border-radius: var(--r-2); margin: 0 0 var(--s-3); padding: var(--s-2) var(--s-3); }
+.dlg legend { font-size: var(--t-1); color: var(--c-ink-3); padding: 0 var(--s-1); }
+.dlg .opt { display: inline-flex; gap: var(--s-1); margin-right: var(--s-4); }
+.dlg .btns { justify-content: flex-end; margin-top: var(--s-4); }
+.dlg .err { color: var(--c-seal); margin: var(--s-2) 0 0; }
+
+@media (max-width: 760px) {
+  .bar { padding: var(--s-2) var(--s-4); }
+  .bar > p { flex-basis: 100%; margin: 0; }
+  .btns { width: 100%; }
+  .btns .btn { flex: 1 1 auto; padding: var(--s-2) var(--s-2); font-size: var(--t-1); white-space: nowrap; }
+  .dlg .btns .btn { flex: 0 1 auto; padding: var(--s-2) var(--s-4); }
+}

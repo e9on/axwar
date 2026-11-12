@@ -21,3 +21,10 @@ export function koDate(iso: string): string {
   const [, m, d] = iso.split('-').map(Number)
   return `${m}월 ${d}일`
 }
+
+const DAY_MS = parse('1970-01-02').getTime() - parse('1970-01-01').getTime() // 하루의 밀리초
+
+/** to - from 일수(날짜 문자열 둘). */
+export function daysBetween(from: string, to: string): number {
+  return Math.round((parse(to).getTime() - parse(from).getTime()) / DAY_MS)
+}

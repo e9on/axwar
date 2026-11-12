@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { Route, Routes, useParams } from 'react-router-dom'
+import { Route, Routes } from 'react-router-dom'
 import { ClockProvider, useClock } from './state/clock'
 import { ViewerProvider, useViewer } from './state/viewer'
 import { addDays, withWeekday } from './date'
 import Notices from './Notices'
 import Home from './pages/Home'
+import CaseDetail from './pages/CaseDetail'
 import './App.css'
 
 const DEMO_MODE = '시연' // 서버가 돌려주는 모드 이름(backend store.MODE_DEMO)
@@ -46,15 +47,6 @@ function TopBar() {
         )}
       </div>
     </header>
-  )
-}
-
-function CaseDetail() {
-  const { id } = useParams()
-  return (
-    <main className="page">
-      <h1>건 상세 {id}</h1>
-    </main>
   )
 }
 
