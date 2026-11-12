@@ -24,6 +24,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import json
+import logging
 import threading
 from dataclasses import asdict, replace
 from datetime import date, timedelta
@@ -194,6 +195,8 @@ def _locked(method):
     return wrapper
 
 
+logger = logging.getLogger(__name__)
+
 class Engine:
     def __init__(self, store: Store, provider: Provider | None = None, demo_dir: str | Path | None = None,
                  people: scenarios.People | None = None):
@@ -238,12 +241,26 @@ class Engine:
             if t["title"] == TASK_VOLUME and t["status"] != "완료":
                 self.store.set_task_due(t["id"], self._volume_due(deadline), actor)
 
+    def _close_volume_tasks(self, case_id: int) -> None:
+        for t in self.store.list_tasks(case_id):
+            if t["title"] == TASK_VOLUME and t["status"] != "완료":
+                self.store.set_task_status(t["id"], "완료", "시스템")
+
     def _owner(self, kind: str) -> str:
         return self.campaign if kind == KIND_PLAN else self.contract_owner
 
     def _check_roles(self) -> None:
-        """정책의 담당 역할이 사람 목록에 모두 있는지(없으면 무엇이 빠졌는지 알린다)."""
+        """정책의 담당 역할이 사람 목록에 모두 있는지. 저장된 덮어쓰기(DB)가 어긋난 것은 이번 실행에서 적용하지 않고
+        경고 이벤트를 남긴다(서버가 못 뜨면 화면에서 고칠 길이 없으므로). 정책 파일 값 자체가 어긋나면 오류."""
         have = set(self.people.people.values())
+        for key in ROLE_KEYS:
+            if policy.get(key) not in have and policy.is_overridden(key):
+                stored, default = policy.get(key), policy.base_entry(key)[0]
+                policy.drop_override(key)
+                if default in have:
+                    text = f"정책 {key}의 저장된 값 '{stored}'이 사람 목록에 없어 기본값 '{default}'으로 시작함"
+                    logger.warning(text)
+                    self.store.add_event(None, "정책덮어쓰기무시", "시스템", {"key": key, "stored": stored, "default": default, "text": text})
         missing = [f"{k}={policy.get(k)!r}" for k in ROLE_KEYS if policy.get(k) not in have]
         if missing:
             raise ValueError(f"사람 목록에 없는 담당 역할이 정책에 있음: {', '.join(missing)} — 사람 목록의 역할: {', '.join(sorted(have))}")
@@ -507,16 +524,31 @@ class Engine:
 
     @_locked
     def change_policy(self, actor: str, key: str, value, reason: str) -> None:
-        """정책 값을 바꾼다(검증·이력은 저장소). 편집 역할 목록을 바꿀 때는 모르는 역할을 넣을 수 없다."""
+        """정책 값을 바꾼다(검증·이력은 저장소). 편집 역할 목록을 바꿀 때는 모르는 역할을 넣을 수 없다.
+        역할 이름(roles.*)을 바꾸면 admin.* 목록에 들어 있는 옛 이름도 같은 변경에서 새 이름으로 바꿔 함께 저장한다."""
         self._require_policy_editor(actor, "정책")
-        if key in ROLE_KEYS and str(value).strip() not in set(self.people.people.values()):
+        if key in ROLE_KEYS or key in ROLE_LIST_KEYS:
+            value = str(value).strip()  # 검증과 저장에 같은 값을 쓴다
+        if key in ROLE_KEYS and value not in set(self.people.people.values()):
             raise ValueError(f"담당 역할은 사람 목록에 있는 역할이어야 함: {value!r}")
         if key in ROLE_LIST_KEYS:
-            names = [r.strip() for r in str(value).split(",") if r.strip()]
+            names = [r.strip() for r in value.split(",") if r.strip()]
             bad = [r for r in names if r not in scenarios.ROLES]
             if not names or bad:
                 raise ValueError(f"편집 역할은 알려진 역할이어야 함: {bad or '(비어 있음)'}")
+        old = policy.get(key) if key in ROLE_KEYS else None
+        follow: list[tuple[str, str]] = []
+        if old is not None and old != value and not any(policy.get(k) == old for k in ROLE_KEYS if k != key):
+            for lk in policy.keys():
+                if lk.startswith("admin.") and isinstance(policy.get(lk), str):
+                    items = [r.strip() for r in policy.get(lk).split(",") if r.strip()]
+                    if old in items:
+                        new_items = list(dict.fromkeys(value if r == old else r for r in items))
+                        follow.append((lk, ",".join(new_items)))
         self.store.change_policy(key, value, actor, reason)
+        for lk, lv in follow:
+            self.store.change_policy(lk, lv, actor, f"{key} 변경에 따라 자동 반영")
+        self._check_roles()  # 저장소가 덮어쓰기를 다시 적용했으므로 어긋난 역할 덮어쓰기를 다시 뺀다
 
     @_locked
     def set_mode(self, actor: str, mode: str) -> None:
@@ -1025,9 +1057,7 @@ class Engine:
         if case["kind"] == KIND_PLAN:
             self.store.set_status(case["id"], S_HOLD, "시스템", "확정 보류(철회)")
             status = S_HOLD
-            for t in self.store.list_tasks(case["id"]):  # 확정하지 않으니 남은 물량 입력은 필요 없다
-                if t["title"] == TASK_VOLUME and t["status"] != "완료":
-                    self.store.set_task_status(t["id"], "완료", "시스템")
+            self._close_volume_tasks(case["id"])  # 확정하지 않으니 남은 물량 입력은 필요 없다
             self._task_once(case["id"], self.campaign, "확정 보류(철회) 처리", d,
                             f"{case['ref_id']}: 기한 {deadline}까지 승인이 없어 확정하지 않음. 상대측에 보류·철회를 알림")
         else:
@@ -1542,6 +1572,7 @@ class Engine:
                 self.store.set_status(case_id, S_CHANGE_OK, actor, comment or "승인권자 거절 — 조건변경 통보로 진행")
                 return {**base, "changed": True, "status": self._draft_notice(case, self._today())}
             self.store.set_status(case_id, S_REJECTED, actor, comment or "승인권자 거절")
+            self._close_volume_tasks(case_id)
             self._task_once(case_id, self.campaign, "확정 보류(철회) 처리", self._today(),
                             f"{case['ref_id']}: 승인권자({role})가 거절해 확정하지 않음. 상대측에 보류·철회를 알림")
             return {**base, "changed": True, "status": S_REJECTED}

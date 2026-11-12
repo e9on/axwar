@@ -28,7 +28,8 @@ def test_역할_항목이_가정으로_정책에_있다():
     for key in ("roles.campaign", "roles.contract", "roles.logistics", "roles.cs"):
         value, source, desc = policy.base_entry(key)
         assert source.startswith("가정") and desc and key in policy.keys()
-    assert policy.get("roles.campaign") == "캠페인 담당"
+    assert policy.get("roles.campaign") == "캠페인 담당" and policy.get("roles.contract") == "계약 담당"
+    assert policy.get("roles.logistics") == "물류" and policy.get("roles.cs") == "CS"
 
 
 def test_캠페인_역할을_바꾸면_그_역할만_공지할_수_있다(store):
@@ -144,7 +145,8 @@ def test_예외_승인_대본은_2차_집행까지_간다(store):
     assert len(ex) == 1 and ex[0]["actor"] == "Masil 대표" and ex[0]["detail"]["qty_after"] == 6000 and ex[0]["detail"]["reason"]
     assert store.events(cid, kind="2차보류")  # 반품으로 자동 보류됐다가
     assert {(t["dept"], t["title"]) for t in store.list_tasks(cid)} >= {("물류", "물류 출고(2차)"), ("CS", "CS 대비(2차)")}  # 2차 집행
-    assert c["facts"]["phase2"]["qty"] <= 6000
+    assert c["facts"]["phase2"] == {"qty": 4700, "date": "2026-08-28", "amount_krw": 606285}  # 판매율에 맞춰 6,000→4,700, 집행일 8/28
+    assert "콘텐츠 수정" not in ex[0]["detail"]["reason"]  # 이 대본에는 콘텐츠 수정 단계가 없다
 
 
 def test_새_대본_단계_형식_검증(tmp_path):
@@ -162,3 +164,116 @@ def test_새_대본_단계_형식_검증(tmp_path):
                 {"action": "예외 승인", "actor": "a", "reason": "r"}):
         with pytest.raises(ValueError):
             load(bad)
+
+
+# ---- 수정 회차 1: 역할 이름 정책의 연쇄·공백·시작 불가
+
+def _can(eng, key, role):
+    return role in [r.strip() for r in policy.get(key).split(",")]
+
+
+def test_roles_campaign을_바꾸면_admin_목록의_옛_이름도_새_이름으로_바뀐다(store):
+    eng = Engine(store, provider=FakeProvider([]))
+    eng.change_policy("Masil 대표", "roles.campaign", "품질", "시험")
+    for key in ("admin.review_inputters", "admin.return_inputters", "admin.registry_editors"):
+        assert _can(eng, key, "품질") and not _can(eng, key, "캠페인 담당")
+    assert _can(eng, "admin.return_inputters", "CS") and _can(eng, "admin.registry_editors", "계약 담당")  # 다른 역할은 그대로
+    auto = [h for h in store.policy_history() if h["reason"] == "roles.campaign 변경에 따라 자동 반영"]
+    assert {h["key"] for h in auto} == {"admin.review_inputters", "admin.return_inputters", "admin.registry_editors"}
+    assert all(h["actor"] == "Masil 대표" for h in auto)
+
+
+def test_새_캠페인_역할은_운영에서_반품을_입력하고_등록부를_고치고_옛_역할은_못_한다(store):
+    eng = Engine(store, provider=FakeProvider([]))
+    eng.change_policy("Masil 대표", "roles.campaign", "품질", "시험")
+    eng.set_mode("Masil 대표", "운영")
+    assert eng.require_registry_editor("품질 담당자") == "품질"
+    eng._require_inputter("품질 담당자", "admin.return_inputters", "반품")
+    eng._require_inputter("품질 담당자", "admin.review_inputters", "리뷰")
+    with pytest.raises(PermissionError):
+        eng.require_registry_editor("캠페인 담당자")
+    for key in ("admin.return_inputters", "admin.review_inputters"):
+        with pytest.raises(PermissionError):
+            eng._require_inputter("캠페인 담당자", key, "입력")
+
+
+def test_roles_cs를_다른_역할과_같게_바꿔도_목록이_깨지지_않는다(store):
+    eng = Engine(store, provider=FakeProvider([]))
+    eng.change_policy("Masil 대표", "roles.cs", "물류", "시험")
+    assert policy.get("admin.return_inputters") == "물류,캠페인 담당"
+    eng.change_policy("Masil 대표", "roles.campaign", "물류", "시험")  # 이미 있는 이름이면 중복 없이
+    assert policy.get("admin.return_inputters") == "물류"
+
+
+def test_역할_이름의_앞뒤_공백은_지운_값으로_저장된다(store):
+    eng = Engine(store, provider=FakeProvider([]))
+    eng.change_policy("Masil 대표", "roles.campaign", " 품질 ", "시험")
+    assert policy.get("roles.campaign") == "품질"
+    assert store.policy_history("roles.campaign")[-1]["after"] == "품질"
+    eng2 = Engine(store, provider=FakeProvider([]))  # 엔진을 다시 만들어도 시작된다
+    assert eng2.campaign == "품질"
+
+
+def test_쉼표_목록_정책도_앞뒤_공백을_지운다(store):
+    eng = Engine(store, provider=FakeProvider([]))
+    eng.change_policy("Masil 대표", "admin.return_inputters", "  CS,물류 ", "시험")
+    assert policy.get("admin.return_inputters") == "CS,물류"
+
+
+def test_공백_역할_이름으로도_품질_담당자가_공지할_수_있다(store):
+    eng, _, cid, st = scene2(store, ACCEPT, SCM_PART)
+    to_scm_reply(eng, store, cid, st, "3,000개까지 허용합니다.")
+    eng.play(st[4]); eng.play(st[5])
+    eng.change_policy("Masil 대표", "roles.campaign", " 품질 ", "시험")
+    assert eng.announce(cid, "품질 담당자", qty=3000)["changed"] is True
+
+
+def test_저장된_역할_덮어쓰기가_사람_목록에_없어도_엔진은_시작되고_경고가_남는다(store):
+    eng = Engine(store, provider=FakeProvider([]))
+    eng.change_policy("Masil 대표", "roles.campaign", "품질", "시험")
+    people = scenarios.People({n: r for n, r in eng.people.people.items() if r != "품질"}, eng.people.escalation,
+                              eng.people.escalation_skip)
+    policy.clear_overrides()
+    store2 = store  # 같은 저장소: 열 때 저장된 덮어쓰기를 다시 적용
+    store2._apply_policy_overrides()
+    assert policy.get("roles.campaign") == "품질"
+    eng2 = Engine(store2, provider=FakeProvider([]), people=people)
+    assert eng2.campaign == "캠페인 담당"
+    warn = [e for e in store.events(kind="정책덮어쓰기무시") if "roles.campaign" in e["detail"]["text"]]
+    assert warn and warn[-1]["detail"]["text"] == "정책 roles.campaign의 저장된 값 '품질'이 사람 목록에 없어 기본값 '캠페인 담당'으로 시작함"
+
+
+def test_파일_값_자체가_사람_목록에_없으면_여전히_오류(store):
+    people = scenarios.People({"마케팅팀장": "마케팅팀"}, ("마케팅팀",))
+    with pytest.raises(ValueError, match="사람 목록"):
+        Engine(store, provider=FakeProvider([]), people=people)
+
+
+def test_승인권자_거절로_끝난_기안도_남은_물량_입력_작업을_닫는다(store):
+    _new_plan(store)
+    eng = Engine(store, provider=FakeProvider([ACCEPT]))
+    cid = eng.open_plan("NEW-1")
+    assert _volume_task(store, cid)["status"] != "완료"
+    eng.decide(cid, "마케팅팀", "거절", "시험")
+    assert store.get_case(cid)["status"] == "거절"
+    assert _volume_task(store, cid)["status"] == "완료"
+
+
+def test_roles_contract를_바꾸면_그_역할만_통보를_발송한다(store):
+    eng = Engine(store, provider=FakeProvider([NOTICE]))
+    (cid,) = eng.seed("scenario_3_reject")
+    steps = scenarios.load("scenario_3_reject").script
+    for s in steps[:-1]:
+        eng.play(s)
+    eng.change_policy("Masil 대표", "roles.contract", "품질", "시험")
+    with pytest.raises(PermissionError, match="품질"):
+        eng.send_notice(cid, "계약 담당자")
+    assert eng.send_notice(cid, "품질 담당자")["changed"] is True
+
+
+def test_roles_logistics를_바꾸면_새_기안의_물류_요청_대상이_바뀐다(store):
+    _new_plan(store)
+    eng = Engine(store, provider=FakeProvider([ACCEPT]))
+    eng.change_policy("Masil 대표", "roles.logistics", "품질", "시험")
+    cid = eng.open_plan("NEW-1")
+    assert [r["dept"] for r in store.list_requests(cid) if r["purpose"] == "물류 처리 능력"] == ["품질"]
