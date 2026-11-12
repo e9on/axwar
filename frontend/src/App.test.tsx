@@ -78,6 +78,8 @@ describe('화면 골격', () => {
     fakeServer({
       'GET /api/people': { json: PEOPLE },
       'GET /api/clock': { status: 500, json: { detail: '기준일을 읽지 못했어요' } },
+      ['GET /api/todo/' + encodeURIComponent('그룹 CEO')]: { json: {} }, // 메인이 함께 부르는 길
+      'GET /api/calendar': { json: [] },
     })
     mount('/')
     const alert = await screen.findByRole('alert')

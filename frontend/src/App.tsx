@@ -4,6 +4,7 @@ import { ClockProvider, useClock } from './state/clock'
 import { ViewerProvider, useViewer } from './state/viewer'
 import { addDays, withWeekday } from './date'
 import Notices from './Notices'
+import Home from './pages/Home'
 import './App.css'
 
 const DEMO_MODE = '시연' // 서버가 돌려주는 모드 이름(backend store.MODE_DEMO)
@@ -45,14 +46,6 @@ function TopBar() {
         )}
       </div>
     </header>
-  )
-}
-
-function Home() {
-  return (
-    <main className="page">
-      <h1>메인</h1>
-    </main>
   )
 }
 

@@ -1,0 +1,98 @@
+.home { display: block; }
+.muted { color: var(--c-ink-3); }
+
+/* 일정 띠 (시안 B) */
+.tl { background: var(--c-sheet); border-bottom: 1px solid var(--c-rule); padding: var(--s-4) var(--s-5) var(--s-5); }
+.tl-head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--s-4); flex-wrap: wrap; margin-bottom: var(--s-3); }
+.tl-head h2 { font-size: var(--t-3); font-weight: var(--w-bold); }
+.tl-head span { color: var(--c-ink-3); font-size: var(--t-1); }
+
+.track-wrap { --tl-top: calc(var(--s-7) + var(--s-2)); --tl-row: calc(var(--s-5) + var(--s-2)); }
+.track {
+  position: relative;
+  height: calc(var(--tl-top) + var(--rows, 1) * var(--tl-row));
+  overflow: hidden;
+}
+.month {
+  position: absolute; top: 0; bottom: 0;
+  border-left: 1px solid var(--c-rule);
+  padding-left: var(--s-1);
+  color: var(--c-ink-3); font-size: var(--t-1);
+  white-space: nowrap;
+}
+.band {
+  position: absolute; top: var(--s-4); bottom: 0;
+  background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--c-band) 30%, transparent) 0 6px, color-mix(in srgb, var(--c-band) 12%, transparent) 6px 12px);
+  border-left: 2px solid var(--c-band); border-right: 2px solid var(--c-band);
+}
+.band span {
+  position: absolute; top: calc(var(--s-5) + var(--s-1)); left: var(--s-2);
+  font-size: var(--t-1); font-weight: var(--w-bold); color: var(--c-band-ink);
+  background: var(--c-sheet); padding: 0 var(--s-1); border-radius: var(--r-1); white-space: nowrap;
+}
+.today { position: absolute; top: var(--s-4); bottom: 0; border-left: 2px solid var(--c-ink); z-index: 2; pointer-events: none; }
+.today span {
+  position: absolute; top: 0; left: var(--s-1);
+  font-size: var(--t-1); font-weight: var(--w-bold);
+  background: var(--c-ink); color: var(--c-sheet); padding: 0 var(--s-1); border-radius: var(--r-1); white-space: nowrap;
+}
+
+.dot {
+  position: absolute; z-index: 3; box-sizing: border-box;
+  height: var(--s-5); padding: 0 var(--s-2);
+  border: 1px solid var(--c-rule); border-radius: var(--r-1);
+  background: var(--c-sheet); color: var(--c-ink-3);
+  font-size: var(--t-1); font-weight: var(--w-medium); line-height: 1;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left;
+}
+.dot[data-mine="true"] { background: var(--c-navy); border-color: var(--c-navy); color: var(--c-sheet); font-weight: var(--w-bold); }
+.dot[data-alert="true"] { border: 2px solid var(--c-seal); color: var(--c-seal); }
+.dot[data-alert="true"][data-mine="true"] { color: var(--c-sheet); }
+.dot[aria-disabled="true"] { cursor: default; }
+.dot:hover:not([aria-disabled="true"]) { border-color: var(--c-ink); }
+.dot[data-alert="true"]:hover { border-color: var(--c-seal); }
+.dot:focus-visible, .todo button:focus-visible, .date-list button:focus-visible, .more:focus-visible, .group-list button:focus-visible, .load-failed button:focus-visible {
+  outline: 2px solid var(--c-navy); outline-offset: 2px;
+}
+.group-list { list-style: none; margin: var(--s-3) 0 0; padding: 0; border-top: 1px solid var(--c-rule); }
+.group-list button { width: 100%; text-align: left; padding: var(--s-2) 0; border: 0; border-bottom: 1px solid var(--c-rule); background: none; }
+
+/* 할 일 (시안 A의 결재판 목록) */
+.todo {
+  padding: var(--s-5);
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--s-5) var(--s-6);
+  align-items: start;
+}
+.todo > .muted, .todo > .load-failed { grid-column: 1 / -1; }
+.col h3 { font-size: var(--t-2); color: var(--c-ink-2); font-weight: var(--w-bold); margin-bottom: var(--s-2); }
+.col ul { list-style: none; margin: 0; padding: 0; }
+.todo button {
+  display: flex; flex-direction: column; gap: var(--s-1); width: 100%; text-align: left;
+  background: none; border: 0; border-bottom: 1px solid var(--c-rule); padding: var(--s-2) 0; color: var(--c-ink);
+}
+.todo button:hover .name { color: var(--c-navy); text-decoration: underline; }
+.todo .name { font-weight: var(--w-bold); }
+.todo .sub { display: flex; flex-wrap: wrap; gap: 0 var(--s-2); font-size: var(--t-1); color: var(--c-ink-3); }
+.todo .sub [data-seal="true"] { color: var(--c-seal); font-weight: var(--w-bold); }
+
+.load-failed { display: flex; gap: var(--s-3); align-items: center; color: var(--c-seal); }
+.load-failed button { border: 1px solid var(--c-seal); border-radius: var(--r-2); background: var(--c-sheet); color: var(--c-seal); padding: var(--s-1) var(--s-3); }
+
+/* 휴대폰: 날짜 목록 */
+.date-list { list-style: none; margin: var(--s-3) 0 0; padding: 0; }
+.date-list button {
+  display: flex; gap: var(--s-3); width: 100%; text-align: left; align-items: baseline;
+  background: none; border: 0; border-bottom: 1px solid var(--c-rule); padding: var(--s-2) 0; color: var(--c-ink-3);
+}
+.date-list .d { flex: none; min-width: 5.5em; font-variant-numeric: tabular-nums; }
+.date-list button[data-mine="true"] { color: var(--c-navy); font-weight: var(--w-bold); }
+.date-list button[data-alert="true"] .l { color: var(--c-seal); font-weight: var(--w-bold); }
+.date-list button[data-past="true"] { opacity: 0.7; }
+.date-list-wrap .band { position: relative; top: 0; height: var(--s-6); border-left-width: 2px; }
+.date-list-wrap .band span { top: 50%; transform: translateY(-50%); }
+.more { margin-top: var(--s-3); border: 1px solid var(--c-ink); border-radius: var(--r-2); background: var(--c-sheet); padding: var(--s-1) var(--s-3); font-weight: var(--w-bold); }
+
+@media (max-width: 760px) {
+  .tl { padding: var(--s-3) var(--s-4); }
+  .todo { padding: var(--s-4); grid-template-columns: 1fr; }
+}
