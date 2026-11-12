@@ -44,7 +44,7 @@ def _check_detail(d):
     assert set(d) == LINE_KEYS
     assert d["formula"]
     for i in d["inputs"]:
-        assert set(i) == {"label", "value"}
+        assert {"label", "value"} <= set(i) <= {"label", "value", "unit"}
     for p in d["policies"]:
         assert set(p) == {"key", "value", "source", "description"}
         assert policy.get(p["key"]) == p["value"]

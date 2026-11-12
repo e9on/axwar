@@ -7,9 +7,11 @@ from typing import Literal
 def make_detail(formula: str, inputs: tuple = (), sources: tuple = (), policies: tuple = ()) -> dict:
     """근거 줄을 펼쳤을 때 보이는 내용(계산식·입력값·읽은 원본 파일·쓰인 정책 키). 저장용이라 정책은 키만 둔다.
 
-    inputs = ((이름, 숫자 또는 값), ...), sources = 04_원본데이터 아래 상대 경로, policies = policy.toml 키.
+    inputs = ((이름, 숫자 또는 값) 또는 (이름, 값, 단위), ...), sources = 04_원본데이터 아래 상대 경로, policies = policy.toml 키.
+    단위(unit)는 화면이 값에 붙일 단위 이름(ratio·percent·multiple·krw 등). 모르면 줄에 unit 키가 없다.
     """
-    return {"formula": formula, "inputs": [{"label": k, "value": v} for k, v in inputs],
+    return {"formula": formula,
+            "inputs": [{"label": i[0], "value": i[1], **({"unit": i[2]} if len(i) > 2 else {})} for i in inputs],
             "sources": list(sources), "policy_keys": list(policies)}
 
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 import time
 import urllib.error
@@ -209,16 +210,20 @@ def _fake_review(user: str) -> str:
 
 
 def _fake_reply(user: str) -> str:
-    """키워드 해석(화면에서 직접 넣은 회신용). 수량은 읽지 않는다 — 수량·날짜가 필요한 시연 회신은
-    대본 단계의 ai 필드가 해석을 직접 준다. 거절 단어가 먼저 이긴다."""
+    """키워드 해석(화면에서 직접 넣은 회신용). 수량은 "N개까지 허용/가능" 형태만 읽고(일부 허용, 조건부수용) 날짜는 읽지 않는다 —
+    그 밖의 수량·날짜가 필요한 시연 회신은 대본 단계의 ai 필드가 해석을 직접 준다. 거절 단어가 먼저 이긴다."""
     reply = user.split("회신:", 1)[-1]
+    qty = None
+    limited = re.search(r"(\d[\d,]*)\s*개\s*까지", reply)
     if _has(reply, "불가", "어렵", "안 됩니다", "거절", "않습니다", "수 없"):
         stance, human = "거절", True
+    elif limited and _has(reply, "가능", "허용"):
+        stance, human, qty = "조건부수용", False, int(limited.group(1).replace(",", ""))  # "N개까지 허용" = 일부 허용
     elif _has(reply, "가능", "알겠", "진행하겠", "허용"):
         stance, human = "수용", False
     else:
         stance, human = "정보부족", True
-    return json.dumps({"stance": stance, "qty_limit": None, "next_date": None, "needs_human": human,
+    return json.dumps({"stance": stance, "qty_limit": qty, "next_date": None, "needs_human": human,
                        "confidence": 1.0}, ensure_ascii=False)
 
 

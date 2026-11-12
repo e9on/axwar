@@ -69,9 +69,9 @@ def test_근거_값에_단위가_붙는다(store):
     assert sig["coupon_stacking"]["unit"] == "ratio"
     assert sig["slow_payment_channel"]["unit"] == "ratio"
     assert sig["forecast_gap"]["unit"] == "multiple"
-    assert sig["spend_concentration"]["unit"] == "multiple"
+    assert sig["spend_concentration"]["unit"] == "score"
     assert sig["channel_return_vs_benchmark"]["unit"] == "multiple"
-    assert sig["trend"]["unit"] == "multiple"
+    assert sig["trend"]["unit"] == "diff"
     assert sig["cannibalization"]["value"] is None
     ki = {k["key"]: k for k in ev["key_indicators"]}
     assert ki["real_roas"]["unit"] == "multiple"

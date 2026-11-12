@@ -58,9 +58,9 @@ SIGNAL_UNITS = {
     "forecast_gap": "multiple",             # 예상 GMV ÷ 요청 예산 = 예상 ROAS
     "coupon_stacking": "ratio",             # 쿠폰 중복 주문 ÷ 주문
     "slow_payment_channel": "ratio",        # 지연 채널 GMV ÷ GMV
-    "spend_concentration": "multiple",      # HHI(비중 %의 제곱합) — 점수로 그대로 보임
+    "spend_concentration": "score",         # HHI(비중 %의 제곱합) — 배수가 아니라 점수(기호 없이 숫자)
     "channel_return_vs_benchmark": "multiple",  # 반품률 ÷ 기준선 배수
-    "trend": "multiple",                    # 실질 ROAS 차이
+    "trend": "diff",                        # 실질 ROAS의 회차 간 차이 — 배수가 아니라 차이(부호 있는 숫자)
     "breakeven_hidden_sales": "ratio",      # 기록 GMV 대비 필요한 기록 밖 판매 비율
 }
 
@@ -163,7 +163,7 @@ def future_value_signals(influencer_id: str) -> list[Signal]:
         detail=make_detail(
             "재구매율 = 재구매 고객 ÷ 첫 주문이 이 인플루언서 캠페인인 고객. z = (재구매율 − 업계 기준) ÷ √(기준×(1−기준)÷고객 수). "
             "한쪽 95% 검정에서 z < −기준 z면 유의하게 낮아 🔴, 낮기만 하면 🟡",
-            (("첫 주문 귀속 고객", n), ("90일 안 재구매 고객", k), ("재구매율", rate), ("업계 기준 재구매율", bench), ("z", z)),
+            (("첫 주문 귀속 고객", n), ("90일 안 재구매 고객", k), ("재구매율", rate, "ratio"), ("업계 기준 재구매율", bench, "ratio"), ("z", z)),
             (_ORD, _CAMP, _REPEAT, _BENCH_IND), ("split.stop_z",)),
     )
 
@@ -182,7 +182,7 @@ def future_value_signals(influencer_id: str) -> list[Signal]:
         detail=make_detail(
             "첫 구매 이후 주문 공헌 = 첫 주문일 이후 주문의 공헌(마케팅 전) 합. 최종 공헌(광고비까지 뺀 값)에 이미 포함돼 있어, "
             "재구매를 더해도 최종 공헌이 음수면 🔴",
-            (("첫 구매 이후 주문 공헌", post), ("최종 공헌", final)),
+            (("첫 구매 이후 주문 공헌", post, "krw"), ("최종 공헌", final, "krw")),
             (_ORD, _CAMP, _RET, _COST, _AD)),
     )
     return [repurchase, post_sig]
@@ -230,8 +230,8 @@ def risk_signals(plan_id: str) -> list[Signal]:
         make_detail(
             "예상 ROAS = 기안 예상 GMV ÷ 요청 예산. 표본 인플루언서별 명목 ROAS(GMV ÷ 광고비) 최대값보다 크면 과대 예상 🔴. "
             "예상 GMV 기반이라 판정에는 쓰지 않음",
-            (("기안 예상 GMV", plan["expected_gmv_krw"]), ("요청 예산", plan["requested_budget_krw"]),
-             ("예상 ROAS", ratio), ("명목 ROAS 최대", top_nominal)),
+            (("기안 예상 GMV", plan["expected_gmv_krw"], "krw"), ("요청 예산", plan["requested_budget_krw"], "krw"),
+             ("예상 ROAS", ratio, "multiple"), ("명목 ROAS 최대", top_nominal, "multiple")),
             (_PLAN, *STATS_SOURCES)),
     ))
 
@@ -277,7 +277,7 @@ def risk_signals(plan_id: str) -> list[Signal]:
         detail=make_detail(
             "지연 채널 매출 비중 = 결제조건이 업계 DSO보다 긴 채널의 GMV ÷ 이 인플루언서 GMV. 통보문이 있는 파트너 채널은 통보문 일수를 쓴다. "
             "비중이 있고 현금 하회 구간이 있으면 🔴, 비중만 있으면 🟡",
-            (("지연 채널 GMV", slow), ("이 인플루언서 GMV", total), ("업계 DSO(일)", dso), ("현금 하회 구간 수", len(breaches))),
+            (("지연 채널 GMV", slow, "krw"), ("이 인플루언서 GMV", total, "krw"), ("업계 DSO(일)", dso), ("현금 하회 구간 수", len(breaches))),
             (_ORD, _CAMP, _CHANNEL, _BENCH_IND, *(f"02_masil/financials/{n.source_file}" for n in notices.values()), *_CASH_FILES),
             ("cash.horizon_days",)),
     ))
@@ -296,7 +296,7 @@ def risk_signals(plan_id: str) -> list[Signal]:
         f"인플루언서별 광고비 비중 제곱합. 이 인플루언서 비중 {shares.get(inf, 0):.1f}%. {hhi_limit} 기준은 차용한 가정", "가정",
         detail=make_detail(
             "HHI = 인플루언서별 광고비 비중(%)의 제곱합. HHI가 기준을 넘고 이 인플루언서가 광고비 1위면 🔴",
-            (("이 인플루언서 광고비 비중(%)", shares.get(inf, 0)), ("HHI", hhi), ("광고비 1위", is_top)),
+            (("이 인플루언서 광고비 비중(%)", shares.get(inf, 0), "percent"), ("HHI", hhi, "score"), ("광고비 1위", is_top)),
             (_AD, _CAMP), ("signals.hhi_limit",)),
     ))
 
@@ -318,7 +318,7 @@ def risk_signals(plan_id: str) -> list[Signal]:
         detail=make_detail(
             f"채널 반품률 ÷ 기준선 = 기안 캠페인 주문의 환불액 ÷ GMV(기준선 표기 자릿수로 반올림) ÷ 같은 채널 유형 기준선. "
             f"배수가 기준 이상이면 🔴, 1 초과면 🟡",
-            (("환불액", refund), ("캠페인 GMV", gmv), ("반품률(%)", rate * 100), ("기준선(%)", bench * 100), ("배수", rr)),
+            (("환불액", refund, "krw"), ("캠페인 GMV", gmv, "krw"), ("반품률(%)", rate * 100, "percent"), ("기준선(%)", bench * 100, "percent"), ("배수", rr, "multiple")),
             (_ORD, _RET, _CAMP, _BENCH_CH), ("signals.return_ratio_red",)),
     ))
 
@@ -361,7 +361,7 @@ def breakeven_hidden_sales(influencer_id: str) -> Signal:
             "red", "광고비를 빼기 전부터 적자라 기록 밖 판매가 늘어도 본전 불가. " + ATTRIBUTION_NOTE, "계산",
             detail=make_detail(
                 "광고비를 빼기 전(마케팅 전 공헌)부터 0 이하라 기록 밖 판매가 늘어도 본전이 될 수 없음",
-                (("마케팅 전 공헌", b.pre_marketing), ("최종 공헌", b.final), ("기록 GMV", b.gmv)), STATS_SOURCES),
+                (("마케팅 전 공헌", b.pre_marketing, "krw"), ("최종 공헌", b.final, "krw"), ("기록 GMV", b.gmv, "krw")), STATS_SOURCES),
         )
     if b.final >= 0:
         value = 0.0
@@ -375,6 +375,6 @@ def breakeven_hidden_sales(influencer_id: str) -> Signal:
         "계산",
         detail=make_detail(
             "필요 비율 = (−최종 공헌) ÷ 마케팅 전 공헌률 ÷ 기록 GMV. 마케팅 전 공헌률 = 마케팅 전 공헌 ÷ GMV. 최종 공헌이 0 이상이면 0",
-            (("최종 공헌", b.final), ("마케팅 전 공헌", b.pre_marketing), ("기록 GMV", b.gmv), ("필요 비율", value)),
+            (("최종 공헌", b.final, "krw"), ("마케팅 전 공헌", b.pre_marketing, "krw"), ("기록 GMV", b.gmv, "krw"), ("필요 비율", value, "ratio")),
             STATS_SOURCES),
     )
