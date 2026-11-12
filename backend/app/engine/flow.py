@@ -30,9 +30,9 @@ from dataclasses import asdict, replace
 from datetime import date, timedelta
 from pathlib import Path
 
-from app import policy
+from app import config, policy
 from app.ai import judge, writer
-from app.ai.providers import Provider, make_provider
+from app.ai.providers import FakeProvider, Provider, make_provider
 from app.calc import evidence as evidence_calc
 from app.calc import inventory
 from app.calc import volume as volume_calc
@@ -203,6 +203,7 @@ def _locked(method):
 
 
 logger = logging.getLogger(__name__)
+SCRIPT_AI_MODEL = "fake(대본)"  # 대본이 해석을 직접 준 회신의 판정 기록 모델 이름
 
 class Engine:
     def __init__(self, store: Store, provider: Provider | None = None, demo_dir: str | Path | None = None,
@@ -210,6 +211,7 @@ class Engine:
         """provider를 주면 모든 AI 작업에 쓴다(테스트). 안 주면 작업마다 make_provider(task, ledger=store)."""
         self.store = store
         self._fixed = provider
+        self._script_reply: Provider | None = None  # 대본 회신 단계 동안만 채워지는 그 회신의 고정 해석
         self._providers: dict[str, Provider] = {}
         self.demo_dir = Path(demo_dir) if demo_dir is not None else None
         if people is None:
@@ -273,6 +275,8 @@ class Engine:
             raise ValueError(f"사람 목록에 없는 담당 역할이 정책에 있음: {', '.join(missing)} — 사람 목록의 역할: {', '.join(sorted(have))}")
 
     def _provider(self, task: str) -> Provider:
+        if task == "reply" and self._script_reply is not None:
+            return self._script_reply
         if self._fixed is not None:
             return self._fixed
         if task not in self._providers:
@@ -488,7 +492,11 @@ class Engine:
             return {"action": action, "date": step["date"], "actions": moved}
         cid = self._case_for(step)
         if action == "회신":
-            out = self.reply(self._request_for(cid, step["dept"]), step["text"], step.get("attachments", 0))
+            self._script_reply = self._reply_override(step)
+            try:
+                out = self.reply(self._request_for(cid, step["dept"]), step["text"], step.get("attachments", 0))
+            finally:
+                self._script_reply = None
         elif action == "결정":
             decide = self.decide_phase2 if step.get("stage") == "2차" else self.decide
             out = decide(cid, step["actor"], step["decision"], step.get("comment", ""))
@@ -509,6 +517,14 @@ class Engine:
             g = self.add_returns(cid, step["change_of_mind"], step["color"])
             out = {"case_id": cid, "status": self.store.get_case(cid)["status"], "gate": asdict(g)}
         return {"action": action, "actions": moved, **out}
+
+    def _reply_override(self, step: dict) -> Provider | None:
+        """대본 회신 단계의 ai 해석을 그 회신 한 번만 쓰는 고정 응답 공급자로. AI 모드가 fake이고 고정 공급자가 없을 때만
+        (real 모드는 실제 모델이 해석, 시험이 공급자를 주입했으면 그 공급자가 해석)."""
+        ai = step.get("ai")
+        if ai is None or self._fixed is not None or config.ai_mode() != "fake":
+            return None
+        return FakeProvider([json.dumps({"confidence": 1.0, **ai}, ensure_ascii=False)], model=SCRIPT_AI_MODEL)
 
     def _demo_only(self, what: str) -> None:
         if self.store.get_mode() == MODE_OPERATION:
@@ -2445,10 +2461,26 @@ class Engine:
         d = _d(deadline)
         return {"deadline": deadline, "deny_date": deny_date(d).isoformat(), "approval_deadline": approval_deadline(d).isoformat()}
 
-    @classmethod
-    def _item(cls, c: dict) -> dict:
-        return {"case_id": c["id"], "kind": c["kind"], "ref_id": c["ref_id"], "status": c["status"],
-                **cls.deadline_view(c["facts"].get("deadline"))}
+    def case_title(self, c: dict) -> str:
+        """사람이 읽을 건 이름. 기안 = "캠페인 이름 · 인플루언서 이름"(원본 마스터에서, 등록부 기안의 캠페인·인플루언서 ID 기준,
+        시연 전용 기안은 끝에 "(시연용)"), 전속계약 = "인플루언서 이름 전속계약". 이름을 못 찾으면 ref_id."""
+        if c["kind"] == KIND_CONTRACT:
+            name = c["facts"].get("influencer_name")
+            return f"{name} 전속계약" if name else c["ref_id"]
+        try:
+            plan = self.store.get_plan(c["ref_id"])
+        except KeyError:
+            return c["ref_id"]
+        camp = next((r["campaign_name"] for r in loader.campaign_master_rows() if r["campaign_id"] == plan["campaign_id"]), None)
+        inf = next((r["influencer_name"] for r in loader.influencer_rows() if r["influencer_id"] == plan["influencer_id"]), None)
+        parts = [x for x in (camp, inf) if x]
+        if not parts:
+            return c["ref_id"]
+        return " · ".join(parts) + (" (시연용)" if "base" in plan["raw"] else "")
+
+    def _item(self, c: dict) -> dict:
+        return {"case_id": c["id"], "kind": c["kind"], "ref_id": c["ref_id"], "title": self.case_title(c), "status": c["status"],
+                **self.deadline_view(c["facts"].get("deadline"))}
 
     def _stale_open(self, c: dict, key: str) -> bool:
         """올림 알림은 그 일이 아직 미처리일 때만 보인다."""
@@ -2612,7 +2644,8 @@ class Engine:
         p2 = self.phase2_view(case_id) if case["kind"] == KIND_PLAN and f.get("phase2") else None
         shown = {k: (_plain(v) if k.endswith("_hits") else v) for k, v in f.items()}
         out = {
-            "case": {k: case[k] for k in ("id", "kind", "ref_id", "status", "origin", "created_at", "updated_at")},
+            "case": {**{k: case[k] for k in ("id", "kind", "ref_id", "status", "origin", "created_at", "updated_at")},
+                     "title": self.case_title(case)},
             "facts": shown,
             "evidence": {"indicators": {"good": f["indicator_good"], "hits": _plain(f["indicator_hits"]),
                                         "excluded": f["indicator_excluded"]}},

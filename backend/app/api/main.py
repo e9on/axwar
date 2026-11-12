@@ -223,8 +223,8 @@ def create_app(store: Store, engine: Engine, static_dir: str | Path | None = Non
 
     @app.get("/api/cases")
     def cases(kind: str | None = None, status: str | None = None):
-        return [{"id": c["id"], "kind": c["kind"], "ref_id": c["ref_id"], "status": c["status"],
-                 **engine.deadline_view(c["facts"].get("deadline")), "origin": c["origin"]}
+        return [{"id": c["id"], "kind": c["kind"], "ref_id": c["ref_id"], "title": engine.case_title(c),
+                 "status": c["status"], **engine.deadline_view(c["facts"].get("deadline")), "origin": c["origin"]}
                 for c in store.list_cases(kind) if status is None or c["status"] == status]
 
     @app.get("/api/cases/{case_id}")

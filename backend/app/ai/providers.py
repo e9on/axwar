@@ -209,10 +209,12 @@ def _fake_review(user: str) -> str:
 
 
 def _fake_reply(user: str) -> str:
+    """키워드 해석(화면에서 직접 넣은 회신용). 수량은 읽지 않는다 — 수량·날짜가 필요한 시연 회신은
+    대본 단계의 ai 필드가 해석을 직접 준다. 거절 단어가 먼저 이긴다."""
     reply = user.split("회신:", 1)[-1]
-    if _has(reply, "불가", "어렵", "안 됩니다", "거절"):
+    if _has(reply, "불가", "어렵", "안 됩니다", "거절", "않습니다", "수 없"):
         stance, human = "거절", True
-    elif _has(reply, "가능", "알겠", "진행하겠"):
+    elif _has(reply, "가능", "알겠", "진행하겠", "허용"):
         stance, human = "수용", False
     else:
         stance, human = "정보부족", True
