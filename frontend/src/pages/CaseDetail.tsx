@@ -6,7 +6,7 @@ import { useViewer } from '../state/viewer'
 import { useLoad } from '../state/useLoad'
 import { daysBetween, koDate } from '../date'
 import { num, won } from '../format'
-import { S_DEFAULT_DENY, S_PHASE2_WAIT } from '../decisions'
+import { KIND_CONTRACT, S_DEFAULT_DENY, ST_PHASE2_WAIT } from '../decisions'
 import type { CaseDetailData, EvidenceData } from '../caseTypes'
 import ApprovalStamps from '../components/ApprovalStamps'
 import Badge from '../components/Badge'
@@ -16,7 +16,6 @@ import LoadFailed from '../components/LoadFailed'
 import { AiBlock, ChangeLines, History, Requests, Tasks } from '../components/CaseSections'
 import './CaseDetail.css'
 
-const KIND_CONTRACT = '계약' // 서버 건 종류 이름(backend flow.KIND_CONTRACT)
 const ORIGIN_DEMO = '시연' // 서버 출처 이름
 
 /** 분할 뒤 2차 금액이 조절돼 총 금액이 달라졌으면 조절 후 금액(서버 _resize_phase2와 같은 식) */
@@ -123,7 +122,7 @@ export default function CaseDetailPage() {
   const f = d.facts
   const contract = c.kind === KIND_CONTRACT
   const status = c.status
-  const phase2Wait = status === S_PHASE2_WAIT
+  const phase2Wait = c.stage === ST_PHASE2_WAIT
   const viewerRole = d.viewer?.role ?? null
   const adjusted = adjustedAmount(d)
   const shownDay = contract ? f.expiry : (f.phase1_date ?? f.settlement_date)
@@ -192,7 +191,7 @@ export default function CaseDetailPage() {
               </span>
             </div>
           </div>
-          <ApprovalStamps label="결재란" roles={d.rule.required_roles} approved={d.rule.approved_roles} viewerRole={viewerRole} canAct={!phase2Wait && !!d.viewer?.can_decide} status={status} />
+          <ApprovalStamps label="결재란" roles={d.rule.required_roles} approved={d.rule.approved_roles} viewerRole={viewerRole} canAct={!phase2Wait && !!d.viewer?.can_decide} status={status} stage={c.stage} />
         </div>
 
         <ChangeLines escalations={d.escalations} changes={d.approver_changes} />
@@ -236,6 +235,7 @@ export default function CaseDetailPage() {
                 viewerRole={viewerRole}
                 canAct={phase2Wait && !!d.viewer?.can_decide_phase2}
                 status={status}
+                stage={c.stage}
               />
             )}
             {phase2Wait && (

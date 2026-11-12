@@ -60,14 +60,15 @@ function DetailPanel({ detail, note }: { detail: Detail | undefined; note?: stri
           <p className="dh">쓰인 정책 값</p>
           <ul className="policies">
             {d.policies.map((p) => {
-              const assumed = p.source.startsWith('가정')
+              const assumed = !!p.source?.startsWith('가정')
               return (
                 <li key={p.key} data-assumed={assumed}>
                   <p>
                     {assumed && <Badge kind="가정" />}
-                    <code>{p.key}</code> = <b>{anyValue(p.value)}</b>
+                    <code>{p.key}</code>
+                    {p.missing ? <b> 없어진 정책 항목</b> : <> = <b>{anyValue(p.value)}</b></>}
                   </p>
-                  <p className="muted">출처: {p.source}</p>
+                  {p.source && <p className="muted">출처: {p.source}</p>}
                   {p.description && <p>{p.description}</p>}
                 </li>
               )

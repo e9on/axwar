@@ -12,7 +12,7 @@ const PEOPLE = [
 const DETAIL_PATH = (who: string) => `/api/cases/7?viewer=${encodeURIComponent(who)}`
 
 const detailOf = (viewer: object, over: Record<string, unknown> = {}) => ({
-  case: { id: 7, kind: '기안', ref_id: 'DEMO-PLAN-001', status: '승인 대기', origin: '시연', title: '초혜핏 선케어 캠페인2 · 초혜핏 (시연용)', note: '시연용 가정: 원본 기안을 복사해 요청액만 바꿈', source_plan_id: 'PLAN-019' },
+  case: { id: 7, kind: '기안', ref_id: 'DEMO-PLAN-001', status: '승인 대기', open: true, stage: '1차 승인 대기', origin: '시연', title: '초혜핏 선케어 캠페인2 · 초혜핏 (시연용)', note: '시연용 가정: 원본 기안을 복사해 요청액만 바꿈', source_plan_id: 'PLAN-019' },
   facts: {
     amount_krw: 8_000_000,
     plan_total_krw: 8_000_000,
@@ -89,7 +89,7 @@ const EVIDENCE = {
       }),
     },
     {
-      key: 'spend_concentration', label: '광고비 쏠림(HHI)', value: 2461.7, unit: 'multiple', compare: '기준 1800 초과', level: 'green', badge: '가정', judgment: '판정', exclude_reason: '',
+      key: 'spend_concentration', label: '광고비 쏠림(HHI)', value: 2461.7, unit: 'score', compare: '기준 1800 초과', level: 'green', badge: '가정', judgment: '판정', exclude_reason: '',
       detail: D('HHI = 비중 제곱의 합', {
         policies: [{ key: 'signals.hhi_limit', value: 1800, source: '가정: 원본에 없음', description: '쏠림이 위험인 기준' }],
       }),
@@ -218,6 +218,7 @@ describe('건 상세', () => {
     })
     mount('Masil 대표')
     await userEvent.click(await screen.findByRole('button', { name: '승인' }))
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '승인 확정' }))
     await waitFor(() => expect(calls.filter((c) => c.method === 'POST' && c.path === '/api/cases/7/decision')).toHaveLength(1))
     const post = calls.find((c) => c.method === 'POST' && c.path === '/api/cases/7/decision')
     expect(post?.body).toEqual({ actor: 'Masil 대표', action: '승인', comment: '' })
@@ -348,7 +349,7 @@ describe('건 상세', () => {
 
   it('시연_초기화로_연_원본_기안은_시연용_표시가_없다', async () => {
     Setup(MAY, 'Masil 대표', {}, {
-      case: { id: 7, kind: '기안', ref_id: 'PLAN-001', status: '승인 대기', origin: '시연', title: '혜인 기초 캠페인3 · 혜인', note: null, source_plan_id: null },
+      case: { id: 7, kind: '기안', ref_id: 'PLAN-001', status: '승인 대기', open: true, stage: '1차 승인 대기', origin: '시연', title: '혜인 기초 캠페인3 · 혜인', note: null, source_plan_id: null },
     })
     mount('Masil 대표')
     expect(await screen.findByRole('heading', { level: 1 })).toHaveTextContent('혜인 기초 캠페인3')
@@ -389,7 +390,7 @@ describe('건 상세', () => {
   })
 
   it('끝난_건은_남은_날_대신_결과_문장', async () => {
-    const closed = { rule: { approvers: [], hits: [], required_roles: ['마케팅팀'], approved_roles: [], pending_roles: [] }, case: { id: 7, kind: '기안', ref_id: 'P-1', status: '기본 거부', origin: '화면' } }
+    const closed = { rule: { approvers: [], hits: [], required_roles: ['마케팅팀'], approved_roles: [], pending_roles: [] }, case: { id: 7, kind: '기안', ref_id: 'P-1', status: '기본 거부', open: false, stage: '끝남', origin: '화면' } }
     Setup(NOT, '마케팅팀장', {}, closed)
     mount('마케팅팀장')
     const clock = await screen.findByLabelText('남은 날')
@@ -477,16 +478,17 @@ describe('결정 버튼은 서버가 알려 준 것만', () => {
   })
 
   it('2차_승인_대기에서는_actions_phase2대로_phase2_decision으로_보낸다', async () => {
-    const over = { case: { id: 7, kind: '기안', ref_id: 'P-1', status: '2차 승인 대기', origin: '화면' } }
+    const over = { case: { id: 7, kind: '기안', ref_id: 'P-1', status: '2차 승인 대기', open: false, stage: '2차 승인 대기', origin: '화면' } }
     const { calls } = Setup(MAY_P2, 'Masil 대표', { 'POST /api/cases/7/phase2/decision': { json: { changed: true, status: '2차 집행' } } }, over)
     mount('Masil 대표')
     await userEvent.click(await screen.findByRole('button', { name: '승인' }))
     expect(screen.queryByRole('button', { name: /^분할 승인/ })).toBeNull()
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '승인 확정' }))
     await waitFor(() => expect(calls.find((c) => c.path === '/api/cases/7/phase2/decision')?.body).toEqual({ actor: 'Masil 대표', action: '승인', comment: '' }))
   })
 
   it('2차_상신은_stage_2차로_보낸다', async () => {
-    const over = { case: { id: 7, kind: '기안', ref_id: 'P-1', status: '2차 승인 대기', origin: '화면' } }
+    const over = { case: { id: 7, kind: '기안', ref_id: 'P-1', status: '2차 승인 대기', open: false, stage: '2차 승인 대기', origin: '화면' } }
     const { calls } = Setup(MAY_P2, 'Masil 대표', { 'POST /api/cases/7/escalate': { json: { changed: true } } }, over)
     mount('Masil 대표')
     await userEvent.click(await screen.findByRole('button', { name: '위로 올리기' }))
@@ -498,7 +500,7 @@ describe('결정 버튼은 서버가 알려 준 것만', () => {
   })
 
   it('2차_거절은_이유와_함께_phase2_decision', async () => {
-    const over = { case: { id: 7, kind: '기안', ref_id: 'P-1', status: '2차 승인 대기', origin: '화면' } }
+    const over = { case: { id: 7, kind: '기안', ref_id: 'P-1', status: '2차 승인 대기', open: false, stage: '2차 승인 대기', origin: '화면' } }
     const { calls } = Setup(MAY_P2, 'Masil 대표', { 'POST /api/cases/7/phase2/decision': { json: { changed: true } } }, over)
     mount('Masil 대표')
     await userEvent.click(await screen.findByRole('button', { name: '거절' }))
@@ -520,10 +522,11 @@ describe('보내는 중', () => {
       return base(i, n)
     })
     mount('Masil 대표')
-    const approve = await screen.findByRole('button', { name: '승인' })
-    await userEvent.click(approve)
-    await userEvent.click(approve)
-    await userEvent.click(approve)
+    await userEvent.click(await screen.findByRole('button', { name: '승인' }))
+    const ok = within(screen.getByRole('dialog')).getByRole('button', { name: '승인 확정' })
+    await userEvent.click(ok)
+    await userEvent.click(ok)
+    await userEvent.click(ok)
     await waitFor(() => expect(reads).toBe(2))
     expect(screen.getByRole('button', { name: '승인' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '거절' })).toBeDisabled()
@@ -539,8 +542,9 @@ describe('보내는 중', () => {
     Setup(MAY, 'Masil 대표', { 'POST /api/cases/7/decision': { status: 409, json: { detail: '이미 승인한 건이에요' } } })
     mount('Masil 대표')
     await userEvent.click(await screen.findByRole('button', { name: '승인' }))
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '승인 확정' }))
     expect((await screen.findAllByText('이미 승인한 건이에요')).length).toBeGreaterThan(0)
-    expect(screen.getByRole('button', { name: '승인' })).toBeEnabled()
+    expect(within(screen.getByRole('dialog')).getByRole('button', { name: '승인 확정' })).toBeEnabled()
   })
 
   it('거절_상신_실패도_문장이_보인다', async () => {
@@ -652,6 +656,7 @@ describe('근거 값 단위', () => {
     expect(row(/예상 ROAS 괴리/)).toHaveTextContent('10.400')
     expect(row(/매출\(GMV\)/)).toHaveTextContent('121,676,523원')
     expect(row(/본전에 필요한/)).toHaveTextContent('25.60%')
+    expect(row(/광고비 쏠림/)).toHaveTextContent('2,462')
   })
 })
 
@@ -680,7 +685,7 @@ describe('결재선 이유', () => {
 
 describe('낮은 항목', () => {
   it('열린_건인데_승인할_사람이_없으면_아직_열려_있다고_말한다', async () => {
-    const open = { rule: { approvers: [], hits: [], required_roles: ['마케팅팀'], approved_roles: ['마케팅팀'], pending_roles: [] }, case: { id: 7, kind: '기안', ref_id: 'P-1', status: '승인 대기', origin: '화면' } }
+    const open = { rule: { approvers: [], hits: [], required_roles: ['마케팅팀'], approved_roles: ['마케팅팀'], pending_roles: [] }, case: { id: 7, kind: '기안', ref_id: 'P-1', status: '승인 대기', open: true, stage: '1차 승인 대기', origin: '화면' } }
     Setup(NOT, '마케팅팀장', {}, open)
     mount('마케팅팀장')
     expect(await screen.findByText(/아직 열려 있는 건이에요/)).toBeInTheDocument()
@@ -688,7 +693,7 @@ describe('낮은 항목', () => {
   })
 
   it('다른_종료_상태도_남은_칸에_상태가_적힌다', async () => {
-    const closed = { rule: { approvers: [], hits: [], required_roles: ['마케팅팀', 'Masil 대표'], approved_roles: ['마케팅팀'], pending_roles: [] }, case: { id: 7, kind: '기안', ref_id: 'P-1', status: '1차 차단', origin: '화면' } }
+    const closed = { rule: { approvers: [], hits: [], required_roles: ['마케팅팀', 'Masil 대표'], approved_roles: ['마케팅팀'], pending_roles: [] }, case: { id: 7, kind: '기안', ref_id: 'P-1', status: '1차 차단', open: false, stage: '끝남', origin: '화면' } }
     Setup(NOT, '마케팅팀장', {}, closed)
     mount('마케팅팀장')
     const stamps = await screen.findByRole('list', { name: '결재란' })
@@ -700,7 +705,7 @@ describe('낮은 항목', () => {
       plan: { qty: 100, date: '2026-10-05' }, approvers: ['그룹 CEO'], hits: [], required_roles: ['그룹 CEO'], pending_roles: ['그룹 CEO'], approved_roles: [],
       gate: { open: true }, deadline: null, deny_date: '2026-10-01', approval_deadline: null, decision: null, result: null,
     }
-    const over = { case: { id: 7, kind: '기안', ref_id: 'P-1', status: '2차 승인 대기', origin: '화면' }, phase2: p2 }
+    const over = { case: { id: 7, kind: '기안', ref_id: 'P-1', status: '2차 승인 대기', open: false, stage: '2차 승인 대기', origin: '화면' }, phase2: p2 }
     Setup(MAY_P2, 'Masil 대표', {}, over)
     mount('Masil 대표')
     const stamps = await screen.findByRole('list', { name: '2차 결재란' })
@@ -719,5 +724,98 @@ describe('낮은 항목', () => {
     mount('Masil 대표')
     expect(await screen.findByText(/원본 기안을 복사해 요청액만 바꿈/)).toBeInTheDocument()
     expect(calls.some((c) => c.path.startsWith('/api/plans'))).toBe(false)
+  })
+})
+
+const LAPSED_REASON = '기한이 지나 기본 거부 대상 — 결정할 수 없음(기본 거부 실행일 2026-09-08)'
+const LAPSED = {
+  ...MAY,
+  can_decide: false,
+  actions: [],
+  split_preview: null,
+  blocked: [
+    { action: '승인', reason: LAPSED_REASON },
+    { action: '분할승인', reason: LAPSED_REASON },
+    { action: '거절', reason: LAPSED_REASON },
+  ],
+}
+
+describe('승인 확인 창과 서버가 준 열린 여부·막힘', () => {
+  it('승인은_확인_창을_거쳐_보낸다', async () => {
+    const { calls } = Setup(MAY, 'Masil 대표', { 'POST /api/cases/7/decision': { json: { changed: true, status: '승인' } } })
+    mount('Masil 대표')
+    await userEvent.click(await screen.findByRole('button', { name: '승인' }))
+    const dlg = screen.getByRole('dialog')
+    expect(within(dlg).getByRole('heading', { name: /이 건을 승인합니다/ })).toBeInTheDocument()
+    expect(within(dlg).getByText(/8,000,000원/)).toBeInTheDocument()
+    expect(within(dlg).getByText(/2026년 9월 14일|9월 14일/)).toBeInTheDocument()
+    expect(within(dlg).getByText(/나누지 않고|분할 없이|한 번에/)).toBeInTheDocument()
+    expect(within(dlg).getByRole('button', { name: '승인 확정' })).toHaveFocus()
+    expect(calls.some((c) => c.method === 'POST')).toBe(false)
+    await userEvent.click(within(dlg).getByRole('button', { name: '승인 확정' }))
+    await waitFor(() => expect(calls.find((c) => c.method === 'POST')?.body).toEqual({ actor: 'Masil 대표', action: '승인', comment: '' }))
+  })
+
+  it('승인_확인_창에서_취소하면_보내지_않는다', async () => {
+    const { calls } = Setup(MAY, 'Masil 대표')
+    mount('Masil 대표')
+    await userEvent.click(await screen.findByRole('button', { name: '승인' }))
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '취소' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(calls.some((c) => c.method === 'POST')).toBe(false)
+  })
+
+  it('기한_지난_건은_결정_버튼_대신_이유', async () => {
+    Setup(LAPSED, 'Masil 대표')
+    mount('Masil 대표')
+    expect((await screen.findAllByText(new RegExp(LAPSED_REASON.slice(0, 20)))).length).toBeGreaterThan(0)
+    expect(screen.queryByRole('button', { name: '승인' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '거절' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^분할 승인/ })).toBeNull()
+  })
+
+  it('열린_여부는_case_open으로', async () => {
+    const mk = (open: boolean, stage: string) => ({
+      rule: { approvers: [], hits: [], required_roles: ['마케팅팀'], approved_roles: ['마케팅팀'], pending_roles: [] },
+      case: { id: 7, kind: '기안', ref_id: 'P-1', status: '처음 보는 상태', open, stage, origin: '화면' },
+    })
+    Setup(NOT, '마케팅팀장', {}, mk(true, '회신 대기'))
+    mount('마케팅팀장')
+    expect(await screen.findByText(/아직 열려 있는 건이에요/)).toBeInTheDocument()
+  })
+
+  it('끝난_건은_case_open_false로_결정이_끝났다고_말한다', async () => {
+    const closed = {
+      rule: { approvers: [], hits: [], required_roles: ['마케팅팀'], approved_roles: ['마케팅팀'], pending_roles: [] },
+      case: { id: 7, kind: '기안', ref_id: 'P-1', status: '처음 보는 끝 상태', open: false, stage: '끝남', origin: '화면' },
+    }
+    Setup(NOT, '마케팅팀장', {}, closed)
+    mount('마케팅팀장')
+    expect(await screen.findByText(/결정이 끝난 건이에요/)).toBeInTheDocument()
+  })
+
+  it('2차_막힘은_blocked_phase2', async () => {
+    const over = { case: { id: 7, kind: '기안', ref_id: 'P-1', status: '2차 승인 대기', open: false, stage: '2차 승인 대기', origin: '화면' } }
+    const v = {
+      ...MAY_P2,
+      can_decide_phase2: false,
+      actions_phase2: [],
+      blocked: [{ action: '승인', reason: '1차 막힘 이유' }],
+      blocked_phase2: [{ action: '승인', reason: '2차 기한이 지나 결정할 수 없음' }],
+    }
+    Setup(v, 'Masil 대표', {}, over)
+    mount('Masil 대표')
+    expect((await screen.findAllByText(/2차 기한이 지나 결정할 수 없음/)).length).toBeGreaterThan(0)
+    expect(screen.queryByText(/1차 막힘 이유/)).toBeNull()
+  })
+
+  it('없어진_정책_항목은_펼침에서_없어졌다고_보인다', async () => {
+    const ev = JSON.parse(JSON.stringify(EVIDENCE))
+    ev.signals[0].detail.policies = [{ key: 'signals.old_key', value: null, source: null, missing: true, description: '없어진 정책 항목 — 설정에서 지워졌어요' }]
+    Setup(MAY, 'Masil 대표', { 'GET /api/cases/7/evidence': { json: ev } })
+    mount('Masil 대표')
+    await userEvent.click(await screen.findByRole('button', { name: /예상 ROAS 괴리/ }))
+    expect(screen.getAllByText(/없어진 정책 항목/).length).toBeGreaterThan(0)
+    expect(screen.getByText('signals.old_key')).toBeInTheDocument()
   })
 })

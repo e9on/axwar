@@ -82,7 +82,7 @@ export type Phase2 = {
 }
 
 export type CaseDetailData = {
-  case: { id: number; kind: string; ref_id: string; status: string; origin: string; title?: string; note?: string | null; source_plan_id?: string | null }
+  case: { id: number; kind: string; ref_id: string; status: string; /** 결정·회신을 받는 중인 건인가(서버 판단) */ open: boolean; /** 단계(서버가 상태를 묶은 값) */ stage: string; origin: string; title?: string; note?: string | null; source_plan_id?: string | null }
   facts: {
     amount_krw?: number
     plan_total_krw?: number
@@ -122,6 +122,8 @@ export type CaseDetailData = {
     actions?: string[]
     /** 막힌 결정과 그 이유 */
     blocked?: { action: string; reason: string }[]
+    /** 2차 승인 대기 중 막힌 결정과 그 이유 */
+    blocked_phase2?: { action: string; reason: string }[]
     /** 지금 보낼 수 있는 2차 결정 값 */
     actions_phase2?: string[]
     split_preview?: SplitPreview | null
@@ -132,7 +134,7 @@ export type Detail = {
   formula: string
   inputs: { label: string; value: unknown }[]
   sources: string[]
-  policies: { key: string; value: unknown; source: string; description: string }[]
+  policies: { key: string; value: unknown; source: string | null; description: string; /** 정책 파일에서 없어진 항목 */ missing?: boolean }[]
 }
 
 export type SignalLine = {

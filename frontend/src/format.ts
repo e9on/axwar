@@ -20,6 +20,10 @@ export function unitValue(v: number, unit: string | null | undefined): string {
       return won(Math.round(v))
     case 'multiple':
       return fixed(v, 3)
+    case 'score': // 점수(HHI 등): 정수, 천 단위 쉼표, 기호 없음(가정 F36)
+      return num(Math.round(v))
+    case 'diff': // 부호 붙은 차이: 소수 셋째 자리, 0은 부호 없음(가정 F36)
+      return v.toLocaleString('ko-KR', { minimumFractionDigits: 3, maximumFractionDigits: 3, signDisplay: 'exceptZero' })
     case 'count':
       return num(Math.round(v))
     case 'days':

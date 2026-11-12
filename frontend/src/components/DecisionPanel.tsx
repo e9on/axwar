@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { api } from '../api'
-import { D_APPROVE, D_REJECT, D_SPLIT, OPEN_STATUSES, OPINIONS, S_PHASE2_WAIT } from '../decisions'
+import { D_APPROVE, D_REJECT, D_SPLIT, KIND_CONTRACT, OPINIONS, ST_PHASE2_WAIT } from '../decisions'
 import { koDate } from '../date'
 import { num, won } from '../format'
 import type { CaseDetailData, SplitPreview } from '../caseTypes'
@@ -13,12 +13,23 @@ type Props = {
   onDone: () => Promise<void>
 }
 
-type Dialog = 'split' | 'reject' | 'escalate' | null
+type Dialog = 'approve' | 'split' | 'reject' | 'escalate' | null
 type Reply = { changed?: boolean; message?: string; status?: string }
 type Blocked = { action: string; reason: string }
 
 function dateText(d: string | null | undefined): string {
   return d ? koDate(d) : '날짜 미정'
+}
+
+/** 같은 이유로 막힌 결정은 한 줄로 묶는다("승인·거절은 지금 할 수 없어요 · 이유") */
+function groupBlocked(list: Blocked[]): { actions: string[]; reason: string }[] {
+  const out: { actions: string[]; reason: string }[] = []
+  for (const b of list) {
+    const g = out.find((x) => x.reason === b.reason)
+    if (g) g.actions.push(b.action)
+    else out.push({ actions: [b.action], reason: b.reason })
+  }
+  return out
 }
 
 const FOCUSABLE = 'button:not([disabled]), textarea:not([disabled]), input:not([disabled])'
@@ -100,12 +111,13 @@ export default function DecisionPanel({ detail, actor, onDone }: Props) {
     if (el.isConnected && !(el as HTMLButtonElement).disabled) el.focus()
   }, [dialog, busy])
 
-  const phase2 = detail.case.status === S_PHASE2_WAIT
+  const phase2 = detail.case.stage === ST_PHASE2_WAIT
   const v = detail.viewer
   const canDecide = phase2 ? !!v?.can_decide_phase2 : !!v?.can_decide
   const canEscalate = phase2 ? !!v?.can_escalate_phase2 : !!v?.can_escalate
   const actions = canDecide ? ((phase2 ? v?.actions_phase2 : v?.actions) ?? []) : []
-  const blocked: Blocked[] = canDecide && !phase2 ? (v?.blocked ?? []) : []
+  // 막힌 결정과 이유는 서버가 준 그대로. 기한이 지나면 can_decide도 꺼지므로 권한과 상관없이 보인다.
+  const blocked: Blocked[] = (phase2 ? v?.blocked_phase2 : v?.blocked) ?? []
   const preview = v?.split_preview ?? null
   const pending = phase2 ? (detail.phase2?.pending_roles ?? []) : detail.rule.pending_roles
   const id = detail.case.id
@@ -160,7 +172,19 @@ export default function DecisionPanel({ detail, actor, onDone }: Props) {
   const decide = (action: string, comment = '') => send(decisionPath, { action, comment })
   const escalate = () => send(`/api/cases/${id}/escalate`, { stage: phase2 ? '2차' : '1차', opinion, reason: reason.trim() })
 
-  const open_ = OPEN_STATUSES.includes(detail.case.status)
+  const blockedList =
+    blocked.length > 0 ? (
+      <ul className="blocked" aria-label="지금 할 수 없는 결정">
+        {groupBlocked(blocked).map((g) => (
+          <li key={g.reason}>
+            <b>{g.actions.join('·')}</b>은 지금 할 수 없어요 · {g.reason}
+          </li>
+        ))}
+      </ul>
+    ) : null
+  const c = detail.case
+  const amount = detail.facts.amount_krw
+  const execDate = phase2 ? detail.phase2?.plan?.date : (detail.facts.phase1_date ?? detail.facts.settlement_date ?? detail.facts.expiry)
   return (
     <div className="bar" role="group" aria-label="결정" aria-busy={busy}>
       {canDecide ? (
@@ -170,15 +194,7 @@ export default function DecisionPanel({ detail, actor, onDone }: Props) {
             {busy && <span className="muted"> · 보내는 중…</span>}
             {!busy && notice && <span className="muted"> · {notice}</span>}
           </p>
-          {blocked.length > 0 && (
-            <ul className="blocked" aria-label="지금 할 수 없는 결정">
-              {blocked.map((b) => (
-                <li key={b.action}>
-                  <b>{b.action}</b>은 지금 할 수 없어요 · {b.reason}
-                </li>
-              ))}
-            </ul>
-          )}
+          {blockedList}
           <div className="btns">
             {actions.includes(D_REJECT) && (
               <button type="button" className="btn deny" disabled={busy} onClick={() => open('reject')}>
@@ -196,7 +212,7 @@ export default function DecisionPanel({ detail, actor, onDone }: Props) {
               </button>
             )}
             {actions.includes(D_APPROVE) && (
-              <button type="button" className="btn pri" disabled={busy} onClick={() => send(decisionPath, { action: D_APPROVE, comment: '' })}>
+              <button type="button" className="btn pri" disabled={busy} onClick={() => open('approve')}>
                 승인
               </button>
             )}
@@ -206,12 +222,13 @@ export default function DecisionPanel({ detail, actor, onDone }: Props) {
         <p>
           {pending.length > 0
             ? `승인권자: ${pending.join(' · ')}`
-            : open_ || phase2
+            : c.open || phase2
               ? `아직 열려 있는 건이에요 — 다른 회신이나 결정을 기다리고 있어요 (${detail.case.status})`
               : `결정이 끝난 건이에요 (${detail.case.status})`}
           {notice && <span className="muted"> · {notice}</span>}
         </p>
       )}
+      {!canDecide && blockedList}
       {error && !dialog && (
         <p className="err" role="alert">
           {error}
@@ -221,6 +238,18 @@ export default function DecisionPanel({ detail, actor, onDone }: Props) {
       {dialog && (
         <div className="dlg-back">
           <div className="dlg" role="dialog" aria-modal="true" aria-labelledby={`${uid}-t`} ref={dlgRef} onKeyDown={trapTab}>
+            {dialog === 'approve' && (
+              <>
+                <h2 id={`${uid}-t`}>이 건을 승인합니다</h2>
+                <div className="diff">
+                  <p>
+                    {phase2 ? '2차 집행 ' : '요청액 '}
+                    <b>{(phase2 ? detail.phase2?.plan?.amount_krw : amount) !== undefined ? won((phase2 ? detail.phase2?.plan?.amount_krw : amount) as number) : '금액 미정'}</b> · 집행일 <b>{dateText(execDate)}</b>
+                  </p>
+                  <p>{phase2 ? `2차 ${num(detail.phase2?.plan?.qty ?? 0)}개를 집행해요.` : c.kind === KIND_CONTRACT ? '이 결정을 확정해요.' : '분할 없이 전량을 1차로 한 번에 집행해요.'}</p>
+                </div>
+              </>
+            )}
             {dialog === 'split' && (
               <>
                 <h2 id={`${uid}-t`}>분할 승인 확인</h2>
@@ -262,6 +291,11 @@ export default function DecisionPanel({ detail, actor, onDone }: Props) {
               <button type="button" className="btn" disabled={busy} onClick={close}>
                 취소
               </button>
+              {dialog === 'approve' && (
+                <button type="button" className="btn pri" disabled={busy} data-autofocus onClick={() => decide(D_APPROVE)}>
+                  승인 확정
+                </button>
+              )}
               {dialog === 'split' && (
                 <button type="button" className="btn pri" disabled={busy} data-autofocus onClick={() => decide(D_SPLIT)}>
                   분할 승인 확정
