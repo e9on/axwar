@@ -4,6 +4,8 @@
   background: var(--c-sheet); border-bottom: 1px solid var(--c-rule);
 }
 .brand { font-family: var(--f-doc); font-weight: var(--w-heavy); font-size: var(--t-4); }
+.nav { display: flex; gap: var(--s-4); }
+.nav a { color: var(--c-navy); }
 .who { margin-left: auto; display: flex; flex-wrap: wrap; gap: var(--s-4); align-items: center; color: var(--c-ink-2); }
 .who label { display: flex; gap: var(--s-2); align-items: center; }
 .who select, .who input[type="date"] {

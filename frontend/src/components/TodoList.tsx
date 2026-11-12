@@ -2,6 +2,7 @@ import { useClock } from '../state/clock'
 import { useViewer } from '../state/viewer'
 import { useCaseLink } from '../state/caseLink'
 import { useLoad } from '../state/useLoad'
+import { Link } from 'react-router-dom'
 import LoadFailed from './LoadFailed'
 
 type Item = {
@@ -21,6 +22,7 @@ type Todo = Record<string, unknown>
 
 /** 칸 순서(서버 todo의 칸 이름). */
 const COLUMNS = ['승인 대기', '알림', '기한 임박', '권한 이동', '회신 대기', '작업']
+const REPLY_COLUMN = '회신 대기' // 서버 todo 칸 이름: 회신 입력 화면으로 가는 링크를 붙인다
 const ALARM = '마감 알림' // 서버 알림 종류 이름: 도장색 글씨로 보인다
 
 function second(column: string, it: Item): { meta: string; text: string; seal: boolean } {
@@ -82,6 +84,11 @@ export default function TodoList() {
                 )
               })}
             </ul>
+            {c === REPLY_COLUMN && (
+              <Link className="to-replies" to={'/replies' + (person ? `?as=${encodeURIComponent(person.name)}` : '')}>
+                회신 입력으로 가기 →
+              </Link>
+            )}
           </div>
         ))
       )

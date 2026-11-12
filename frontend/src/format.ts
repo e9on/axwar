@@ -4,6 +4,11 @@ export function num(v: number): string {
   return Number.isInteger(v) ? v.toLocaleString('ko-KR') : v.toLocaleString('ko-KR', { maximumFractionDigits: 3 })
 }
 
+/** 0~1 비율을 백분율 글자로 */
+export function pct(v: number, digits = 0): string {
+  return `${(v * PERCENT).toLocaleString('ko-KR', { minimumFractionDigits: digits, maximumFractionDigits: digits })}%`
+}
+
 export function won(v: number): string {
   return `${num(v)}원`
 }

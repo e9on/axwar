@@ -1,24 +1,31 @@
 import { useState } from 'react'
-import { Route, Routes } from 'react-router-dom'
+import { Link, Route, Routes } from 'react-router-dom'
 import { ClockProvider, useClock } from './state/clock'
 import { ViewerProvider, useViewer } from './state/viewer'
 import { addDays, withWeekday } from './date'
+import { DEMO_MODE } from './decisions'
 import Notices from './Notices'
 import Home from './pages/Home'
 import CaseDetail from './pages/CaseDetail'
+import Replies from './pages/Replies'
+import Phase2Watch from './pages/Phase2Watch'
 import './App.css'
 
-const DEMO_MODE = '시연' // 서버가 돌려주는 모드 이름(backend store.MODE_DEMO)
 
 function TopBar() {
   const { person, setPerson, people } = useViewer()
   const { date, mode, advance } = useClock()
   const [target, setTarget] = useState('')
   const demo = mode === DEMO_MODE
+  const asQuery = person ? `?as=${encodeURIComponent(person.name)}` : ''
 
   return (
     <header className="top">
       <span className="brand">Approval Planner</span>
+      <nav className="nav" aria-label="화면 이동">
+        <Link to={'/' + asQuery}>메인</Link>
+        <Link to={'/replies' + asQuery}>회신 입력</Link>
+      </nav>
       <div className="who">
         <label>
           보는 사람
@@ -59,6 +66,8 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/cases/:id" element={<CaseDetail />} />
+          <Route path="/cases/:id/phase2" element={<Phase2Watch />} />
+          <Route path="/replies" element={<Replies />} />
         </Routes>
       </ClockProvider>
     </ViewerProvider>
