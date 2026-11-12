@@ -1,0 +1,103 @@
+{
+  "title": "장면 2 변형. 2차 반품 자동 보류 — 예외 승인으로 2차 집행",
+  "description": "장면 2와 같은 흐름(SCM 일부 허용 뒤 공지)에서 8/24 모의 반품(단순변심 100·색상불만 150)이 통계 기준을 넘어 2차가 자동 보류된다. 같은 날 1차 판매 실적(주문 2,600·반품 250)을 입력해도 보류는 풀리지 않는다. 캠페인 담당은 2차 취소만 할 수 있으므로, 2차 승인권자 중 최고 역할인 Masil 대표가 이유를 적어 계획 2차 이하 수량(6,000개)으로 예외 승인하면 2차 승인 대기에 들어가고(판매율에 맞춰 2차 수량이 6,000개에서 4,700개로 한 번 더 줄고 2차 집행일이 8/28로 밀림), Masil 대표와 그룹이 승인하면 2차 집행(물류 출고·CS 대비)이 생기고, 기준일 9/2에 완료된다.",
+  "plans": [
+    "PLAN-001"
+  ],
+  "contracts": [],
+  "register_contracts": [
+    "INF-001"
+  ],
+  "requests": [],
+  "script": [
+    {
+      "action": "회신",
+      "plan": "PLAN-001",
+      "dept": "물류",
+      "text": "평소 하루 20,000개, 최대 26,000개까지 처리할 수 있습니다.",
+      "attachments": 0
+    },
+    {
+      "action": "결정",
+      "plan": "PLAN-001",
+      "actor": "그룹 CEO",
+      "decision": "분할승인",
+      "comment": "covenant 하회 구간 건, 1차를 분할해 진행"
+    },
+    {
+      "action": "결정",
+      "plan": "PLAN-001",
+      "actor": "이사회",
+      "decision": "분할승인",
+      "comment": "지표 반대 근거 확인, 분할 승인"
+    },
+    {
+      "action": "회신",
+      "plan": "PLAN-001",
+      "dept": "SCM",
+      "text": "3,000개까지 허용합니다.",
+      "attachments": 0
+    },
+    {
+      "action": "결정",
+      "plan": "PLAN-001",
+      "actor": "그룹 CEO",
+      "decision": "분할승인",
+      "comment": "SCM 일부 허용 반영한 분할안 재승인"
+    },
+    {
+      "action": "결정",
+      "plan": "PLAN-001",
+      "actor": "이사회",
+      "decision": "분할승인",
+      "comment": "재승인"
+    },
+    {
+      "action": "공지",
+      "plan": "PLAN-001",
+      "actor": "캠페인 담당자"
+    },
+    {
+      "action": "반품",
+      "plan": "PLAN-001",
+      "date": "2026-08-24",
+      "change_of_mind": 100,
+      "color": 150
+    },
+    {
+      "action": "판매",
+      "plan": "PLAN-001",
+      "date": "2026-08-24",
+      "actor": "캠페인 담당자",
+      "orders": 2600,
+      "returns": 250
+    },
+    {
+      "action": "예외 승인",
+      "plan": "PLAN-001",
+      "actor": "Masil 대표",
+      "qty": 6000,
+      "reason": "색상불만 반품이 일시적이라고 판단해, 줄인 수량으로 2차를 진행하기로 판단함"
+    },
+    {
+      "action": "결정",
+      "stage": "2차",
+      "plan": "PLAN-001",
+      "actor": "Masil 대표",
+      "decision": "승인",
+      "comment": "예외 승인한 수량으로 2차 진행"
+    },
+    {
+      "action": "결정",
+      "stage": "2차",
+      "plan": "PLAN-001",
+      "actor": "그룹 재무",
+      "decision": "승인",
+      "comment": "그룹 확인"
+    },
+    {
+      "action": "기준일",
+      "date": "2026-09-02"
+    }
+  ]
+}

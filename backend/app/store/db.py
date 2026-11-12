@@ -379,6 +379,18 @@ class Store:
             self._event(db, row["case_id"], "작업상태", actor,
                         {"task_id": task_id, "title": row["title"], "status": status})
 
+    def set_task_due(self, task_id: int, due: date, actor: str) -> None:
+        """작업 기한을 바꾼다(같은 값이면 아무것도 하지 않는다). 바꾼 사람과 함께 이벤트로 남긴다."""
+        with self._tx() as db:
+            row = db.execute("SELECT case_id, title, due FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if row is None:
+                raise KeyError(f"작업 없음: {task_id}")
+            if row["due"] == due.isoformat():
+                return
+            db.execute("UPDATE tasks SET due=? WHERE id=?", (due.isoformat(), task_id))
+            self._event(db, row["case_id"], "작업기한", actor,
+                        {"task_id": task_id, "title": row["title"], "before": row["due"], "after": due.isoformat()})
+
     def all_tasks(self, dept: str | None = None) -> list[dict]:
         """모든 사건의 작업(dept가 있으면 그 부서만)."""
         rows = (self._all("SELECT * FROM tasks ORDER BY id") if dept is None
@@ -620,16 +632,18 @@ class Store:
     def list_plans(self) -> list[dict]:
         return [{**dict(r), "raw": json.loads(r["raw"])} for r in self._all("SELECT * FROM plans ORDER BY id")]
 
-    def add_plan(self, fields: dict, actor: str, origin: str = "화면") -> int:
+    def add_plan(self, fields: dict, actor: str, origin: str = "화면", extra: dict | None = None) -> int:
+        """extra(시연용 기안의 note·base)는 raw(원본 값 묶음)에 함께 남겨 화면·응답에서 시연용 가정임이 보이게 한다."""
         if origin not in ORIGINS:
             raise ValueError(f"알 수 없는 출처 구분: {origin!r}")
-        extra = set(fields) - set(_PLAN_FIELDS)
-        if extra or "plan_id" not in fields:
-            raise ValueError(f"기안 항목 오류: 없는 항목 {sorted(extra)} 또는 plan_id 누락")
+        unknown = set(fields) - set(_PLAN_FIELDS)
+        if unknown or "plan_id" not in fields:
+            raise ValueError(f"기안 항목 오류: 없는 항목 {sorted(unknown)} 또는 plan_id 누락")
         row = {**{f: None for f in _PLAN_FIELDS}, "source_file": "", **_clean(fields)}
         with self._tx() as db:
-            new_id = self._insert_plan(db, row, fields, origin)
-            self._event(db, None, "기안등록", actor, {"plan_id": fields["plan_id"], "origin": origin})
+            new_id = self._insert_plan(db, row, {**fields, **(extra or {})}, origin)
+            self._event(db, None, "기안등록", actor, {"plan_id": fields["plan_id"], "origin": origin,
+                                                    **(extra or {})})
             return new_id
 
     @staticmethod

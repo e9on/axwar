@@ -138,9 +138,15 @@ def _scene_values() -> set[str]:
     notices = {n.influencer_code: n for n in loader.contract_notices().values()}
     for f in config.demo_dir().glob("scenario_*.json"):
         body = json.loads(f.read_text(encoding="utf-8"))
+        demo = {d["id"]: d for d in body.get("demo_plans", [])}
+        for d in demo.values():  # 시연용 기안: 복사한 원본 기안의 값과 바꾼 값(override)
+            values |= {d["id"], d["base"]}
+            for v in d["override"].values():
+                values |= _num(v) if isinstance(v, int) else _day(date.fromisoformat(v))
+            values |= {d["note"]} | {x for m in re.findall(r"\d[\d,]*\d", d["note"]) for x in _num(int(m.replace(",", "")))}
         for pid in body.get("plans", []):
             values.add(pid)
-            r = plan_rows[pid]
+            r = plan_rows[demo[pid]["base"] if pid in demo else pid]
             values |= {r["campaign_id"]} | _num(r["requested_budget_krw"]) | _num(r["expected_gmv_krw"])
             values |= _day(r["settlement_date"]) | _day(r["contract_deadline"])
         for code in body.get("contracts", []) + body.get("register_contracts", []):

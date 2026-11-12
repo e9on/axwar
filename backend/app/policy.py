@@ -44,6 +44,11 @@ _SCHEMA: dict[str, type] = {
     "admin.return_inputters": str,
     "admin.registry_editors": str,
     "phase2.min_approval_days": int,
+    "roles.campaign": str,
+    "roles.contract": str,
+    "roles.logistics": str,
+    "roles.cs": str,
+    "volume.input_lead_days": int,
 }
 
 # 0 초과 1 이하여야 하는 비율 항목(1.5 같은 값이 들어가면 규칙이 거꾸로 동작한다)
@@ -76,7 +81,7 @@ def _check_value(key: str, typ: type, value):
             raise ValueError(f"정책 항목 {key}의 값 형식 오류: {value!r}")
         if not value.strip():
             raise ValueError(f"정책 항목 {key}의 값이 비어 있음")
-        return value
+        return value.strip()  # 앞뒤 공백은 지운 값으로 검증·저장(공백 때문에 역할 비교가 어긋나지 않게)
     ok = _is_number(value) if typ is float else (isinstance(value, int) and not isinstance(value, bool))
     if not ok:
         raise ValueError(f"정책 항목 {key}의 값 형식 오류: {value!r}")
@@ -218,6 +223,14 @@ def set_overrides(overrides: dict[str, tuple]) -> None:
     _overrides.clear()
     _overrides.update(checked)
     _cache = None
+
+
+def drop_override(key: str) -> None:
+    """덮어쓰기 하나만 이번 실행에서 적용하지 않는다(저장된 이력은 그대로)."""
+    global _cache
+    _data()
+    if _overrides.pop(key, None) is not None:
+        _cache = None
 
 
 def clear_overrides() -> None:

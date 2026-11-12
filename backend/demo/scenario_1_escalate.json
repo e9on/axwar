@@ -1,0 +1,52 @@
+{
+  "title": "장면 1 변형. 상신 — 마케팅팀장이 자기 결재 건을 Masil 대표에게 올려 다시 결재",
+  "description": "시연용 기안 DEMO-PLAN-001(PLAN-019를 복사하고 요청액만 800만 원으로 바꾼 시연용 가정, 확정 기한 9/11 → 마지막 승인일 9/7)이 물류·SCM 회신까지 마친 뒤, 건별 1천만 원 이하라 마케팅팀 전결이 된 이 건을 마케팅팀장이 9/4에 Masil 대표에게 승인 권고 의견으로 상신한다. 마케팅팀은 결재선에서 빠지고 Masil 대표가 들어가며(권한 이동 기록·상신 이벤트), Masil 대표가 마지막 승인일인 9/7에 다시 결재(승인)하면 1차 집행과 물류·CS 작업이 생긴다.",
+  "plans": [
+    "DEMO-PLAN-001"
+  ],
+  "demo_plans": [
+    {
+      "id": "DEMO-PLAN-001",
+      "base": "PLAN-019",
+      "override": {
+        "requested_budget_krw": 8000000
+      },
+      "note": "시연용 가정: 원본 기안 중에는 마케팅팀이 승인권자인 건이 없어 PLAN-019를 복사하고 요청액만 800만 원(건별 한도 1천만 원 이하)으로 바꾼 가상의 기안"
+    }
+  ],
+  "contracts": [],
+  "requests": [],
+  "script": [
+    {
+      "action": "회신",
+      "plan": "DEMO-PLAN-001",
+      "dept": "물류",
+      "text": "전량 가능합니다. 집행일부터 평소 처리량 안에서 출고할 수 있습니다.",
+      "attachments": 0
+    },
+    {
+      "action": "회신",
+      "plan": "DEMO-PLAN-001",
+      "dept": "SCM",
+      "text": "전량 허용합니다. 안전재고를 사용해도 좋습니다.",
+      "attachments": 0
+    },
+    {
+      "action": "상신",
+      "plan": "DEMO-PLAN-001",
+      "date": "2026-09-04",
+      "actor": "마케팅팀장",
+      "stage": "1차",
+      "opinion": "승인 권고",
+      "reason": "지표는 양호하나 이 건은 대표 확인이 필요하다고 판단해 Masil 대표 결재를 요청함"
+    },
+    {
+      "action": "결정",
+      "plan": "DEMO-PLAN-001",
+      "date": "2026-09-07",
+      "actor": "Masil 대표",
+      "decision": "승인",
+      "comment": "상신 의견과 지표 확인, 승인"
+    }
+  ]
+}
