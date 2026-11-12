@@ -231,6 +231,10 @@ def create_app(store: Store, engine: Engine, static_dir: str | Path | None = Non
     def case_detail(case_id: int, viewer: str | None = None):
         return engine.case_detail(case_id, viewer)
 
+    @app.get("/api/cases/{case_id}/evidence")
+    def case_evidence(case_id: int):
+        return engine.case_evidence(case_id)
+
     @app.get("/api/cases/{case_id}/phase2")
     def phase2(case_id: int):
         store.get_case(case_id)

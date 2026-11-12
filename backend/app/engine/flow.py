@@ -33,6 +33,7 @@ from pathlib import Path
 from app import policy
 from app.ai import judge, writer
 from app.ai.providers import Provider, make_provider
+from app.calc import evidence as evidence_calc
 from app.calc import inventory
 from app.calc import volume as volume_calc
 from app.calc.campaign import return_count_rate
@@ -150,7 +151,8 @@ def _md(d: date) -> str:
 
 
 def _hits(hits) -> list[dict]:
-    return [{"rule_id": h.rule_id, "text": h.text, "source": h.source, "badge": h.badge} for h in hits]
+    return [{"rule_id": h.rule_id, "text": h.text, "source": h.source, "badge": h.badge,
+             **({"detail": h.detail} if h.detail is not None else {})} for h in hits]
 
 
 def _decision(f: dict, stage: str = "1차") -> ApproverDecision:
@@ -2631,6 +2633,26 @@ class Engine:
                              "can_escalate_phase2": self._can_escalate(case, role, "2차"),
                              "can_decide_phase2": case["status"] == S_PHASE2_WAIT and bool(
                                  self._phase2_stand_in(f, role, _pending_roles(f, "2차")))}
+        return out
+
+    def case_evidence(self, case_id: int) -> dict:
+        """건 근거 상세(펼침 화면용, 읽기 전용·AI 없음): 지표 신호 전체, 핵심 지표, 비용 분해, 본전 조건, 측정 한계, 결재선 이유.
+        시연 기안은 base 원본 기안으로 계산한다. 원본에 근거가 없으면 지표 묶음은 비우고 이유를 준다."""
+        case = self.store.get_case(case_id)
+        f = case["facts"]
+        kind = "plan" if case["kind"] == KIND_PLAN else "contract"
+        out = evidence_calc.evidence(kind, case["ref_id"], f.get("source_plan_id"))
+        by_key = {s["key"]: s for s in out["signals"]}
+
+        def line(h: dict, from_signal: bool) -> dict:
+            if h.get("detail") is None and from_signal and h["rule_id"] in by_key:
+                resolved = by_key[h["rule_id"]]["detail"]  # 옛 저장 행: 같은 이름의 지금 신호 줄을 따른다
+            else:
+                resolved = evidence_calc.resolve_detail(h.get("detail"), h["text"])
+            return {**{k: h[k] for k in ("rule_id", "text", "source", "badge")}, "detail": resolved}
+
+        out["rule"] = {"approver_hits": [line(h, False) for h in f["approver_hits"]],
+                       "indicator_hits": [line(h, True) for h in f["indicator_hits"]]}
         return out
 
     def calendar(self) -> list[dict]:
