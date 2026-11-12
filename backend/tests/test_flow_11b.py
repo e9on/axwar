@@ -663,13 +663,14 @@ def test_장면3_무승인_기본거부(store):
     assert c["facts"]["expiry"] == "2026-08-31"
     assert all(store.get_case(p)["facts"]["deadline"] == "2026-07-17" for p in plans)
 
-    # ---- 7/12(D-5): 한 단계 위(이사회)에 조기 경고, CEO 할 일에는 승인 대기가 그대로
+    # ---- 7/12(D-5): 남은 승인권자(CEO·이사회) 본인에게 조기 경고, CEO 할 일에는 승인 대기가 그대로
     eng.play(st[0])
     assert store.get_clock() == date(2026, 7, 12)
     board = eng.todo("이사회")
     assert sorted(x["ref_id"] for x in board["기한 임박"]) == ["INF-001", "PLAN-001", "PLAN-002", "PLAN-003"]
     ceo = eng.todo("그룹 CEO")
-    assert ceo["기한 임박"] == [] and [x["case_id"] for x in ceo["승인 대기"]] == [contract]
+    assert sorted(x["ref_id"] for x in ceo["기한 임박"]) == ["INF-001", "PLAN-001", "PLAN-002", "PLAN-003"]
+    assert [x["case_id"] for x in ceo["승인 대기"]] == [contract]
 
     # ---- 7/14(기한 7/17의 3일 전): 승인 없음 → 계약 기본 거부 + 통보 초안(AI, 순액 기준) + 계약 담당 '통보 발송' 작업, 기안 3건 확정 보류
     eng.play(st[1])

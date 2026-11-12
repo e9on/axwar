@@ -245,7 +245,7 @@ def test_제공자를_안주면_작업별로_저장소_장부와_만든다(store
     assert made == [("reply", store)]
 
 
-def test_기한_전_조기경고는_한_단계_위에_한번만(store):
+def test_기한_전_조기경고는_남은_승인권자_본인에게_한번만(store):
     eng, _, cid = seeded(store, ACCEPT)
     eng.play(steps()[0])
     early = policy.get("deadline.early_warning_days")
@@ -253,10 +253,11 @@ def test_기한_전_조기경고는_한_단계_위에_한번만(store):
     buffer = policy.get("deadline.buffer_days")
     run = deadline - timedelta(days=buffer)  # 기본 거부 실행일: 조기 경고 창은 여기서 센다
     acts = eng.advance(run - timedelta(days=early))
-    assert [a["action"] for a in acts] == ["조기경고"] and acts[0]["target"] == "CEO"
+    assert [a["action"] for a in acts] == ["조기경고"] and acts[0]["targets"] == ["Masil 대표"]
     eng.advance(run - timedelta(days=1))
     assert len(store.events(cid, kind="조기경고")) == 1
-    assert [x["case_id"] for x in eng.todo("그룹 CEO")["기한 임박"]] == [cid]
+    assert [x["case_id"] for x in eng.todo("Masil 대표")["기한 임박"]] == [cid]
+    assert eng.todo("그룹 CEO")["기한 임박"] == []  # 상급자에게는 가지 않는다(사용자 결정 2026-11-12)
     assert [x["case_id"] for x in eng.todo("Masil 대표")["승인 대기"]] == [cid]
     assert store.get_case(cid)["status"] == "승인 대기"
 
@@ -547,6 +548,6 @@ def test_경고_뒤_승인권자가_바뀌면_새_대상에게_다시_경고(sto
     eng.advance(deadline - timedelta(days=policy.get("deadline.early_warning_days")))
     store.change_policy("approval.total_limit_krw", 1000000000, "관리자", "시험")
     acts = eng.advance(store.get_clock() + timedelta(days=1))
-    assert [a.get("target") for a in acts if a["action"] == "조기경고"] == ["Masil 대표"]
-    assert [x["case_id"] for x in eng.todo("Masil 대표")["기한 임박"]] == [cid]
-    assert eng.todo("그룹 CEO")["기한 임박"] == []  # 지난 대상의 경고는 내려감
+    assert [a.get("targets") for a in acts if a["action"] == "조기경고"] == [["마케팅팀"]]
+    assert [x["case_id"] for x in eng.todo("마케팅팀장")["기한 임박"]] == [cid]
+    assert eng.todo("Masil 대표")["기한 임박"] == []  # 승인권자에서 빠진 역할의 경고는 내려감

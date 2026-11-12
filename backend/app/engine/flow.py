@@ -97,6 +97,7 @@ EV_WARN, EV_REPORT, EV_REAPPROVE, EV_DRIFT = "조기경고", "그룹보고", "�
 EV_SPLIT, EV_STOCK, EV_ANNOUNCE, EV_BLOCK = "분할안변경", "재고부족", "공지", "1차차단"
 EV_UNBLOCK = "차단해제"  # 등록부 집행일을 고쳐 1차 차단이 풀림(사용자 결정 2026-11-11)
 EV_SELL = "판매율조절"  # 1차 판매 실적(판매율)으로 2차 수량을 조절·보류·품절 기록(추가 결정 8)
+EV_DATE = "집행일 변경"  # 1차·2차 집행일이 바뀐 그때 관련자에게(사용자 결정 2026-11-12)
 EV_ALARM = "마감 알림"  # 마지막 승인일(기본 거부 전날)에 남은 승인권자 본인에게(사용자 결정 2026-11-12)
 EV_STALE = "방치올림"  # 담당이 처리하지 않은 사람 확인·판단을 상급자에게 올림(추가 결정 9)
 EV_DECIDE = "판매율판단"  # 판매율 보류 건에 대한 담당의 2차 계속·취소 판단(컨트롤러 판정 10)
@@ -687,6 +688,9 @@ class Engine:
                         "before": list(change.before), "after": list(change.after), "reason": change.reason})
         if changes or change is not None:
             self.store.update_facts(case_id, f, actor, "등록부 반영·승인권자 재판정")
+        if case["kind"] == KIND_PLAN and "phase1_date" in changes:
+            self._notify_date(case_id, "1차", changes["phase1_date"]["before"], changes["phase1_date"]["after"],
+                              "등록부 집행일 수정", actor)
         if case["kind"] == KIND_PLAN and "settlement_date" in changes and f.get("logistics"):
             self._recheck_stock(case_id)  # 집행일이 바뀌었으니 재고 점검·분할안을 새 날짜로 다시 돌린다
             f = self.store.get_case(case_id)["facts"]
@@ -768,37 +772,47 @@ class Engine:
             return [{"date": self._today().isoformat(), "case_id": case_id, "action": "확정", "status": status}]
         return []
 
-    def _warn_target(self, f: dict, stage: str = "1차") -> str | None:
-        pending = _pending_roles(f, stage)
-        if not pending:
-            return None
-        chain = self.people.escalation
-        lowest = min(pending, key=lambda r: chain.index(r) if r in chain else len(chain))
-        return self.people.above(lowest)
-
     def _warn(self, case: dict, d: date, stage: str = "1차") -> dict | None:
-        """조기 경고는 경고 대상 역할마다 한 번. 경고 뒤 승인권자가 바뀌어 대상이 달라지면 새 대상에게 다시 보낸다.
+        """조기 경고는 아직 승인하지 않은 승인권자 본인에게 역할마다 한 번(사용자 결정 2026-11-12: 상급자가 아니라 당사자).
+        경고 뒤 승인권자가 바뀌면 새로 들어온 승인권자에게도 보낸다.
         회신 대기에도 보낸다(부서 회신이 늦어도 기한은 다가오므로 — 설계 4.3보다 넓힘).
         2차 승인 대기 건도 같은 장치를 쓴다(stage="2차": 기한 phase2_deadline, 대상 기록 phase2_warned_targets)."""
         f = case["facts"]
         first = stage == "1차"
         dkey, wkey = ("deadline", "warned_targets") if first else ("phase2_deadline", "phase2_warned_targets")
-        target = self._warn_target(f, stage)
-        if target is None or target in f.get(wkey, []):
-            return None
         pending = _pending_roles(f, stage)
+        targets = [r for r in pending if r not in f.get(wkey, [])]
+        if not targets:
+            return None
         label = "확정 기한" if first else "2차 집행일"
         text = (f"{case['ref_id']} {label} {_md(_d(f[dkey]))} 전 미승인(마지막 승인일 {_md(approval_deadline(_d(f[dkey])))}, "
                 f"승인권자 {'·'.join(pending)})")
-        detail = {"target": target, "pending": pending, "text": text, "deadline": f[dkey],
-                  "approval_deadline": approval_deadline(_d(f[dkey])).isoformat()}
         if not first:
-            detail["stage"] = stage
             f.setdefault("phase2_warned_on", d.isoformat())  # 방치 올림 기준 시점 = 첫 경고일
-        self.store.add_event(case["id"], EV_WARN, "시스템", detail)
-        f[wkey] = [*f.get(wkey, []), target]
+        for target in targets:
+            detail = {"target": target, "pending": pending, "text": text, "deadline": f[dkey],
+                      "approval_deadline": approval_deadline(_d(f[dkey])).isoformat()}
+            if not first:
+                detail["stage"] = stage
+            self.store.add_event(case["id"], EV_WARN, "시스템", detail)
+        f[wkey] = [*f.get(wkey, []), *targets]
         self.store.update_facts(case["id"], f, "시스템", "조기 경고")
-        return {"date": d.isoformat(), "case_id": case["id"], "action": "조기경고", "target": target, "text": text}
+        return {"date": d.isoformat(), "case_id": case["id"], "action": "조기경고", "targets": targets, "text": text}
+
+    def _notify_date(self, case_id: int, stage: str, before: str | None, after: str | None, reason: str, actor: str) -> None:
+        """집행일이 바뀌면 바뀐 그때 캠페인 담당·물류·CS와 그 단계 승인권자에게 알린다. 할 일 알림 칸에는 단계마다 마지막 변경만."""
+        if before == after or not after:
+            return
+        case = self.store.get_case(case_id)
+        f = case["facts"]
+        roles = [CAMPAIGN, LOGISTICS, CS]
+        if f.get(STAGES[stage][0]):
+            roles += [r for r in _required_roles(f, stage) if r not in roles]
+        label = "1차" if stage == "1차" else "2차"
+        was = _md(_d(before)) if before else "미정"
+        text = f"{case['ref_id']} {label} 집행일 변경 {was}→{_md(_d(after))} ({reason})"
+        self.store.add_event(case_id, EV_DATE, actor, {"targets": roles, "stage": stage, "from": before, "to": after,
+                                                       "text": text})
 
     def _alarm(self, case: dict, d: date, stage: str = "1차") -> list[dict]:
         """마지막 승인일(기본 거부 실행일 전날) 알림: 아직 승인하지 않은 승인권자 본인에게 기한마다 한 번.
@@ -1269,6 +1283,8 @@ class Engine:
         if no_reply_days:
             f["scm"]["no_reply_days"] = no_reply_days
         self.store.update_facts(case_id, f, actor, f"SCM 응답 반영: {reason}")
+        if state == SCM_REFUSED:
+            self._notify_date(case_id, "1차", f["shift"]["from"], f["phase1_date"], why, actor)
         # 받은 승인이 새 분할안과 맞지 않으면 먼저 무효로 한다. 확정(_refresh 끝)이 먼저 돌면 옛 승인으로 새 분할안을 확정해 버린다.
         self._reapprove_if_changed(case_id, old, reason, actor)
         self._refresh(case_id, {"windows": windows})  # 날짜가 바뀌었으면 승인권자를 등록부 길로 다시 판정
@@ -1740,6 +1756,7 @@ class Engine:
         if p2["date"]:
             self._phase2_approvers(f, case_id)
         self.store.update_facts(case_id, f, "시스템", "갱신 확정으로 2차 집행일 결정")
+        self._notify_date(case_id, "2차", None, p2["date"], "계약 갱신 확정으로 2차 집행일 결정", "시스템")
 
     def _phase2_approvers(self, f: dict, case_id: int, amount_krw: int | None = None,
                           before: ApproverDecision | None = None, why: str = "") -> None:
@@ -2089,6 +2106,7 @@ class Engine:
             self.store.add_event(case_id, EV_P2_SHIFT, "시스템", {"from": planned.isoformat(), "to": new_day.isoformat(),
                                                                "deadline": deadline.isoformat(), "text": text})
             self.store.update_facts(case_id, f, "시스템", "2차 집행일 연기(승인 기간 확보)")
+            self._notify_date(case_id, "2차", planned.isoformat(), new_day.isoformat(), "승인 기간 확보", "시스템")
             if self._phase2_blocked(f):  # 밀린 집행일이 갱신 미확정 계약의 만료 뒤면 2차 차단
                 end, _ = self._contract_terms(f.get("influencer_id") or "")
                 note = f"2차 집행일 {_md(new_day)}이 계약 만료({_md(end)}) 뒤라 갱신 미확정이면 2차 차단"
@@ -2371,10 +2389,10 @@ class Engine:
                     out["권한 이동"].append({**self._item(c), "reason": ch.reason})
         for e in self.store.events(kind=EV_WARN):
             c = cases.get(e["case_id"])
-            # 지금도 경고 대상인 역할에게만 보인다(승인권자가 바뀌어 대상이 달라지면 지난 경고는 내려감)
+            # 아직 승인하지 않은 동안만 보인다(승인했거나 승인권자에서 빠지면 지난 경고는 내려감)
             if e["detail"].get("stage") == "2차":  # 2차 승인 대기 건의 조기 경고
                 if (c and e["detail"]["target"] == role and c["status"] == S_PHASE2_WAIT
-                        and self._warn_target(c["facts"], "2차") == role):
+                        and role in _pending_roles(c["facts"], "2차")):
                     out["기한 임박"].append({**self._item(c), "stage": "2차", **self.deadline_view(c["facts"]["phase2_deadline"]),
                                          "text": e["detail"]["text"]})
                 continue
@@ -2388,8 +2406,15 @@ class Engine:
                     out["기한 임박"].append({**self._item(c), "text": e["detail"]["text"]})
                 continue
             if (c and e["detail"]["target"] == role and c["status"] in OPEN[c["kind"]]
-                    and self._warn_target(c["facts"]) == role):
+                    and role in _pending_roles(c["facts"])):
                 out["기한 임박"].append({**self._item(c), "text": e["detail"]["text"]})
+        latest: dict = {}
+        for e in self.store.events(kind=EV_DATE):  # 집행일 변경: 건·단계마다 마지막 변경만
+            latest[(e["case_id"], e["detail"]["stage"])] = e
+        for (case_id, st), e in latest.items():
+            c = cases.get(case_id)
+            if c and role in e["detail"]["targets"]:
+                out["알림"].append({**self._item(c), "kind": EV_DATE, "stage": st, "text": e["detail"]["text"]})
         for e in self.store.events(kind=EV_ALARM):  # 마지막 승인일 알림: 그 기한에 아직 승인하지 않은 동안만 보인다
             c = cases.get(e["case_id"])
             if not c:
