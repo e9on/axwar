@@ -117,7 +117,7 @@ def test_확인자는_그_회신_뒤에_처리한_회신에서_찾는다(store):
     assert j[2]["confirmed_by"] == "캠페인 담당자"
 
 
-# ---- L1 viewer도 등록부 동기 뒤 사실로 ----
+# ---- L1 viewer도 등록부 동기 뒤 사실로 판정(저장은 하지 않음) ----
 
 def test_viewer_판정은_등록부를_먼저_맞춘_사실로(store):
     eng = _eng(store)
@@ -130,7 +130,8 @@ def test_viewer_판정은_등록부를_먼저_맞춘_사실로(store):
     store.update_plan(row["id"], {"settlement_date": new_day}, "시험")  # 엔진을 거치지 않은 등록부 변경
     assert eng.case_detail(cid)["facts"]["settlement_date"] != new_day  # viewer 없는 읽기는 읽기 전용
     d = eng.case_detail(cid, viewer="Masil 대표")
-    assert d["facts"]["settlement_date"] == new_day
+    assert d["facts"]["settlement_date"] != new_day  # viewer를 줘도 저장은 그대로(Task 23: 읽기는 저장 값을 바꾸지 않음)
+    assert store.get_case(cid)["facts"]["settlement_date"] != new_day
 
 
 # ---- L2 분할 미리보기 금액 ----

@@ -49,6 +49,8 @@ _SCHEMA: dict[str, type] = {
     "roles.contract": str,
     "roles.logistics": str,
     "roles.cs": str,
+    "roles.ceo": str,
+    "roles.head": str,
     "volume.input_lead_days": int,
 }
 

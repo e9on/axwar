@@ -21,6 +21,7 @@
 """
 from __future__ import annotations
 
+import copy
 import functools
 import hashlib
 import json
@@ -90,7 +91,7 @@ LIVE = "라이브"  # 원본 판매 채널 값: 라이브 방송 판매는 전�
 # 거절이 "애매한 회신"이 아니라 그 부서의 결정인 요청 목적(SCM이 안전재고 사용을 거절하는 것은 정해진 답)
 DEFINITIVE_REFUSAL = (P_STOCK,)
 # 값이 역할 목록(쉼표로 구분)인 정책 항목: 바꿀 때 모르는 역할을 넣을 수 없다
-ROLE_KEYS = ("roles.campaign", "roles.contract", "roles.logistics", "roles.cs")  # 값이 역할 하나인 정책 항목: 사람 목록에 있는 역할이어야 한다
+ROLE_KEYS = ("roles.campaign", "roles.contract", "roles.logistics", "roles.cs", "roles.ceo", "roles.head")  # 값이 역할 하나인 정책 항목: 사람 목록에 있는 역할이어야 한다
 ROLE_LIST_KEYS = ("admin.policy_editors", "admin.review_inputters", "admin.return_inputters", "admin.registry_editors")
 # 조건변경 통보 재협상안(설계 5.2): 성과 피 기준을 총매출이 아니라 공제 후 순액으로. 고정 피 금액은 시스템이 정하지 않는다.
 NET_BASE = "공제 후 순액"
@@ -1612,6 +1613,30 @@ class Engine:
             case = self.store.get_case(case_id)
         return case
 
+    def _preview_case(self, case_id: int) -> dict:
+        """열린 건을 등록부의 지금 값에 맞춘 사실 사본으로 돌려준다(저장·이벤트·작업 없음). 건 상세(viewer)가 decide와 같은
+        기준으로 판정하되 읽기가 저장 값을 바꾸지 않게 한다. decide의 _refresh 중 승인권자·받은 승인 무효만 같은 규칙으로 흉내 낸다."""
+        case = self.store.get_case(case_id)
+        if case["status"] not in OPEN[case["kind"]]:
+            return case
+        now = self._registry_now(case, {"windows": self._windows()})
+        if now is None:
+            return case
+        vals, new_dec = now
+        f = copy.deepcopy(case["facts"])
+        changes = {k for k, v in vals.items() if f.get(k) != v}
+        f.update(vals)
+        a_key, h_key, ok_key, _ = STAGES["1차"]
+        ups = self._active_ups(f, "1차")
+        if ups and (list(new_dec.approvers) != ups[0]["base"] or any(k in changes for k in MATERIAL[case["kind"]])):
+            ups = []  # 규칙의 결재선이 이긴다
+        old_approvers = list(f[a_key])
+        if not ups:
+            f[a_key], f[h_key] = list(new_dec.approvers), _hits(new_dec.hits)
+        if f.get(ok_key) and (any(k in changes for k in MATERIAL[case["kind"]]) or list(f[a_key]) != old_approvers):
+            f[ok_key] = []  # 받은 승인은 무효
+        return {**case, "facts": f}
+
     @staticmethod
     def _approve_block(f: dict, status: str, action: str) -> str | None:
         """승인·분할 승인이 지금 막혀 있으면 그 이유(한국어), 아니면 None. decide와 건 상세(viewer.blocked)가 같이 쓴다. 거절은 막지 않는다."""
@@ -2636,11 +2661,15 @@ class Engine:
 
     BRIEFING, COUNTERPOINTS = "브리핑", "반대근거"  # ai_judgments 종류
 
+    def _rule_basis(self, f: dict) -> list[str]:
+        """결재선 근거 문장: 건 상세·근거 화면과 같은 순서(상신 줄이 맨 앞). 상신으로 밀린 처음 판정 줄은 '(처음 판정)'을 붙인다."""
+        return [("(처음 판정) " if h.get("superseded") else "") + h["text"] for h in self._approver_view(f, "1차")]
+
     def _brief_basis(self, case: dict) -> dict:
         """AI 브리핑·반대 근거에 넘기는 사실(규칙 판정과 근거). 이 값이 바뀌면 저장된 브리핑은 낡은 것."""
         f = case["facts"]
         out: dict = {"건": case["ref_id"], "종류": case["kind"], "상태": case["status"],
-                     "승인권자": f["approvers"], "규칙 근거": [h["text"] for h in f["approver_hits"]],
+                     "승인권자": f["approvers"], "규칙 근거": self._rule_basis(f),
                      "지표 판정": "좋음" if f["indicator_good"] else "반대 근거 있음",
                      "지표 근거": [h["text"] for h in f["indicator_hits"]], "기한": f["deadline"]}
         if case["kind"] == KIND_PLAN:
@@ -2762,8 +2791,7 @@ class Engine:
     def case_detail(self, case_id: int, viewer: str | None = None) -> dict:
         """건 상세(설계 6.3): 근거, 규칙 판정, 2차 정보, AI 브리핑(저장본만 — 읽기는 AI를 부르지 않음), 기록, 권한 이동.
         viewer(보는 사람)를 주면 그 사람이 지금 결정할 수 있는지 함께 돌려준다."""
-        # viewer가 있으면 decide처럼 등록부의 지금 값으로 맞춘 사실로 판정한다(보는 사람이 없으면 읽기 전용)
-        case = self._synced_case(case_id) if viewer is not None else self.store.get_case(case_id)
+        case = self.store.get_case(case_id)
         f = case["facts"]
         open_ = case["status"] in OPEN[case["kind"]]
         pending = _pending_roles(f) if open_ else []
@@ -2794,6 +2822,10 @@ class Engine:
             "history": self.store.events(case_id),
         }
         if viewer is not None:
+            # decide와 같은 기준(등록부의 지금 값)으로 판정하되 저장하지 않는 사실 사본으로 한다
+            case = self._preview_case(case_id)
+            f = case["facts"]
+            pending = _pending_roles(f) if open_ else []
             role = self.role_of(viewer)
             lapsed = open_ and self._lapsed(case)
             can = open_ and role in pending and not lapsed
