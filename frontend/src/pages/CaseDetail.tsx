@@ -153,9 +153,9 @@ export default function CaseDetailPage() {
               {c.ref_id} · {c.kind}
             </span>
             <h1>{c.title || c.ref_id}</h1>
-            {c.origin === ORIGIN_DEMO && (
+            {c.origin === ORIGIN_DEMO && note && (
               <p className="demo">
-                <b className="demo-tag">시연용 가정</b> {note ?? '시연을 위해 만든 가상의 건이에요'}
+                <b className="demo-tag">시연용 가정</b> {note}
               </p>
             )}
             <div className="facts">

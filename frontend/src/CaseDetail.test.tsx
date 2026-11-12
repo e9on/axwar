@@ -346,6 +346,15 @@ describe('건 상세', () => {
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('초혜핏 선케어 캠페인2')
   })
 
+  it('시연_초기화로_연_원본_기안은_시연용_표시가_없다', async () => {
+    Setup(MAY, 'Masil 대표', {}, {
+      case: { id: 7, kind: '기안', ref_id: 'PLAN-001', status: '승인 대기', origin: '시연', title: '혜인 기초 캠페인3 · 혜인', note: null, source_plan_id: null },
+    })
+    mount('Masil 대표')
+    expect(await screen.findByRole('heading', { level: 1 })).toHaveTextContent('혜인 기초 캠페인3')
+    expect(screen.queryByText('시연용 가정')).not.toBeInTheDocument()
+  })
+
   it('서류_머리에_요청액_집행일_확정_기한', async () => {
     Setup(MAY, 'Masil 대표')
     mount('Masil 대표')
