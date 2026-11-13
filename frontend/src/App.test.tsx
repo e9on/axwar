@@ -58,27 +58,15 @@ describe('화면 골격', () => {
     await waitFor(() => expect(select.value).toBe('마케팅팀장'))
   })
 
-  it('기준일_이동_버튼이_POST_clock을_부른다', async () => {
-    const { calls } = fakeServer({
-      'GET /api/people': { json: PEOPLE },
-      'GET /api/clock': { json: { date: '2026-07-12', mode: '시연' } },
-      'POST /api/clock': { json: { date: '2026-07-13', mode: '시연', actions: [] } },
-    })
-    mount('/demo')
-    await userEvent.click(await screen.findByRole('button', { name: '다음 날로' }))
-    await waitFor(() =>
-      expect(calls).toContainEqual({ method: 'POST', path: '/api/clock', body: { date: '2026-07-13' } }),
-    )
-    expect((await screen.findAllByText('7월 13일')).length).toBeGreaterThan(0)
-  })
-
-  it('날짜_입력은_한국어_표시를_요청한다', async () => {
+  it('위쪽_막대는_기준일만_보이고_이동_버튼이_없다', async () => {
     fakeServer({
       'GET /api/people': { json: PEOPLE },
       'GET /api/clock': { json: { date: '2026-07-12', mode: '시연' } },
     })
     mount('/demo')
-    expect(await screen.findByLabelText('이동할 날짜')).toHaveAttribute('lang', 'ko')
+    expect((await screen.findAllByText('7월 12일')).length).toBeGreaterThan(0)
+    expect(screen.queryByRole('button', { name: '다음 날로' })).toBeNull()
+    expect(screen.queryByLabelText('이동할 날짜')).toBeNull()
   })
 
   it('운영_모드에서는_기준일_이동이_없다', async () => {

@@ -48,6 +48,7 @@
 .scene:hover { background: var(--c-navy-soft); }
 .scene[aria-pressed="true"] { border-left-color: var(--c-navy); background: var(--c-navy-soft); }
 .scene .k { font-weight: var(--w-bold); }
+.scene .go-start { justify-self: start; color: var(--c-navy); font-weight: var(--w-bold); font-size: var(--t-1); }
 .scene .sub { color: var(--c-ink-2); font-size: var(--t-1); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
 .scene-desc { color: var(--c-ink-2); font-size: var(--t-1); max-width: 72ch; }
 .steps .no { font-family: var(--f-doc); font-weight: var(--w-heavy); font-size: var(--t-4); }

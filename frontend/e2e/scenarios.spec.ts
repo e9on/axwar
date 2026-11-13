@@ -12,37 +12,38 @@ const test = base.extend<{ problems: string[] }>({
   },
 })
 
+/** 조작판에서 장면을 시작하면 메인으로 옮겨져 시연 막대가 뜬다 */
 async function startScene(page: Page, title: string) {
   await page.goto('/demo')
   const exact = new RegExp(`^${title}$`)
   await page.locator('.scene').filter({ has: page.locator('.k', { hasText: exact }) }).click()
   await page.getByRole('dialog').getByRole('button', { name: '초기화하고 시작' }).click()
   await expect(page.getByRole('dialog')).toHaveCount(0)
-  await expect(page.getByText(/^0 \/ \d+단계 진행$/)).toBeVisible()
+  await expect(page).toHaveURL(/\/(\?.*)?$/)
+  await expect(demoBar(page)).toBeVisible()
 }
 
-/** "다음 날짜로" 버튼을 한 번 누르고, 서버가 알려 준 날짜로 넘어갈 때까지 기다린다 */
-async function nextDate(page: Page) {
-  const btn = page.getByRole('button', { name: /^다음 날짜로 \(/ })
-  await expect(btn).toBeEnabled()
-  await btn.click()
-  await expect(page.getByRole('region', { name: '진행' }).getByText('진행 중…')).toHaveCount(0)
+const demoBar = (page: Page) => page.getByRole('region', { name: '시연 진행' })
+
+/** ▶ 진행을 누르고, 결정할 사람이 생겨 막대가 멈출 때까지 기다린다 */
+async function playUntilNeed(page: Page, who: string | RegExp) {
+  await demoBar(page).getByRole('button', { name: '▶ 진행' }).click()
+  await expect(demoBar(page).locator('.db-msg')).toContainText(who)
+  await expect(demoBar(page).getByRole('button', { name: '▶ 진행' })).toBeVisible()
 }
 
-/** 시연 조작판의 바로가기로 결정할 사람으로 바꿔 건을 연다 */
-async function openWaiting(page: Page, who: string) {
-  await page.getByRole('button', { name: new RegExp(`^${who}(으)?로 바꿔 건 열기$`) }).click()
-  await expect(page).toHaveURL(/\/cases\/\d+/)
+/** 시연 막대의 "OO(으)로 바꾸기" 단추가 있으면 눌러 그 사람으로 본다(이미 그 사람이면 없음) */
+async function viewWaiting(page: Page, who: string) {
+  const btn = demoBar(page).getByRole('button', { name: `${who}(으)로 바꾸기` })
+  if (await btn.count()) await btn.click()
+  await expect(page.getByLabel('보는 사람')).toHaveValue(who)
 }
 
-async function goDemo(page: Page) {
-  await page.getByRole('navigation', { name: '화면 이동' }).getByRole('link', { name: '시연' }).click()
-}
-
-/** 끝까지는 시험용이라 접힌 곳 안에 있다 */
-async function runToEnd(page: Page) {
-  await page.getByText('대본 끝까지 자동 진행').click()
-  await page.getByRole('button', { name: '끝까지 진행' }).click()
+/** 끝까지는 시험용이라 화면에 단추가 없다. 서버에 바로 시키고 화면을 다시 연다 */
+async function runToEnd(page: Page, scenario: string) {
+  const res = await page.request.post('/api/demo/run', { data: { scenario, from_step: 0 } })
+  expect(res.ok()).toBe(true)
+  await page.reload()
 }
 
 async function viewAs(page: Page, name: string) {
@@ -61,15 +62,17 @@ async function openTodo(page: Page, ref: string, column?: string) {
   await expect(page).toHaveURL(/\/cases\/\d+/)
 }
 
-test('scenario_1: 7월 3일 물류 회신이 오면 Masil 대표가 근거를 보고 승인하고, 7월 20일에 1차 집행이 된다', async ({ page, problems }) => {
+test('scenario_1: 메인에서 진행하다 7월 3일 회신 뒤 멈추고, Masil 대표가 승인하면 7월 20일에 1차 집행이 되어 끝난다', async ({ page, problems }) => {
   void problems
   await startScene(page, '장면 1\\. 정상')
-  await nextDate(page) // 7월 3일: 물류 회신이 저절로 도착
-  const progress = page.getByRole('region', { name: '진행' })
-  await expect(progress.getByRole('status', { name: '이번에 일어난 일' })).toContainText('물류')
-  await expect(progress).toContainText('이제 Masil 대표가 결정할 차례예요')
+  await expect(page.getByLabel('보는 사람')).toHaveValue('Masil 대표')
+  await expect(demoBar(page)).toContainText('7월 1일')
 
-  await openWaiting(page, 'Masil 대표')
+  await playUntilNeed(page, 'Masil 대표의 승인이 필요해요')
+  await expect(demoBar(page)).toContainText('7월 3일')
+  // 결정할 할 일 줄이 강조된다
+  await expect(page.locator('.todo li[data-waiting="true"]')).toHaveCount(1)
+  await openTodo(page, 'PLAN-014')
 
   // 첫 화면(1440x900) 안에 지금 할 일 문장과 버튼이 보인다
   const now = page.getByRole('group', { name: '결정' })
@@ -81,8 +84,7 @@ test('scenario_1: 7월 3일 물류 회신이 오면 Masil 대표가 근거를 �
   // 근거 칸은 접혀 있다. 펼치고 한 줄을 눌러 계산식을 본다
   const evidence = page.locator('.evidence')
   await evidence.getByRole('button', { name: /위험 신호/ }).click()
-  const row = evidence.locator('.ebtn').first()
-  await row.click()
+  await evidence.locator('.ebtn').first().click()
   await expect(evidence.getByText('계산식').first()).toBeVisible()
 
   await page.getByRole('group', { name: '결정' }).getByRole('button', { name: '승인', exact: true }).click()
@@ -90,24 +92,24 @@ test('scenario_1: 7월 3일 물류 회신이 오면 Masil 대표가 근거를 �
   await expect(dlg).toContainText('이 건을 승인합니다')
   await dlg.getByRole('button', { name: '승인 확정' }).click()
   await expect(page.getByRole('dialog')).toHaveCount(0)
-
   await expect(page.getByText(/보냈어요/)).toBeVisible()
   await expect(page.getByText(/1차 집행|승인 완료/).first()).toBeVisible()
 
-  // 조작판으로 돌아오면 기다리는 결정이 사라지고 다음 날짜(7월 20일)가 남는다
-  await goDemo(page)
-  await expect(page.getByText(/이제 .* 결정할 차례예요/)).toHaveCount(0)
-  await nextDate(page)
-  await expect(page.getByText('오늘 7월 20일')).toBeVisible()
-  await expect(page.getByRole('button', { name: '다음 날짜로' })).toBeDisabled()
+  // 메인으로 돌아오면 이어 가기 안내가 뜨고, 진행하면 7월 20일에 끝난다
+  await goHome(page)
+  await expect(demoBar(page)).toContainText('결정했어요. ▶ 진행을 눌러 이어 가세요')
+  await demoBar(page).getByRole('button', { name: '▶ 진행' }).click()
+  await expect(demoBar(page)).toContainText('장면이 끝났어요')
+  await expect(demoBar(page)).toContainText('7월 20일')
+  await expect(demoBar(page).getByRole('button', { name: '처음부터' })).toBeVisible()
 })
 
 test('scenario_2: 재고 부족으로 막힌 이유를 보고 분할 승인한다', async ({ page, problems }) => {
   void problems
   await startScene(page, '장면 2\\. 조건 변경 — SCM 일부 허용')
-  await nextDate(page) // 7월 2일 물류 회신 도착
-  await expect(page.getByRole('region', { name: '진행' })).toContainText('이제 그룹 CEO가 결정할 차례예요')
-  await openWaiting(page, '그룹 CEO')
+  await playUntilNeed(page, '그룹 CEO의 분할 승인이 필요해요')
+  await viewWaiting(page, '그룹 CEO')
+  await openTodo(page, 'PLAN-001')
 
   const decide = page.getByRole('group', { name: '결정' })
   await expect(decide.getByRole('list', { name: '지금 할 수 없는 결정' })).toContainText('지금 할 수 없어요')
@@ -121,29 +123,27 @@ test('scenario_2: 재고 부족으로 막힌 이유를 보고 분할 승인한�
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await expect(page.getByText(/보냈어요/)).toBeVisible()
 
-  // 조작판으로 돌아오면 이어서 이사회 차례. 이사회로 바꿔 건을 열어 결정한다
-  await goDemo(page)
-  await expect(page.getByRole('region', { name: '진행' })).toContainText('이제 이사회가 결정할 차례예요')
-  await openWaiting(page, '이사회')
+  // 메인으로 돌아오면 이어서 이사회 차례. 이사회로 바꿔 건을 열어 결정한다
+  await goHome(page)
+  await expect(demoBar(page)).toContainText('이사회의 분할 승인이 필요해요')
+  await viewWaiting(page, '이사회')
+  await openTodo(page, 'PLAN-001')
   await page.getByRole('group', { name: '결정' }).getByRole('button', { name: /^분할 승인/ }).click()
   await page.getByRole('dialog').getByRole('button', { name: '분할 승인 확정' }).click()
   await expect(page.getByRole('dialog')).toHaveCount(0)
 
-  // 날짜만 넘기면 7월 4일 SCM 회신이 도착한다
-  await goDemo(page)
-  await nextDate(page)
+  // 메인에서 다시 진행하면 7월 4일 SCM 회신이 도착한다
+  await goHome(page)
+  await demoBar(page).getByRole('button', { name: '▶ 진행' }).click()
   await expect(page.getByRole('status', { name: '이번에 일어난 일' })).toContainText('SCM')
 })
 
 test('scenario_3: 승인 없이 기본 거부 날이 되면 기본 거부와 통보 초안이 보인다', async ({ page, problems }) => {
   void problems
   await startScene(page, '장면 3\\. 정보 부족·승인 없음')
-  await nextDate(page) // 7월 12일
-  await nextDate(page) // 7월 14일: 승인 없이 기본 거부 날
+  await playUntilNeed(page, /계약 담당자?의 .*이 필요해요/)
 
   await viewAs(page, '계약 담당자')
-  await goHome(page)
-  await expect(page.getByText('7월 14일').first()).toBeVisible()
   await openTodo(page, 'INF-001')
   await expect(page.getByRole('group', { name: '결정' })).toContainText('통보 초안')
   await expect(page.getByRole('group', { name: '결정' })).toContainText('통보 발송')
@@ -152,9 +152,9 @@ test('scenario_3: 승인 없이 기본 거부 날이 되면 기본 거부와 통
 test('scenario_1_escalate: 마케팅팀장이 위로 올리면 Masil 대표 결재선에 들어간다', async ({ page, problems }) => {
   void problems
   await startScene(page, '장면 1 변형\\. 상신 — .*')
-  await nextDate(page) // 7월 3일 물류 회신
-  await expect(page.getByRole('region', { name: '진행' })).toContainText('이제 마케팅팀장이 할 차례예요')
-  await openWaiting(page, '마케팅팀장')
+  await playUntilNeed(page, '마케팅팀장의 상신이 필요해요')
+  await expect(page.getByLabel('보는 사람')).toHaveValue('마케팅팀장')
+  await openTodo(page, 'DEMO-PLAN-001')
 
   await page.getByRole('group', { name: '결정' }).getByRole('button', { name: '위로 올리기' }).click()
   const dlg = page.getByRole('dialog')
@@ -181,7 +181,9 @@ test('시연 조작판: 장면 설명은 두 줄로 줄여 보이고, 고른 장
   const line = await subs.first().evaluate((e) => parseFloat(getComputedStyle(e).lineHeight))
   for (const h of heights) expect(h).toBeLessThanOrEqual(line * 2 + 2)
 
-  await startScene(page, '장면 1\. 정상')
+  await startScene(page, '장면 1\\. 정상')
+  await page.goto('/demo') // 시작하면 메인으로 가므로 조작판으로 다시 온다
+  await expect(page.getByRole('region', { name: '진행' })).toContainText('메인에서 진행하세요')
   await page.getByRole('region', { name: '진행' }).getByText('자세히').click()
   await expect(page.getByRole('region', { name: '진행' }).locator('.scene-desc')).toContainText('Masil 대표가 승인하면')
 })
@@ -189,13 +191,9 @@ test('시연 조작판: 장면 설명은 두 줄로 줄여 보이고, 고른 장
 test('scenario_2_exception: 반품 기준 숫자와 예외 승인 뒤 상태가 2차 관찰에 서버 값으로 보인다', async ({ page, problems }) => {
   void problems
   await startScene(page, '장면 2 변형\\. 2차 반품 자동 보류 — .*')
-  await runToEnd(page)
-  await expect(page.getByText(/^13 \/ 13단계 진행$/)).toBeVisible()
-
-  // 새로고침해도 서버가 기억한 진행 위치가 그대로다
-  await page.reload()
-  await expect(page.getByText(/^13 \/ 13단계 진행$/)).toBeVisible()
-  await expect(page.getByRole('button', { name: '다음 단계' })).toHaveCount(0)
+  await runToEnd(page, 'scenario_2_exception')
+  await page.goto('/')
+  await expect(demoBar(page)).toContainText('장면이 끝났어요') // 새로고침해도 서버가 기억한 진행 위치가 그대로다
 
   const id = await page.evaluate(async () => {
     const list = (await (await fetch('/api/cases')).json()) as { id: number; ref_id: string }[]
@@ -223,8 +221,7 @@ test('메인: 하회 구간 이름표가 표시 칸과 겹치지 않는다', asy
   void problems
   // 일정이 많이 쌓인 장면 끝(표시가 하회 구간 띠 안까지 들어오는 상태)에서 잰다
   await startScene(page, '장면 2 변형\\. 2차 반품 자동 보류 — .*')
-  await runToEnd(page)
-  await expect(page.getByText(/^13 \/ 13단계 진행$/)).toBeVisible()
+  await runToEnd(page, 'scenario_2_exception')
   await page.goto('/')
   await expect(page.getByTestId('band').first()).toBeVisible()
   await expect(page.locator('.dot').first()).toBeVisible()

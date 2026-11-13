@@ -172,7 +172,7 @@ describe('위쪽 막대와 메인 개편', () => {
     expect(first.querySelector('.ref')).toHaveTextContent('PLAN-001')
   })
 
-  it('기준일_이동은_시연_조작판에만', async () => {
+  it('날짜_이동은_시연_막대에만', async () => {
     mountHome()
     await screen.findByRole('list', { name: '할 일 목록' })
     expect(screen.queryByRole('button', { name: '다음 날로' })).toBeNull()
@@ -180,8 +180,9 @@ describe('위쪽 막대와 메인 개편', () => {
     expect(screen.queryByRole('button', { name: '모드 전환' })).toBeNull()
     expect(screen.getByText('9월 5일')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('link', { name: '시연' }))
-    expect(await screen.findByRole('button', { name: '다음 날로' })).toBeInTheDocument()
-    expect(screen.getByLabelText('이동할 날짜')).toBeInTheDocument()
+    await screen.findByRole('heading', { name: '시연 조작판' })
+    expect(screen.queryByRole('button', { name: '다음 날로' })).toBeNull()
+    expect(screen.queryByLabelText('이동할 날짜')).toBeNull()
   })
 
   it('화면에_금지어가_없다_메인', async () => {
@@ -218,24 +219,16 @@ describe('시연 조작판 개편', () => {
     )
   }
 
-  it('시연_단계는_문장으로', async () => {
+  it('진행_중인_장면은_메인으로_안내한다', async () => {
     mountDemo(1)
-    const steps = await screen.findByRole('list', { name: '대본 단계' })
-    const items = within(steps).getAllByRole('listitem')
-    expect(items[0]).toHaveTextContent('물류가 회신해요')
-    expect(items[1]).toHaveTextContent('그룹 CEO가 분할 승인해요')
-    expect(items[2]).toHaveTextContent('기준일을 7월 14일로 옮겨요')
-    expect(items[3]).toHaveTextContent('캠페인 담당자가 판매 실적을 넣어요')
-    // 진행한 단계는 체크, 다음 단계는 강조
-    expect(items[0]).toHaveAttribute('data-done', 'true')
-    // 결정이 기다리면 그 사람으로 바꿔 건을 여는 안내
-    expect(await screen.findByText(/이제 그룹 CEO가 결정할 차례예요/)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /그룹 CEO로 바꿔 건 열기/ })).toBeInTheDocument()
+    expect(await screen.findByText(/지금 진행 중인 장면: 장면 2\. 조건 변경/)).toBeInTheDocument()
+    expect(screen.getByText('메인에서 진행하세요.')).toBeInTheDocument()
+    expect(screen.queryByRole('list', { name: '대본 단계' })).toBeNull()
   })
 
   it('화면에_금지어가_없다_시연', async () => {
     mountDemo(1)
-    await screen.findByRole('list', { name: '대본 단계' })
+    await screen.findByText(/지금 진행 중인 장면/)
     expect(findForbidden(visibleText(document.body))).toEqual([])
   })
 })

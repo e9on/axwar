@@ -38,6 +38,7 @@ export default defineConfig({
     },
     {
       command: `npx vite --host 127.0.0.1 --port ${FRONT_PORT} --strictPort`,
+      env: { VITE_DEMO_TICK_MS: '100' }, // 시연 막대가 하루를 넘기는 간격을 짧게
       url: `http://127.0.0.1:${FRONT_PORT}`,
       reuseExistingServer: false,
       timeout: 60_000,

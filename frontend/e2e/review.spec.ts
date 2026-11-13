@@ -178,3 +178,24 @@ test('말로 설명(#33) 스크린샷: 말로설명_* (서버 explain이 아직 
   await page.getByRole('button', { name: /핵심 지표/ }).click()
   await page.screenshot({ path: join(OUT, '말로설명_위험신호_1440.png'), fullPage: true })
 })
+
+test('메인 시연 막대(#42) 스크린샷: 메인시연_*', async ({ page }) => {
+  test.setTimeout(120_000)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  // 진행 중인 모습을 찍을 수 있게 날짜 넘기기 응답을 조금 늦춘다
+  await page.route('**/api/demo/advance', async (route) => {
+    await new Promise((r) => setTimeout(r, 700))
+    await route.continue()
+  })
+  await page.goto('/demo')
+  await page.locator('.scene').filter({ has: page.locator('.k', { hasText: /^장면 1\. 정상$/ }) }).click()
+  await page.getByRole('dialog').getByRole('button', { name: '초기화하고 시작' }).click()
+  const bar = page.getByRole('region', { name: '시연 진행' })
+  await expect(bar).toBeVisible()
+  await bar.getByRole('button', { name: '▶ 진행' }).click()
+  await expect(bar.getByRole('button', { name: '❚❚ 멈춤' })).toBeVisible()
+  await page.screenshot({ path: join(OUT, '메인시연_진행중_1440.png') })
+  await expect(bar.locator('.db-msg')).toContainText('승인이 필요해요')
+  await page.waitForLoadState('networkidle')
+  await page.screenshot({ path: join(OUT, '메인시연_결정대기_1440.png') })
+})

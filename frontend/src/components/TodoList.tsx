@@ -45,7 +45,8 @@ function until(column: string, it: Item): string | null {
   return day ? `${koDate(day)}까지` : null
 }
 
-export default function TodoList() {
+/** highlightRef: 시연이 결정을 기다리는 건의 이름표(있으면 그 건의 줄을 강조). inScene: 시연 장면이 진행 중이면 비었을 때 장면 고르기 안내를 뺀다 */
+export default function TodoList({ highlightRef = null, inScene = false }: { highlightRef?: string | null; inScene?: boolean }) {
   const { person, failed: viewerFailed, retry: retryViewer } = useViewer()
   const { version, mode } = useClock()
   const go = useCaseLink()
@@ -66,7 +67,7 @@ export default function TodoList() {
     body = (
       <div className="empty">
         <p>지금 할 일이 없어요</p>
-        {mode === DEMO_MODE && (
+        {mode === DEMO_MODE && !inScene && (
           <button type="button" className="go" onClick={() => navigate('/demo' + asQuery)}>
             시연 조작판에서 장면을 고르세요
           </button>
@@ -82,7 +83,7 @@ export default function TodoList() {
           const line = plainLine(m.full)
           const day = until(column, it)
           return (
-            <li key={i} data-column={column}>
+            <li key={i} data-column={column} data-waiting={!!highlightRef && it.ref_id === highlightRef}>
               <span className="verb">{TODO_VERB[column] ?? column}</span>
               <span className="who">
                 <span className="name">{name}</span>
