@@ -316,6 +316,7 @@ def test_정책_조회는_값_출처_설명_덮어쓴_값을_준다(store):
     assert r["value"] == 7 and r["overridden"] is True and r["file_value"] != 7
 
 
+@pytest.mark.usefixtures("legacy_scenes")
 def test_정책_수정은_다음_판정에_반영된다(store):
     c, _, _ = client(store)
     sc = Scene(c, "scenario_1")

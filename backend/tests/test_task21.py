@@ -34,6 +34,7 @@ def _esc_case(store, upto):
 
 # ---- 1. 상신 뒤 결재선 이유 ----
 
+@pytest.mark.usefixtures("legacy_scenes")
 def test_상신_전에는_결재선_이유가_그대로(store):
     eng, cid = _esc_case(store, 2)
     hits = eng.case_evidence(cid)["rule"]["approver_hits"]
@@ -43,6 +44,7 @@ def test_상신_전에는_결재선_이유가_그대로(store):
     assert "마케팅팀 전결" in d[0]["text"] and not d[0].get("superseded")
 
 
+@pytest.mark.usefixtures("legacy_scenes")
 def test_상신_뒤에는_첫_줄이_상신_설명이고_원래_판정은_처음_판정(store):
     eng, cid = _esc_case(store, 3)
     hits = eng.case_evidence(cid)["rule"]["approver_hits"]
@@ -92,6 +94,7 @@ def test_장기_가치_신호에도_단위(store):
 
 # ---- 3. 시연 기안 note ----
 
+@pytest.mark.usefixtures("legacy_scenes")
 def test_건_상세에_시연_기안_note와_원본_기안(store):
     eng = _eng(store)
     cid = eng.seed("scenario_1_escalate")[0]
@@ -118,6 +121,7 @@ def _scene2(store):
     return eng, cid
 
 
+@pytest.mark.usefixtures("legacy_scenes")
 def test_재고_부족이면_승인_막힘_분할_승인만(store):
     eng, cid = _scene2(store)
     v = eng.case_detail(cid, viewer="Masil 대표")["viewer"]
@@ -138,6 +142,7 @@ def test_재고_부족이면_승인_막힘_분할_승인만(store):
         and sp["phase2_amount_krw"] == f["phase2"]["amount_krw"])
 
 
+@pytest.mark.usefixtures("legacy_scenes")
 def test_SCM이_전량_허용하면_승인_가능(store):
     eng, cid = _scene2(store)
     eng.play(scenarios.load("scenario_1").script[1])  # 대본의 SCM 회신

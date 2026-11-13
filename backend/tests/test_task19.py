@@ -57,6 +57,7 @@ def test_가짜_AI로_대본이_끝까지_돌고_끝_상태가_기존_시험과_
     assert (j or name == "scenario_3_reject") and all("fake" in x["model"] and "대본" in x["model"] for x in j)  # 대본 지정 해석임이 드러난다
 
 
+@pytest.mark.usefixtures("legacy_scenes")
 def test_가짜_AI_장면1_승인권자와_해석(store):
     eng, (cid,), out = run_fake(store, "scenario_1")
     assert store.get_case(cid)["facts"]["approvers"] == ["Masil 대표", "그룹 보고"]
@@ -84,6 +85,7 @@ def test_가짜_AI_장면3_정보부족은_사람_확인(store):
     assert out[3]["needs_human"] is True and out[3]["judgment"]["stance"] == "정보부족"
 
 
+@pytest.mark.usefixtures("legacy_scenes")
 def test_API로_가짜_AI_대본_실행(store):
     c = TestClient(create_app(store, Engine(store)))
     assert c.post("/api/demo/reset", json={"scenario": "scenario_1"}).status_code == 200
@@ -157,6 +159,7 @@ def test_시연_기안_이름은_base_기안_캠페인과_시연용_표시(store
     assert demo == plain + " (시연용)"
 
 
+@pytest.mark.usefixtures("legacy_scenes")
 def test_PLAN_019_이름(store):
     eng = Engine(store, provider=FakeProvider([]))
     (cid,) = eng.seed("scenario_1")

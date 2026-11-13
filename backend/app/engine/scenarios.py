@@ -4,7 +4,7 @@
 미리 넣어 둘 부서 요청과 시간 순서 대본(날짜, 행동, 입력 문장)을 담는다. 대본은 시연 조작판과 테스트가 같이 쓴다.
 
 파일 형식
-  title, description: 문자열
+  title, description: 문자열, summary: 장면 목록에 쓸 한 줄 요약(선택, 쉬운 말)
   plans: [기안 ID], contracts: [인플루언서 코드]
   register_contracts: [인플루언서 코드] (선택) 등록부에만 넣는 계약 — 사건은 열지 않는다(2차 집행의 계약 만료·갱신 판정용)
   demo_plans: [{id, base, override, note}] (선택) 시연 전용 기안 — 원본 기안(base)을 복사하고 override 값(기안 등록부 열)만 바꿔
@@ -25,7 +25,10 @@
     상신  actor, stage("1차"|"2차"), opinion(승인 권고|반대 권고), reason   (승인권자가 자기 권한을 넘는다며 상급자에게 올림)
     예외 승인  actor, qty, reason            (반품으로 2차가 자동 보류된 건을 2차 승인권자 중 최고 역할이 이유를 적어 승인)
     기준일 date(대상 없음)
-  date가 있으면 그 날짜로 기준일을 옮긴 뒤 행동한다.
+  date가 있으면 그 날짜로 기준일을 옮긴 뒤 행동한다(단계별 재생·run).
+  바깥 사건(회신·리뷰·반품·판매)과 기준일 단계의 date는 "도착일"이기도 하다: 날짜로 진행(POST /api/demo/advance)하면 그날까지 도착일이
+  된 바깥 사건이 날짜 순서(같은 날은 대본 순서)로 저절로 들어온다. 결정·공지·발송·상신·예외 승인처럼 사람이 누르는 단계는 날짜로
+  진행해도 적용하지 않고 시연자 몫으로 남는다(대본의 결정 단계 date는 단계별 재생·run이 시계를 옮기는 데만 쓴다).
 """
 from __future__ import annotations
 
@@ -38,6 +41,7 @@ from pathlib import Path
 from app import config
 from app.ai import judge
 from app.data import loader
+from app.rules.josa import pick
 from app.store import db as _db
 from app.store.db import Store
 
@@ -47,6 +51,7 @@ DECISIONS = ("승인", "분할승인", "거절")
 ACTION_FIELDS = {"회신": ("dept", "text"), "결정": ("actor", "decision"), "리뷰": ("reviews",),
                  "반품": ("change_of_mind", "color"), "판매": ("actor", "orders", "returns"), "공지": ("actor",), "발송": ("actor",), "상신": ("actor", "stage", "opinion", "reason"),
                  "예외 승인": ("actor", "qty", "reason"), "기준일": ("date",)}
+OUTSIDE = ("회신", "리뷰", "반품", "판매", "기준일")  # 바깥 사건: 도착일(date)이 되면 날짜 진행이 저절로 적용하는 단계
 TARGETED = ("회신", "결정", "리뷰", "반품", "판매", "공지", "발송", "상신", "예외 승인")
 AI_KEYS = ("stance", "qty_limit", "next_date", "needs_human")
 AI_OPTIONAL = ("confidence",)
@@ -68,6 +73,7 @@ class Scenario:
     script: tuple[dict, ...]
     register_contracts: tuple[str, ...] = ()
     demo_plans: tuple[dict, ...] = ()
+    summary: str = ""
 
 
 @dataclass(frozen=True)
@@ -285,6 +291,9 @@ def load(name: str, demo_dir: str | Path | None = None) -> Scenario:
     missing = [k for k in _TOP_KEYS if k not in body]
     if missing:
         raise _fail(name, f"항목이 없음: {', '.join(missing)}")
+    summary = body.get("summary", "")
+    if not isinstance(summary, str):
+        raise _fail(name, "summary는 문자열이어야 함")
     demo_plans = _check_demo_plans(name, body.get("demo_plans", []))
     plans, contracts = body["plans"], body["contracts"]
     reg = body.get("register_contracts", [])
@@ -303,7 +312,7 @@ def load(name: str, demo_dir: str | Path | None = None) -> Scenario:
     for i, s in enumerate(body["script"]):
         _check_step(name, i, s, plans, contracts)
     return Scenario(name, str(body["title"]), str(body["description"]), tuple(plans), tuple(contracts),
-                    tuple(body["requests"]), tuple(body["script"]), tuple(reg), demo_plans)
+                    tuple(body["requests"]), tuple(body["script"]), tuple(reg), demo_plans, summary)
 
 
 def _source_plans() -> dict[str, dict]:
@@ -377,3 +386,49 @@ def register_contract(store: Store, influencer_code: str) -> int:
               "notice_deadline": n.notice_deadline, "expiry_date": n.expiry, "auto_renew": n.auto_renew,
               "source_doc": n.source_file}
     return store.add_contract(fields, SEED_ACTOR, origin="시연")
+
+
+def is_outside(step: dict) -> bool:
+    """사람이 누르지 않는 바깥 사건(회신·리뷰·반품·판매·기준일)인가."""
+    return step["action"] in OUTSIDE
+
+
+def _md(iso: str) -> str:
+    d = date.fromisoformat(iso)
+    return f"{d.month}/{d.day}"
+
+
+def _ref(step: dict) -> str:
+    return step.get("plan") or step.get("contract") or ""
+
+
+def arrival_text(step: dict) -> str:
+    """바깥 사건이 들어왔다는 쉬운 문장.."""
+    a, ref, when = step["action"], _ref(step), _md(step["date"]) if "date" in step else ""
+    tail = f" ({ref})" if ref else ""
+    if a == "회신":
+        return f"{when} {step['dept']} 회신이 도착함{tail}"
+    if a == "리뷰":
+        return f"{when} 소비자 리뷰 {len(step['reviews'])}건이 도착함{tail}"
+    if a == "반품":
+        return f"{when} 모의 반품이 도착함 — 단순변심 {step['change_of_mind']}건·색상불만 {step['color']}건{tail}"
+    if a == "판매":
+        return f"{when} 1차 판매 실적이 도착함 — 주문 {step['orders']:,}건·반품 {step['returns']:,}건{tail}"
+    return f"{when} 기준일이 됨"
+
+
+def decision_text(step: dict) -> str:
+    """시연자가 해야 할 일을 쉬운 문장으로.."""
+    a, ref, who = step["action"], _ref(step), step.get("actor", "")
+    sub = f"{who}{pick(who, '이가')}" if who else ""
+    if a == "결정":
+        stage = "2차 " if step.get("stage") == "2차" else ""
+        word = {"승인": "승인", "분할승인": "분할 승인", "거절": "거절"}[step["decision"]]
+        return f"{sub} {ref} 건의 {stage}{word} 결정을 할 차례"
+    if a == "공지":
+        return f"{sub} {ref} 건의 1차 수량을 소비자에게 공지할 차례"
+    if a == "발송":
+        return f"{sub} {ref} 건의 조건변경 통보문을 상대에게 발송할 차례"
+    if a == "상신":
+        return f"{sub} {ref} 건의 {step['stage']} 결재를 상급자에게 올릴 차례"
+    return f"{sub} {ref} 건의 2차를 예외 승인할 차례"
