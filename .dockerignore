@@ -1,0 +1,15 @@
+.git
+.github
+**/node_modules
+frontend/dist
+frontend/test-results
+frontend/playwright-report
+backend/.venv
+backend/var
+**/__pycache__
+**/.pytest_cache
+작업노트
+eval
+tools
+*.md
+!01_참가자_배포용/**/*.md

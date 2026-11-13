@@ -1,0 +1,6 @@
+name: approval-planner
+runtime:
+  port: 3000
+  health_path: /healthz
+  healthcheck:
+    start_period: 120s
