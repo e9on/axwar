@@ -5,6 +5,7 @@ import { signalValue, indicatorValue } from './EvidenceList'
 import { RULE_LABEL, RULE_LABEL_FALLBACK, changeLine, fromTo } from '../copy'
 import type { AiText, ApproverChange, CaseDetailData, CaseEvent, CaseRequest, Escalation, EvidenceData, ReplyJudgment } from '../caseTypes'
 import { koDate } from '../date'
+import { AI_SHORT_LIMIT, aiHeadline, aiLines, clip, isStructured } from '../aiText'
 
 /** 결재선이 바뀐 이력: 상신은 "A에서 B로, 상신(의견): 이유", 그 밖의 권한 이동은 "A에서 B로: 이유" */
 export function ChangeLines({ escalations, changes }: { escalations: Escalation[]; changes: ApproverChange[] }) {
@@ -93,6 +94,36 @@ export function Requests({ requests }: { requests: CaseRequest[] }) {
   )
 }
 
+/** AI 글 본문: 머리말(권고·이유 …) 줄은 줄마다 나누고 머리말만 굵게. 옛 글은 120자까지만 보이고 "더 보기". */
+function AiBody({ text }: { text: string }) {
+  const [more, setMore] = useState(false)
+  if (isStructured(text)) {
+    return (
+      <div className="ai-lines">
+        {aiLines(text).map((l, i) => (
+          <p key={i} style={{ whiteSpace: 'pre-line' }}>
+            {i === 0 && <Badge kind="AI" />}
+            {l.head && <b>{l.head}:</b>} {l.body}
+          </p>
+        ))}
+      </div>
+    )
+  }
+  const long = text.length > AI_SHORT_LIMIT
+  return (
+    <p style={{ whiteSpace: 'pre-line' }}>
+      <Badge kind="AI" />
+      {long && !more ? clip(text) : text}
+      {long && !more && (
+        <>
+          {' '}
+          <button type="button" className="btn-sm" onClick={() => setMore(true)}>더 보기</button>
+        </>
+      )}
+    </p>
+  )
+}
+
 type AiProps = { title: string; bare?: boolean; text: AiText | null; canMake: boolean; making?: boolean; onMake?: () => void; emptyHint: string }
 
 /** AI가 쓴 글(브리핑·반대 근거). AI 배지, 모델과 날짜, 낡았으면 다시 만들어야 한다는 문장. */
@@ -102,12 +133,9 @@ export function AiBlock({ title, bare, text, canMake, making, onMake, emptyHint 
       {!bare && <h3>{title}</h3>}
       {text ? (
         <div className="brief">
-          <p>
-            <Badge kind="AI" />
-            {text.ok ? text.text : 'AI가 글을 만들지 못했어요'}
-          </p>
+          {text.ok ? <AiBody text={text.text} /> : <p><Badge kind="AI" />AI가 글을 만들지 못했어요</p>}
           <p className="conf">
-            {text.model} · {koDate(text.sim_date)}
+            {/fake/i.test(text.model) ? '시연용 해석' : text.model} · {koDate(text.sim_date)}
           </p>
           {text.stale && <p className="stale">사실이 바뀌어 다시 만들어야 함</p>}
         </div>
@@ -178,7 +206,6 @@ export function Tasks({ detail }: { detail: CaseDetailData }) {
 
 const JUDGE = '판정' // 서버 신호의 판정 쓰임 값
 const REAL_ROAS = 'real_roas' // 서버 핵심 지표 키
-const FIRST_SENTENCE = /^.*?[.!?。](?=\s|$)/
 
 /** 핵심 세 줄: 왜 이 사람이 결재하나 / 가장 큰 위험 / AI 의견. 이름표와 값만, 원문은 아래 접힌 칸에 있다 */
 export function KeyLines({ detail, evidence, canMake, making, onMake }: { detail: CaseDetailData; evidence: EvidenceData | null; canMake: boolean; making: boolean; onMake: () => void }) {
@@ -188,7 +215,7 @@ export function KeyLines({ detail, evidence, canMake, making, onMake }: { detail
   const reds = evidence ? evidence.signals.filter((s) => s.level === 'red' && s.judgment === JUDGE).slice(0, 2) : []
   const roas = evidence?.key_indicators.find((i) => i.key === REAL_ROAS) ?? null
   const b = detail.briefing
-  const first = b && b.ok ? (FIRST_SENTENCE.exec(b.text)?.[0] ?? b.text) : ''
+  const first = b && b.ok ? aiHeadline(b.text) : ''
   return (
     <dl className="keylines" aria-label="핵심">
       <div>
@@ -217,7 +244,7 @@ export function KeyLines({ detail, evidence, canMake, making, onMake }: { detail
         <dt>AI 의견</dt>
         <dd>
           {first ? (
-            <span>{first}</span>
+            <span><Badge kind="AI" />{first}</span>
           ) : (
             <span className="muted">아직 없어요</span>
           )}

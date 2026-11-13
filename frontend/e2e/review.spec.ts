@@ -133,3 +133,21 @@ test('화면 개편(#33) 스크린샷: 개편_*', async ({ page, request }) => {
     expect(over, `${w}px 가로 스크롤`).toBeLessThanOrEqual(0)
   }
 })
+
+test('배지 정리(#33) 스크린샷: 배지정리_*', async ({ page, request }) => {
+  test.setTimeout(180_000)
+  const api = 'http://127.0.0.1:8000'
+  await request.post(`${api}/api/demo/reset`, { data: { scenario: 'scenario_2' } })
+  await request.post(`${api}/api/demo/run`, { data: { scenario: 'scenario_2', from_step: 0, upto: 1 } })
+  const cases = (await (await request.get(`${api}/api/cases`)).json()) as { id: number; ref_id: string }[]
+  const id = cases.find((c) => c.ref_id === 'PLAN-001')?.id
+  expect(id).toBeTruthy()
+  await request.post(`${api}/api/cases/${id}/briefing`, { data: { actor: '그룹 CEO' } })
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`/cases/${id}?as=${encodeURIComponent('그룹 CEO')}`)
+  await page.waitForLoadState('networkidle')
+  await page.screenshot({ path: join(OUT, '배지정리_첫화면_1440.png') })
+  await page.getByRole('button', { name: /위험 신호/ }).click()
+  await page.getByRole('button', { name: /AI 브리핑/ }).first().click()
+  await page.screenshot({ path: join(OUT, '배지정리_근거펼침_1440.png'), fullPage: true })
+})

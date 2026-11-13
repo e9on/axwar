@@ -9,3 +9,6 @@
 .b.reply { background: var(--c-b-reply); }
 .b.op { background: var(--c-b-op); }
 .b.ai { background: var(--c-b-ai); }
+/* 가정은 작고 조용하게: 채움 없이 테두리만 */
+.b.asm { background: transparent; color: inherit; font-size: var(--t-1); font-weight: var(--w-regular); border: 1px solid var(--c-b-asm); padding: 0 var(--s-1); }
+.ai-lines p { margin: 0 0 var(--s-1); }

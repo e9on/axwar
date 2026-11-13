@@ -154,17 +154,16 @@ async function evidenceReady() {
 }
 
 describe('건 상세', () => {
-  it('근거마다_배지가_보인다', async () => {
+  it('근거마다_가정_표시만_남고_수준은_글자로_보인다', async () => {
     Setup(MAY, 'Masil 대표')
     mount('Masil 대표')
     await evidenceReady()
     const rows = document.querySelectorAll('.evidence .ebtn')
     expect(rows.length).toBeGreaterThanOrEqual(7)
-    rows.forEach((r) => expect(r.querySelector('.b')).not.toBeNull())
     const evidence = within(document.querySelector('.evidence') as HTMLElement)
-    expect(evidence.getAllByText('계산').length).toBeGreaterThan(0)
+    expect(evidence.queryAllByText('계산')).toHaveLength(0)
     expect(evidence.getAllByText('가정').length).toBeGreaterThan(0)
-    expect(evidence.getAllByText('원본').length).toBeGreaterThan(0)
+    expect(evidence.queryAllByText('원본')).toHaveLength(0)
     // 수준은 색만이 아니라 글자로도
     expect(evidence.getByText('나쁨')).toBeInTheDocument()
     expect(evidence.getByText('좋음')).toBeInTheDocument()
@@ -326,13 +325,13 @@ describe('건 상세', () => {
     expect(screen.queryByRole('button', { name: /AI 브리핑/ })).toBeNull()
   })
 
-  it('회신에는_회신_배지와_AI_해석_결과', async () => {
+  it('회신에는_AI_해석_결과만_배지가_붙는다', async () => {
     Setup(MAY, 'Masil 대표')
     mount('Masil 대표')
     await openFolds()
     const text = await screen.findByText('전량 가능합니다')
     const reply = text.closest('.reply') as HTMLElement
-    expect(within(reply).getByText('회신')).toHaveClass('reply')
+    expect(within(reply).queryByText('회신')).toBeNull()
     expect(within(reply).getByText(/해석: 수용/)).toBeInTheDocument()
     expect(within(reply).getByText(/fake-해석기 · 사람 확인 불필요/)).toBeInTheDocument()
   })

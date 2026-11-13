@@ -15,6 +15,7 @@ import EvidenceList from '../components/EvidenceList'
 import LoadFailed from '../components/LoadFailed'
 import Fold from '../components/Fold'
 import { AiBlock, ChangeFold, History, KeyLines, Requests, Tasks, openTasks } from '../components/CaseSections'
+import { aiHeadline } from '../aiText'
 import './CaseDetail.css'
 
 const ORIGIN_DEMO = '시연' // 서버 출처 이름
@@ -28,9 +29,8 @@ function adjustedAmount(d: CaseDetailData): number | null {
   return base - (dec.amount_before - dec.amount_after)
 }
 
-const FIRST = /^.*?[.!?。](?=\s|$)/
 function firstLine(text: string): string {
-  return FIRST.exec(text)?.[0] ?? text
+  return aiHeadline(text)
 }
 
 function requestSummary(d: CaseDetailData): string {

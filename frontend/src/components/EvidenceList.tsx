@@ -149,6 +149,7 @@ export default function EvidenceList({ data }: { data: EvidenceData }) {
 
   return (
     <div className="evidence">
+      <p className="muted asm-note">가정 = 원본에 없어 정한 값</p>
       <Fold title="결재 이유" summary={ruleLines.length === 0 ? '이유가 아직 없어요' : `${ruleLines.length}개`}>
         {ruleLines.length === 0 ? (
           <p className="muted">결재선 이유가 아직 없어요</p>

@@ -63,12 +63,12 @@ const NOT = { ...MAY, person: '마케팅팀장', role: '마케팅팀', can_decid
 const SHORT = '재고 부족으로 1차 수량이 제한돼요'
 const MAY_SHORT = { ...MAY, actions: ['분할승인', '거절'], blocked: [{ action: '승인', reason: SHORT }] }
 
-function mountCase(viewer: object, who: string, over: Record<string, unknown> = {}) {
+function mountCase(viewer: object, who: string, over: Record<string, unknown> = {}, evidence: object = EVIDENCE) {
   fakeServer({
     'GET /api/people': { json: PEOPLE },
     'GET /api/clock': { json: { date: '2026-09-05', mode: '시연' } },
     [`GET ${DETAIL_PATH(who)}`]: { json: detailOf(viewer, over) },
-    'GET /api/cases/7/evidence': { json: EVIDENCE },
+    'GET /api/cases/7/evidence': { json: evidence },
   })
   return render(
     <MemoryRouter initialEntries={[`/cases/7?as=${encodeURIComponent(who)}`]}>
@@ -238,5 +238,63 @@ describe('시연 조작판 개편', () => {
     mountDemo(1)
     await screen.findByRole('list', { name: '대본 단계' })
     expect(findForbidden(visibleText(document.body))).toEqual([])
+  })
+})
+
+const AI_OK = (text: string, model = 'claude') => ({ text, ok: true, model, sim_date: '2026-09-04', stale: false })
+const BADGE_TEXTS = () => Array.from(document.querySelectorAll('.b')).map((e) => e.textContent)
+
+describe('배지 정리와 AI 의견', () => {
+  it('기본_화면에_원본_계산_배지가_없다', async () => {
+    mountCase(MAY, 'Masil 대표')
+    await screen.findByRole('button', { name: /위험 신호/ })
+    for (const name of [/결재 이유/, /위험 신호/, /핵심 지표/, /비용 분해/]) await userEvent.click(screen.getByRole('button', { name }))
+    await screen.findByRole('button', { name: /예상 ROAS 괴리/ })
+    const texts = BADGE_TEXTS()
+    for (const t of ['원본', '계산', '회신', '의견']) expect(texts).not.toContain(t)
+  })
+
+  it('가정_표시는_남는다', async () => {
+    const asm = { ...EVIDENCE, signals: [{ ...EVIDENCE.signals[1], badge: '가정' }, EVIDENCE.signals[0]] }
+    mountCase(MAY, 'Masil 대표', {}, asm)
+    await userEvent.click(await screen.findByRole('button', { name: /위험 신호/ }))
+    await screen.findByRole('button', { name: /쿠폰 중복 비중/ })
+    expect(BADGE_TEXTS()).toContain('가정')
+    expect(screen.getAllByText('가정 = 원본에 없어 정한 값')).toHaveLength(1)
+  })
+
+  it('AI_의견은_줄바꿈되고_권고_줄만_핵심에', async () => {
+    const text = '권고: 분할 승인\n이유: 재고가 모자라요\n주의: 둘째 수량은 판매 뒤 결정'
+    mountCase(MAY, 'Masil 대표', { briefing: AI_OK(text, 'fake-model') })
+    const core = await screen.findByRole('group', { name: '가장 큰 위험' })
+    const keylines = core.closest('dl') as HTMLElement
+    const ai = within(keylines).getByText('AI 의견').nextElementSibling as HTMLElement
+    expect(ai).toHaveTextContent('분할 승인')
+    expect(ai).not.toHaveTextContent('재고가 모자라요')
+    await userEvent.click(screen.getByRole('button', { name: /AI 브리핑/ }))
+    const head = await screen.findByText('이유:')
+    expect(head.tagName).toBe('B')
+    const para = head.closest('p') as HTMLElement
+    expect(para).toHaveTextContent('재고가 모자라요')
+    expect(screen.getByText('주의:')).toBeInTheDocument()
+    expect(screen.getByText('권고:')).toBeInTheDocument()
+    expect(screen.getByText(/시연용 해석/)).toBeInTheDocument()
+  })
+
+  it('반대_근거도_머리말이_굵다', async () => {
+    mountCase(MAY, 'Masil 대표', { counterpoints: AI_OK('반대로 결정하려면: 재고를 먼저 채워요\n확인할 것: 입고일') })
+    await userEvent.click(await screen.findByRole('button', { name: /반대 근거/ }))
+    expect((await screen.findByText('반대로 결정하려면:')).tagName).toBe('B')
+    expect(screen.getByText('확인할 것:').tagName).toBe('B')
+  })
+
+  it('옛_긴_AI_글은_줄여_보인다', async () => {
+    const long = '가'.repeat(300)
+    mountCase(MAY, 'Masil 대표', { briefing: AI_OK(long) })
+    await userEvent.click(await screen.findByRole('button', { name: /AI 브리핑/ }))
+    const more = await screen.findByRole('button', { name: '더 보기' })
+    expect(screen.queryByText(long)).toBeNull()
+    await userEvent.click(more)
+    expect(await screen.findByText(long)).toBeInTheDocument()
   })
 })
