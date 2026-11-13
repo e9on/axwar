@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from app.ai import prompts
 from app.ai.providers import Provider
 
-FALLBACK_TEXT = "AI 응답 없음 — 규칙 판정만 표시합니다"
+FALLBACK_TEXT = "AI 의견을 만들지 못했어요. 규칙으로 정한 결과만 보여요."
 MIN_CHECKED_DIGITS = 3  # 이 자리수 이상 숫자만 사실과 대조한다(1·2자리는 "3가지" 같은 문장 숫자)
 _NUMBER = re.compile(r"\d[\d,]*\d|\d")
 
@@ -19,7 +19,7 @@ BRIEFING_HEADS = ("권고", "이유", "주의")  # 브리핑은 정확히 이 �
 COUNTER_HEADS = ("반대로 결정하려면", "확인할 것")  # 반대 근거는 이 두 줄
 LINE_MAX = 90  # 머리말 포함 한 줄 상한(프롬프트는 60자 안팎을 요청). 넘으면 정리하지 않고 실패로 본다
 _BULLET = re.compile(r"^(?:[-*•·]+|\d+[.)])\s*")
-_INTERNAL_WORDS = ("covenant", "z=", "판정")  # 화면에 보이면 안 되는 내부 용어(대소문자 무시)
+_INTERNAL_WORDS = ("covenant", "z=")  # 화면에 보이면 안 되는 내부 용어(대소문자 무시). "판정"은 평범한 낱말이라 막지 않음
 _INTERNAL = re.compile(r"설계\s*\d|[A-Za-z]+_[A-Za-z_]+|[\u2600-\u27bf\U0001f000-\U0001faff]")
 
 

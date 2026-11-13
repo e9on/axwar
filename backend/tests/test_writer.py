@@ -46,7 +46,7 @@ def test_실패하면_대체문구():
 
 
 def test_대체문구는_정해진_문장():
-    assert FALLBACK_TEXT == "AI 응답 없음 — 규칙 판정만 표시합니다"
+    assert FALLBACK_TEXT == "AI 의견을 만들지 못했어요. 규칙으로 정한 결과만 보여요."
 
 
 def test_결과에_모델이름이_남는다():

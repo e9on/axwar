@@ -97,9 +97,14 @@ def test_머리말_뒤가_비면_실패():
 
 def test_내부_용어가_있으면_실패():
     a, b, c = GOOD.split("\n")
-    for bad in ("covenant 규정이에요.", "z=34.00이에요.", "규칙 판정이에요.", "설계 4장이에요.", "🔴 신호예요.",
+    for bad in ("covenant 규정이에요.", "z=34.00이에요.", "설계 4장이에요.", "🔴 신호예요.",
                 "coupon_stacking 신호예요."):
         assert ask(briefing, "\n".join([a, "이유: " + bad, c])).ok is False, bad
+
+
+def test_평범한_낱말_판정은_막지_않는다():
+    a, b, c = GOOD.split("\n")
+    assert ask(briefing, "\n".join([a, "이유: 규칙 판정과 지표가 같은 방향이에요.", c])).ok is True
 
 
 def test_줄이_너무_길면_실패():

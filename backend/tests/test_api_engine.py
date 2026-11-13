@@ -172,7 +172,7 @@ def test_브리핑_실패는_대체_문구와_ok_거짓(store):
     eng.play(st[0])
     fake._responses.extend([RuntimeError("끊김"), RuntimeError("끊김")])
     out = eng.write_briefing(cid, "그룹 CEO")
-    assert out["briefing"]["ok"] is False and "AI 응답 없음" in out["briefing"]["text"]
+    assert out["briefing"]["ok"] is False and "AI 의견을 만들지 못했어요" in out["briefing"]["text"]
 
 
 def test_모르는_사람은_브리핑을_만들_수_없다(store):
