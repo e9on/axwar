@@ -138,10 +138,10 @@ def test_가정_목록은_값을_덮어써도_가정으로_남고_현재_값을_
 
 def test_기안_없는_id는_404_한국어(store):
     c, _, _ = client(store)
-    assert "없는" in detail_of(c.get("/api/cases/999"), 404)
+    assert "찾을 수 없어요" in detail_of(c.get("/api/cases/999"), 404)
     assert "없는" in detail_of(c.get("/api/plans/PLAN-없음"), 404)
     assert "없는" in detail_of(c.get("/api/requests/999"), 404)
-    assert "없는" in detail_of(c.post("/api/cases/999/decision", json={"actor": "그룹 CEO", "action": "승인"}), 404)
+    assert "찾을 수 없어요" in detail_of(c.post("/api/cases/999/decision", json={"actor": "그룹 CEO", "action": "승인"}), 404)
     assert detail_of(c.get("/api/todo/아무개"), 404)
 
 
@@ -740,3 +740,12 @@ def test_조건_API가_새_역할_항목을_가정으로_보인다(store):
     c, _, _ = client(store)
     keys = {r["key"] for r in ok(c.get("/api/assumptions"))}
     assert {"roles.campaign", "roles.contract", "roles.logistics", "roles.cs", "volume.input_lead_days"} <= keys
+
+
+def test_없는_건은_이유와_할_일을_알려준다(store):
+    c, _, _ = client(store)
+    for r in (c.get("/api/cases/999"), c.post("/api/cases/999/decision", json={"actor": "Masil 대표", "action": "승인"})):
+        assert r.status_code == 404
+        text = r.json()["detail"]
+        assert "찾을 수 없어요" in text and "처음으로 돌아갔을 수 있어요" in text
+        assert "없는 사건" not in text
