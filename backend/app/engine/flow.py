@@ -2977,6 +2977,30 @@ class Engine:
                 out["SCM 응답"] = f["scm"]["state"]
         else:
             out |= {"연 고정 피": f["annual_fixed_krw"], "계약 만료": f["expiry"]}
+        out |= self._brief_numbers(case)
+        return out
+
+    def _brief_numbers(self, case: dict) -> dict:
+        """브리핑에 근거로 쓸 계산값(근거 화면과 같은 계산): 실질 ROAS·순위, 요청 비중·순위, 단순변심 반품률, 집행일이 든 하회 구간.
+        원본에 지표 근거가 없는 건은 해당 값을 넣지 않는다."""
+        f = case["facts"]
+        out: dict = {}
+        ev = evidence_calc.evidence("plan" if case["kind"] == KIND_PLAN else "contract", case["ref_id"], f.get("source_plan_id"))
+        ki = {k["key"]: k for k in ev["key_indicators"]}
+        if "real_roas" in ki:
+            out |= {"실질 ROAS": round(ki["real_roas"]["value"], 2), "실질 ROAS 순위": ki["real_roas"]["rank"],
+                    "순위 대상 수": ki["real_roas"]["of"]}
+        rs = ki.get("request_share")
+        if rs and rs["rank"] is not None and case["kind"] == KIND_PLAN:
+            out |= {"요청 비중(%)": round(rs["value"], 2), "요청 비중 순위": rs["rank"], "요청 비중 대상 수": rs["of"]}
+        sc = ki.get("simple_change_return")
+        if sc:
+            out |= {"단순변심 반품률": round(sc["value"], 3), "그 외 단순변심 반품률": round(sc["compare_value"], 3)}
+        day = f.get("phase1_date") if case["kind"] == KIND_PLAN else None
+        if day:
+            w = next((w for w in self._windows() if w.start <= _d(day) <= w.end), None)
+            if w:
+                out["하회 구간"] = f"{_md(w.start)}~{_md(w.end)}"
         return out
 
     @staticmethod

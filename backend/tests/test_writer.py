@@ -6,7 +6,7 @@ from app.ai.providers import BudgetExceeded, Completion, FakeProvider
 from app.ai.writer import FALLBACK_TEXT, AiText, briefing, counterpoints, notice_draft
 
 FACTS = {"건": "2차 집행", "순매출(원)": 18962703, "기한": "7/27", "판정": "승인 가능"}
-OK3 = "권고: 승인을 권해요.\n이유: 지표가 좋아요.\n주의: 회신을 기다려요."
+OK3 = "권고: 승인을 권해요.\n이유: 지표가 좋아요.\n이유: 반품이 적어요.\n주의: 회신을 기다려요."
 OK2 = "반대로 결정하려면: 재고가 충분해야 해요.\n확인할 것: 회신을 보세요."
 CONTRACT = {"influencer": "혜인", "fee_krw": 5000000}
 PROPOSAL = {"fixed_fee_krw": 3200000, "performance_base": "순액", "deductions": ["반품 환불", "쿠폰", "채널 수수료"]}
@@ -65,17 +65,17 @@ def test_잘리면_대체문구():
 
 
 def test_사실에_없는_숫자가_나오면_대체문구():
-    r = briefing(FakeProvider(["권고: 승인을 권해요.\n이유: 순매출은 19,000,000원이에요.\n주의: 회신을 기다려요."]), FACTS)
+    r = briefing(FakeProvider(["권고: 승인을 권해요.\n이유: 순매출은 19,000,000원이에요.\n이유: 반품이 적어요.\n주의: 회신을 기다려요."]), FACTS)
     assert (r.ok, r.text) == (False, FALLBACK_TEXT)
 
 
 def test_사실에_있는_숫자는_쉼표_유무와_상관없이_통과():
-    assert briefing(FakeProvider(["권고: 승인을 권해요.\n이유: 순매출 18962703원이에요.\n주의: 회신을 기다려요."]), FACTS).ok is True
-    assert briefing(FakeProvider(["권고: 승인을 권해요.\n이유: 순매출 18,962,703원, 기한 7/27이에요.\n주의: 회신을 기다려요."]), FACTS).ok is True
+    assert briefing(FakeProvider(["권고: 승인을 권해요.\n이유: 순매출 18962703원이에요.\n이유: 반품이 적어요.\n주의: 회신을 기다려요."]), FACTS).ok is True
+    assert briefing(FakeProvider(["권고: 승인을 권해요.\n이유: 순매출 18,962,703원, 기한 7/27이에요.\n이유: 반품이 적어요.\n주의: 회신을 기다려요."]), FACTS).ok is True
 
 
 def test_두_자리_이하_숫자는_검사하지_않는다():
-    assert briefing(FakeProvider(["권고: 승인을 권해요.\n이유: 2차 집행 건, 3가지 근거예요.\n주의: 회신을 기다려요."]), FACTS).ok is True
+    assert briefing(FakeProvider(["권고: 승인을 권해요.\n이유: 2차 집행 건, 3가지 근거예요.\n이유: 반품이 적어요.\n주의: 회신을 기다려요."]), FACTS).ok is True
 
 
 def test_통보초안도_입력에_없는_금액이면_대체문구():
