@@ -276,8 +276,8 @@ def _fake_reasons(f: dict[str, str], rule: str, bad: bool, contract: bool) -> li
     mine, rest = _num(f, "단순변심 반품률"), _num(f, "그 외 단순변심 반품률")
     if mine is not None and rest is not None and (contract or mine > rest):
         out.append(f"단순변심 반품률이 {mine:.1%}로 다른 인플루언서({rest:.1%})보다 {'높아요' if mine > rest else '낮아요'}.")
-    if contract and f.get("연 고정 피"):
-        out.append(f"연 고정 피는 {f['연 고정 피']}원이고 계약은 {_md_of(f.get('계약 만료', ''))}에 끝나요.")
+    if contract and f.get("연 고정 값"):
+        out.append(f"연 고정 값은 {f['연 고정 값']}원이고 계약은 {_md_of(f.get('계약 만료', ''))}에 끝나요.")
     if bad and roas is None:
         out.append("성과가 낮은데 계약 금액이 커요." if contract else "성과가 하위인데 예산 비중이 커요.")
     if len(out) < 2 and not out:
@@ -345,12 +345,12 @@ def _fake_counterpoints(f: dict[str, str]) -> str:
 
 
 def _fake_notice(f: dict[str, str]) -> str:
-    """조건변경 통보문 틀: 인사, 변경 요지, 재협상안 두 축(고정 피·성과 피 기준), 회신 요청."""
-    base = f.get("성과 피 기준", "").split(" (")[0]
+    """조건변경 통보문 틀: 인사, 변경 요지, 재협상안 두 축(고정 값·성과 값 기준), 회신 요청."""
+    base = f.get("성과 값 기준", "").split(" (")[0]
     return "\n".join([
         f"{f.get('인플루언서', '')}님께,",
         f"안녕하세요. 계약 만료({f.get('계약 만료', '')})를 앞두고 계약 조건 변경을 알려 드립니다.",
-        f"고정 피는 {f.get('연 고정 피(원)', '')}원으로 하고, 성과 피는 {base} 기준으로 정산하는 안을 제안드립니다.",
+        f"고정 값은 {f.get('연 고정 값(원)', '')}원으로 하고, 성과 값은 {base} 기준으로 정산하는 안을 제안드립니다.",
         f"공제 항목은 {f.get('공제 항목', '')}입니다.",
         "내용을 확인하시고 회신 부탁드립니다."])
 

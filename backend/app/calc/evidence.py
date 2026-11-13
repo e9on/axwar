@@ -138,7 +138,7 @@ def key_indicators(influencer_id: str) -> list[dict]:
 
 
 def cost_rows(influencer_id: str) -> dict:
-    """비용 분해 단계(매출 -> 마케팅 전 공헌 -> 인플루언서 피 -> 다른 매체 -> 피 뒤 -> 최종)."""
+    """비용 분해 단계(매출 -> 마케팅 전 공헌 -> 인플루언서 값 -> 다른 매체 -> 값 뺀 뒤 -> 최종)."""
     b = cost_breakdown(influencer_id)
 
     name = influencer_name(influencer_id)
@@ -154,16 +154,16 @@ def cost_rows(influencer_id: str) -> dict:
         row("pre_marketing", "마케팅 전 공헌", b.pre_marketing, make_detail(
             "마케팅 전 공헌 = GMV − 환불 − 원가 − 채널 수수료 − 배송비 − 반품 건수 × 반품 물류비",
             (("매출", b.gmv), ("마케팅 전 공헌", b.pre_marketing)), STATS_SOURCES[:4])),
-        row("influencer_fee", "인플루언서 피", b.influencer_fee, make_detail(
-            "광고비 중 매체가 '인플루언서'인 금액의 합", (("인플루언서 피", b.influencer_fee),), (_AD, _CAMP))),
+        row("influencer_fee", "인플루언서 값", b.influencer_fee, make_detail(
+            "광고비 중 매체가 '인플루언서'인 금액의 합", (("인플루언서 값", b.influencer_fee),), (_AD, _CAMP))),
         row("other_media", "다른 매체 광고비", b.other_media, make_detail(
             "광고비 중 매체가 '인플루언서'가 아닌 금액의 합", (("다른 매체", b.other_media),), (_AD, _CAMP))),
-        row("after_fee", "피 뒤 공헌", b.after_fee, make_detail(
-            "피 뒤 공헌 = 마케팅 전 공헌 − 인플루언서 피",
-            (("마케팅 전 공헌", b.pre_marketing), ("인플루언서 피", b.influencer_fee)), STATS_SOURCES)),
+        row("after_fee", "인플루언서 값을 뺀 공헌", b.after_fee, make_detail(
+            "인플루언서 값을 뺀 공헌 = 마케팅 전 공헌 − 인플루언서 값",
+            (("마케팅 전 공헌", b.pre_marketing), ("인플루언서 값", b.influencer_fee)), STATS_SOURCES)),
         row("final", "최종 공헌", b.final, make_detail(
-            "최종 공헌 = 피 뒤 공헌 − 다른 매체 광고비",
-            (("피 뒤 공헌", b.after_fee), ("다른 매체", b.other_media)), STATS_SOURCES)),
+            "최종 공헌 = 인플루언서 값을 뺀 공헌 − 다른 매체 광고비",
+            (("인플루언서 값을 뺀 공헌", b.after_fee), ("다른 매체", b.other_media)), STATS_SOURCES)),
     ]}
 
 

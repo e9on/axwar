@@ -280,14 +280,14 @@ def cost_row(key: str, name: str, b) -> str:
             return text + f"{won(b.pre_marketing)}이 남아요."
         return text + f"{won(b.pre_marketing)} 모자라요. 광고비를 쓰기 전부터 적자라 나빠요."
     if key == "influencer_fee":
-        text = f"그중 인플루언서에게 준 피는 {won(b.influencer_fee)}이에요."
+        text = f"그중 인플루언서에게 준 값은 {won(b.influencer_fee)}이에요."
         if b.pre_marketing > 0:
             text += f" 위에서 남은 {won(b.pre_marketing)}의 약 {pct0(100 * b.influencer_fee / b.pre_marketing)}예요."
         return text
     if key == "other_media":
         return f"인플루언서 말고 다른 매체에 쓴 광고비는 {won(b.other_media)}이에요."
     if key == "after_fee":
-        text = f"{won(b.pre_marketing)}에서 인플루언서 피 {won(b.influencer_fee)}을 빼면 "
+        text = f"{won(b.pre_marketing)}에서 인플루언서 값 {won(b.influencer_fee)}을 빼면 "
         if b.after_fee >= 0:
             return text + f"{won(b.after_fee)}이 남아요."
         return text + f"{won(b.after_fee)} 모자라요. 이미 적자라 나빠요."

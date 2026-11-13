@@ -126,7 +126,7 @@ def counterpoints(p: Provider, facts: dict) -> AiText:
 def notice_draft(p: Provider, contract: dict, proposal: dict) -> AiText:
     deductions = proposal.get("deductions") or []
     user = (_lines("계약 조건", contract) + "\n"
-            + f"재협상안\n- 고정 피(원): {_fmt(proposal['fixed_fee_krw'])}\n"
-            + f"- 성과 피 기준: {proposal['performance_base']} (총매출이 아니라 공제 후 금액)\n"
+            + f"재협상안\n- 고정 값(원): {_fmt(proposal['fixed_fee_krw'])}\n"
+            + f"- 성과 값 기준: {proposal['performance_base']} (총매출이 아니라 공제 후 금액)\n"
             + f"- 공제 항목: {_fmt(list(deductions))}")
     return _write(p, prompts.NOTICE_SYSTEM, user)
