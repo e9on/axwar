@@ -126,6 +126,7 @@ class Seed(BaseModel):
 
 class Run(Seed):
     upto: StrictInt | None = None
+    from_step: StrictInt | None = Field(None, ge=0)  # 없으면 처음부터. 있으면 진행 위치가 이 단계일 때 남은 단계만
 
 
 class Step(BaseModel):
@@ -209,6 +210,16 @@ def create_app(store: Store, engine: Engine, static_dir: str | Path | None = Non
     def people():
         return [{"name": n, "role": r} for n, r in engine.people.people.items()]
 
+    @app.get("/api/permissions")
+    def permissions(person: str | None = None):
+        """사람마다 할 수 있는 관리 작업(admin: 등록부·정책·모드·리뷰·반품, 각 {allowed, reason}). person을 주면 그 사람만(모르는 사람은 404)."""
+        names = list(engine.people.people)
+        if person is not None:
+            if person not in engine.people.people:
+                raise KeyError(f"등록되지 않은 사람: {person}")
+            names = [person]
+        return [{"name": n, "role": engine.people.people[n], "admin": engine.admin_permissions(n)} for n in names]
+
     @app.get("/api/todo/{person}")
     def todo(person: str):
         try:
@@ -236,9 +247,9 @@ def create_app(store: Store, engine: Engine, static_dir: str | Path | None = Non
         return engine.case_evidence(case_id)
 
     @app.get("/api/cases/{case_id}/phase2")
-    def phase2(case_id: int):
+    def phase2(case_id: int, viewer: str | None = None):
         store.get_case(case_id)
-        return engine.phase2_view(case_id)
+        return engine.phase2_view(case_id, viewer)
 
     @app.get("/api/events")
     def events(case_id: int | None = None, kind: str | None = None, limit: int | None = Query(None, ge=1)):
@@ -486,6 +497,10 @@ def create_app(store: Store, engine: Engine, static_dir: str | Path | None = Non
                         "contracts": list(sc.contracts), "script": list(sc.script)})
         return out
 
+    @app.get("/api/demo/state")
+    def demo_state():
+        return engine.demo_state()
+
     @app.post("/api/demo/reset")
     def demo_reset(body: Seed):
         ids = engine.seed(body.scenario)
@@ -504,7 +519,7 @@ def create_app(store: Store, engine: Engine, static_dir: str | Path | None = Non
 
     @app.post("/api/demo/run")
     def demo_run(body: Run):
-        return engine.run_script(body.scenario, body.upto)
+        return engine.run_script(body.scenario, body.upto, body.from_step)
 
     # ------------------------------------------------------------ 정적 파일(API 경로 뒤에 둔다)
     dist = Path(static_dir) if static_dir is not None else config.frontend_dist()

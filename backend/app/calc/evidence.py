@@ -3,7 +3,7 @@
 읽기 전용이고 AI를 부르지 않는다. 숫자는 꾸미지 않고 그대로 두며(형식은 화면이 정함), 정책은 호출 시점의 값을 읽는다.
 """
 from app import policy
-from app.calc.campaign import _campaign_influencer, influencer_ranking, return_rate
+from app.calc.campaign import RETURN_RATE_SOURCES, _campaign_influencer, influencer_ranking, return_rate
 from app.calc.signals import (
     ATTRIBUTION_NOTE,
     STATS_SOURCES,
@@ -24,7 +24,7 @@ _PLAN = _MKT + "mkt_budget_plan_ms.csv"
 NO_PLAN_BASIS = "원본 기안 파일에 없는 기안이라 지표 근거 없음"
 NO_CONTRACT_BASIS = "캠페인 실적이 원본에 없는 인플루언서라 지표 근거 없음"
 COST_NOTE = "표본 금액이라 실제 계약액과 곱하지 않음"
-_RET_SRC = (_ORD, _MKT + "mkt_returns_ms.csv", _CAMP)
+_RET_SRC = RETURN_RATE_SOURCES
 
 
 def resolve_detail(detail: dict | None, fallback_formula: str = "") -> dict:
