@@ -72,7 +72,10 @@ export default function TodoList() {
                 return (
                   <li key={i}>
                     <button type="button" onClick={() => go(it.case_id)}>
-                      <span className="name">{c === '작업' && it.title ? `${it.ref_id} · ${it.title}` : it.ref_id}</span>
+                      <span className="head">
+                        <span className="name">{it.title || it.ref_id}</span>
+                        {it.title && it.title !== it.ref_id && <span className="ref">{it.ref_id}</span>}
+                      </span>
                       {(s.meta || s.text) && (
                         <span className="sub">
                           {s.meta && <span>{s.meta}</span>}
@@ -86,7 +89,7 @@ export default function TodoList() {
             </ul>
             {c === REPLY_COLUMN && (
               <Link className="to-replies" to={'/replies' + (person ? `?as=${encodeURIComponent(person.name)}` : '')}>
-                회신 입력으로 가기 →
+                회신 입력으로 가기
               </Link>
             )}
           </div>

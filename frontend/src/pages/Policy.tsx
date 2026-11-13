@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { api } from '../api'
 import { useViewer } from '../state/viewer'
 import { useLoad } from '../state/useLoad'
+import { usePermissions } from '../state/permissions'
 import { anyValue, num } from '../format'
 import { ASSUMPTION_PREFIX } from '../decisions'
 import type { PolicyChangeRow, PolicyItem } from '../adminTypes'
@@ -77,6 +78,8 @@ export default function Policy() {
   const [q, setQ] = useState('')
   const [editing, setEditing] = useState<PolicyItem | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const perm = usePermissions().of('policy')
+  const canEdit = !!perm?.allowed // 못 읽었거나 막혔으면 고치기를 열지 않는다
 
   async function done(message: string) {
     setEditing(null)
@@ -91,6 +94,7 @@ export default function Policy() {
     <main className="admin">
       <h1>정책 설정</h1>
       <p className="lead">기준 값과 그 출처예요. 값을 고치면 이유와 함께 변경 이력에 남아요.</p>
+      {perm && !perm.allowed && <p className="note">{perm.reason ?? '이 사람은 정책을 고칠 수 없어요'}</p>}
       {notice && (
         <p className="note" role="status">
           {notice}
@@ -133,11 +137,13 @@ export default function Policy() {
                       {r.source.startsWith(ASSUMPTION_PREFIX) && <Badge kind="가정" />}
                       <span className="sub">{r.overridden ? r.effective_source : r.source}</span>
                     </div>
-                    <div className="acts">
-                      <button type="button" className="btn small" aria-label={`${r.key} 고치기`} onClick={() => setEditing(r)}>
-                        고치기
-                      </button>
-                    </div>
+                    {canEdit && (
+                      <div className="acts">
+                        <button type="button" className="btn small" aria-label={`${r.key} 고치기`} onClick={() => setEditing(r)}>
+                          고치기
+                        </button>
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>

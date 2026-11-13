@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useViewer } from '../state/viewer'
 import { useClock } from '../state/clock'
+import { usePreview } from '../state/preview'
 import { useLoad } from '../state/useLoad'
 import { anyValue, pct, num, usd } from '../format'
 import { ASSUMPTION_PREFIX } from '../decisions'
@@ -12,8 +13,6 @@ import './Admin.css'
 
 const TABS = ['처리 기록', 'AI 호출 내역', '가정 목록'] as const
 type Tab = (typeof TABS)[number]
-/** 한 번에 보이는 줄 수 (더 보기로 늘린다) */
-const PAGE = 50
 
 function useCasePath() {
   const { person } = useViewer()
@@ -42,12 +41,12 @@ function Events() {
   const load = useLoad<EventRow[]>('/api/events', [version])
   const [kind, setKind] = useState('')
   const [caseId, setCaseId] = useState('')
-  const [shown, setShown] = useState(PAGE)
 
   const rows = load.data ?? []
   const kinds = useMemo(() => Array.from(new Set(rows.map((r) => r.kind))), [rows])
   const cases = useMemo(() => Array.from(new Set(rows.map((r) => r.case_id).filter((c): c is number => c !== null))).sort((a, b) => a - b), [rows])
   const filtered = rows.filter((r) => (!kind || r.kind === kind) && (!caseId || String(r.case_id) === caseId)).reverse() // 최신이 위
+  const preview = usePreview(filtered)
 
   if (load.error) return <LoadFailed retry={load.retry} message={`처리 기록을 불러오지 못했어요. ${load.error}`} />
   if (!load.data)
@@ -61,7 +60,7 @@ function Events() {
       <div className="bar-tools">
         <label>
           종류로 거르기
-          <select value={kind} onChange={(e) => (setKind(e.target.value), setShown(PAGE))}>
+          <select value={kind} onChange={(e) => (setKind(e.target.value), preview.reset())}>
             <option value="">모든 종류</option>
             {kinds.map((k) => (
               <option key={k} value={k}>
@@ -72,7 +71,7 @@ function Events() {
         </label>
         <label>
           건으로 거르기
-          <select value={caseId} onChange={(e) => (setCaseId(e.target.value), setShown(PAGE))}>
+          <select value={caseId} onChange={(e) => (setCaseId(e.target.value), preview.reset())}>
             <option value="">모든 건</option>
             {cases.map((c) => (
               <option key={c} value={String(c)}>
@@ -88,7 +87,7 @@ function Events() {
       ) : (
         <>
           <ul className="ledger events" aria-label="처리 기록">
-            {filtered.slice(0, shown).map((r) => {
+            {preview.visible.map((r) => {
               const { change, rest } = detailParts(r.detail)
               return (
                 <li key={r.id}>
@@ -113,9 +112,9 @@ function Events() {
               )
             })}
           </ul>
-          {filtered.length > shown && (
+          {preview.hasMore && (
             <div className="bar-tools">
-              <button type="button" className="btn" onClick={() => setShown((n) => n + PAGE)}>
+              <button type="button" className="btn" onClick={preview.more}>
                 더 보기
               </button>
             </div>
@@ -129,6 +128,7 @@ function Events() {
 function AiCalls() {
   const casePath = useCasePath()
   const load = useLoad<AiUsage>('/api/ai/usage', [])
+  const calls = usePreview([...(load.data?.calls ?? [])].reverse())
   if (load.error) return <LoadFailed retry={load.retry} message={`AI 호출 내역을 불러오지 못했어요. ${load.error}`} />
   const u = load.data
   if (!u)
@@ -145,8 +145,9 @@ function AiCalls() {
       {u.calls.length === 0 ? (
         <p className="muted">AI를 부른 기록이 없어요</p>
       ) : (
+        <>
         <ul className="ledger calls" aria-label="AI 호출 내역">
-          {[...u.calls].reverse().map((c) => (
+          {calls.visible.map((c) => (
             <li key={c.id}>
               <span className="sub">{timeText(c.ts)}</span>
               <div>
@@ -171,6 +172,14 @@ function AiCalls() {
             </li>
           ))}
         </ul>
+        {calls.hasMore && (
+          <div className="bar-tools">
+            <button type="button" className="btn" onClick={calls.more}>
+              더 보기
+            </button>
+          </div>
+        )}
+        </>
       )}
     </section>
   )

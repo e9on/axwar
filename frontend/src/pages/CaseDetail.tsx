@@ -208,7 +208,7 @@ export default function CaseDetailPage() {
           <section className="phase2" aria-labelledby="p2-h">
             <h3 id="p2-h">2차 집행</h3>
             <p>
-              <Link to={`/cases/${id}/phase2` + (person ? `?as=${encodeURIComponent(person.name)}` : '')}>2차 집행 관찰 화면 열기 →</Link>
+              <Link to={`/cases/${id}/phase2` + (person ? `?as=${encodeURIComponent(person.name)}` : '')}>2차 집행 관찰 화면 열기</Link>
             </p>
             {d.phase2.plan && (
               <p>

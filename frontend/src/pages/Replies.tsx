@@ -184,7 +184,7 @@ function Detail({ row, who, onSaved }: { row: RequestRow; who: string; onSaved: 
           </div>
         </div>
         <Link className="back" to={caseLink}>
-          건 상세 보기 →
+          건 상세 보기
         </Link>
       </div>
 

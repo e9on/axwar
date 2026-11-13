@@ -13,7 +13,7 @@ export function fakeServer(routes: Record<string, Reply | (() => Reply)>) {
     const path = String(input)
     const body = init?.body ? JSON.parse(String(init.body)) : undefined
     calls.push({ method, path, body })
-    const entry = routes[`${method} ${path}`]
+    const entry = routes[`${method} ${path}`] ?? routes[Object.keys(routes).find((k) => k.endsWith('*') && `${method} ${path}`.startsWith(k.slice(0, -1))) ?? '']
     if (entry === undefined) return new Response(JSON.stringify({ detail: '없는 길이에요' }), { status: 404 })
     const reply = typeof entry === 'function' ? entry() : entry
     if (reply instanceof Error) throw reply
@@ -23,3 +23,14 @@ export function fakeServer(routes: Record<string, Reply | (() => Reply)>) {
   vi.stubGlobal('fetch', fn)
   return { calls }
 }
+
+const ALLOWED = { allowed: true, reason: null }
+/** 관리 권한 응답(GET /api/permissions?person=). 막을 항목은 이유 문장과 함께 넘긴다 */
+export function permissionsReply(blocked: Partial<Record<'registry' | 'policy' | 'mode' | 'review' | 'return', string>> = {}) {
+  const admin = Object.fromEntries(
+    (['registry', 'policy', 'mode', 'review', 'return'] as const).map((k) => [k, blocked[k] ? { allowed: false, reason: blocked[k] } : ALLOWED]),
+  )
+  return { json: [{ name: '누구', role: '역할', admin }] }
+}
+/** 길 이름 앞부분만 맞으면 되는 권한 길(사람 이름이 붙으므로) */
+export const PERMISSIONS_ROUTE = 'GET /api/permissions*'

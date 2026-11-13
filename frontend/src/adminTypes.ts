@@ -112,3 +112,19 @@ export type ContractRow = {
 
 export type RegisterReply = { plan_id?: string; influencer_code?: string; case_id: number | null; open_error: string | null }
 export type PlanImport = { added: number; updated: number; unchanged: number; skipped: { plan_id: string; reason: string; source_changed: string[] }[]; warnings: string[]; actions: ServerAction[] }
+
+/** GET /api/permissions?person= — 관리 동작마다 해도 되는지와 안 될 때의 이유 */
+export type AdminKey = 'registry' | 'policy' | 'mode' | 'review' | 'return'
+export type Permission = { allowed: boolean; reason: string | null }
+export type PersonPermissions = { name: string; role: string; admin: Record<AdminKey, Permission> }
+
+/** GET /api/demo/state — 시연 진행 위치(서버가 기억한다) */
+export type DemoState = {
+  scenario: string | null
+  title: string | null
+  done: number
+  total: number
+  finished: boolean
+  next_step: ScenarioStep | null
+  date: string
+}

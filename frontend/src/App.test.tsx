@@ -3,7 +3,7 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import App from './App'
-import { fakeServer } from './test/fakeServer'
+import { fakeServer, permissionsReply, PERMISSIONS_ROUTE } from './test/fakeServer'
 
 const PEOPLE = [
   { name: '그룹 CEO', role: '그룹 CEO' },
@@ -72,6 +72,15 @@ describe('화면 골격', () => {
     expect(await screen.findByText(/2026-07-13/)).toBeInTheDocument()
   })
 
+  it('날짜_입력은_한국어_표시를_요청한다', async () => {
+    fakeServer({
+      'GET /api/people': { json: PEOPLE },
+      'GET /api/clock': { json: { date: '2026-07-12', mode: '시연' } },
+    })
+    mount('/')
+    expect(await screen.findByLabelText('이동할 날짜')).toHaveAttribute('lang', 'ko')
+  })
+
   it('운영_모드에서는_기준일_이동이_없다', async () => {
     fakeServer({
       'GET /api/people': { json: PEOPLE },
@@ -87,6 +96,7 @@ describe('화면 골격', () => {
     fakeServer({
       'GET /api/people': { json: PEOPLE },
       'GET /api/clock': { status: 500, json: { detail: '기준일을 읽지 못했어요' } },
+      [PERMISSIONS_ROUTE]: permissionsReply(),
       ['GET /api/todo/' + encodeURIComponent('그룹 CEO')]: { json: {} }, // 메인이 함께 부르는 길
       'GET /api/calendar': { json: [] },
     })
@@ -151,6 +161,7 @@ describe('화면 이동과 모드 전환', () => {
     const { calls } = fakeServer({
       'GET /api/people': { json: PEOPLE },
       'GET /api/clock': () => ({ json: clockOf(mode) }),
+      [PERMISSIONS_ROUTE]: permissionsReply(),
       'PUT /api/mode': () => {
         mode = '운영'
         return { json: { mode } }
@@ -175,6 +186,7 @@ describe('화면 이동과 모드 전환', () => {
     fakeServer({
       'GET /api/people': { json: PEOPLE },
       'GET /api/clock': { json: clockOf('시연') },
+      [PERMISSIONS_ROUTE]: permissionsReply(),
       'PUT /api/mode': { status: 409, json: { detail: '마케팅팀장(마케팅팀)는 실행 모드을(를) 바꿀 수 없음 — Masil 대표·CEO만' } },
     })
     mount('/?as=' + encodeURIComponent('마케팅팀장'))
@@ -183,5 +195,27 @@ describe('화면 이동과 모드 전환', () => {
     await userEvent.click(within(dlg).getByRole('button', { name: '운영 모드로 바꾸기' }))
     expect(await within(dlg).findByText(/바꿀 수 없음/)).toBeInTheDocument()
     expect(screen.getByRole('dialog')).toBeInTheDocument()
+  })
+
+  it('모드_전환_권한이_없으면_버튼_대신_서버_이유가_보인다', async () => {
+    const reason = '마케팅팀장(마케팅팀)는 실행 모드을(를) 바꿀 수 없음 — Masil 대표·CEO만'
+    fakeServer({
+      'GET /api/people': { json: PEOPLE },
+      'GET /api/clock': { json: clockOf('시연') },
+      [PERMISSIONS_ROUTE]: permissionsReply({ mode: reason }),
+    })
+    mount('/?as=' + encodeURIComponent('마케팅팀장'))
+    expect(await screen.findByText(/Masil 대표·CEO만/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '모드 전환' })).toBeNull()
+  })
+
+  it('권한을_못_읽는_동안에는_모드_전환_버튼을_보이지_않는다', async () => {
+    fakeServer({
+      'GET /api/people': { json: PEOPLE },
+      'GET /api/clock': { json: clockOf('시연') },
+    })
+    mount('/?as=' + encodeURIComponent('Masil 대표'))
+    await screen.findByText(/시연 모드/)
+    expect(screen.queryByRole('button', { name: '모드 전환' })).toBeNull()
   })
 })

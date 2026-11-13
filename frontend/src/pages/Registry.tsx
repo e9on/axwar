@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { api } from '../api'
 import { useViewer } from '../state/viewer'
 import { useLoad } from '../state/useLoad'
+import { usePermissions } from '../state/permissions'
 import { actionLine, num, won } from '../format'
 import type { ContractRow, PlanImport, PlanRow, RegisterReply, ServerAction } from '../adminTypes'
 import FormDialog from '../components/FormDialog'
@@ -130,6 +131,7 @@ function RowForm({ target, actor, onClose, onDone }: { target: Target; actor: st
             {text}
             <input
               type={s.kind === 'date' ? 'date' : 'text'}
+              lang={s.kind === 'date' ? 'ko' : undefined}
               inputMode={s.kind === 'int' ? 'numeric' : undefined}
               value={String(values[s.name])}
               disabled={locked}
@@ -170,6 +172,8 @@ export default function Registry() {
   const [error, setError] = useState<string | null>(null)
   const guard = useRef(false)
   const actor = person?.name ?? ''
+  const perm = usePermissions().of('registry')
+  const canEdit = !!perm?.allowed // 못 읽었거나 막혔으면 버튼을 열지 않는다
 
   async function reload() {
     await Promise.all([plans.retry(), contracts.retry()])
@@ -238,7 +242,8 @@ export default function Registry() {
       <h1>기안·계약 등록</h1>
       <p className="lead">판정할 기안과 계약을 등록부에 넣어요. 누가 할 수 있는지는 서버가 정해요.</p>
 
-      <div className="bar-tools">
+      {perm && !perm.allowed && <p className="note">{perm.reason ?? '이 사람은 등록부를 바꿀 수 없어요'}</p>}
+      {canEdit && <div className="bar-tools">
         <button type="button" className="btn pri" disabled={lock} onClick={() => setForm({ kind: 'plan', row: null })}>
           새 기안
         </button>
@@ -255,7 +260,7 @@ export default function Registry() {
           원본 다시 맞추기
         </button>
         {busy && <span className="muted">보내는 중…</span>}
-      </div>
+      </div>}
       {error && (
         <p className="err" role="alert">
           {error}
@@ -317,14 +322,16 @@ export default function Registry() {
                 <div className="sub">
                   정산일 {p.settlement_date ?? '미정'} · 확정 기한 {p.contract_deadline ?? '미정'}
                 </div>
-                <div className="acts">
-                  <button type="button" className="btn small" disabled={lock} onClick={() => setForm({ kind: 'plan', row: p })}>
-                    수정
-                  </button>
-                  <button type="button" className="btn small" disabled={lock} onClick={() => openCase('plan', p.plan_id)}>
-                    건 열기
-                  </button>
-                </div>
+                {canEdit && (
+                  <div className="acts">
+                    <button type="button" className="btn small" disabled={lock} onClick={() => setForm({ kind: 'plan', row: p })}>
+                      수정
+                    </button>
+                    <button type="button" className="btn small" disabled={lock} onClick={() => openCase('plan', p.plan_id)}>
+                      건 열기
+                    </button>
+                  </div>
+                )}
               </li>
             ))}
           </ul>
@@ -356,14 +363,16 @@ export default function Registry() {
                 <div className="sub">
                   통보 기한 {c.notice_deadline} · 만료일 {c.expiry_date}
                 </div>
-                <div className="acts">
-                  <button type="button" className="btn small" disabled={lock} onClick={() => setForm({ kind: 'contract', row: c })}>
-                    수정
-                  </button>
-                  <button type="button" className="btn small" disabled={lock} onClick={() => openCase('contract', c.influencer_code)}>
-                    건 열기
-                  </button>
-                </div>
+                {canEdit && (
+                  <div className="acts">
+                    <button type="button" className="btn small" disabled={lock} onClick={() => setForm({ kind: 'contract', row: c })}>
+                      수정
+                    </button>
+                    <button type="button" className="btn small" disabled={lock} onClick={() => openCase('contract', c.influencer_code)}>
+                      건 열기
+                    </button>
+                  </div>
+                )}
               </li>
             ))}
           </ul>

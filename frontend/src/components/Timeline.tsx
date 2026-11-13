@@ -78,7 +78,7 @@ function Wide({ events, today, role }: { events: CalEvent[]; today: string; role
   }
 
   return (
-    <div className="track-wrap">
+    <div className="track-wrap" data-bands={bands.length > 0}>
       <div
         className="track"
         ref={ref}

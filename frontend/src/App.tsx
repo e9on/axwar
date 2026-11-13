@@ -5,6 +5,7 @@ import { ClockProvider, useClock } from './state/clock'
 import { ViewerProvider, useViewer } from './state/viewer'
 import { DemoRunProvider } from './state/demoRun'
 import { useNarrow } from './state/narrow'
+import { usePermissions } from './state/permissions'
 import { addDays, withWeekday } from './date'
 import { DEMO_MODE, OPERATION_MODE } from './decisions'
 import FormDialog from './components/FormDialog'
@@ -62,6 +63,7 @@ function TopBar() {
   const [menuOpen, setMenuOpen] = useState(false)
   const [switching, setSwitching] = useState(false)
   const narrow = useNarrow()
+  const modePerm = usePermissions().of('mode')
   const demo = mode === DEMO_MODE
   const asQuery = person ? `?as=${encodeURIComponent(person.name)}` : ''
   const closeMenu = () => setMenuOpen(false)
@@ -110,10 +112,16 @@ function TopBar() {
         <span className="clock-box">
           기준일 <span className="date">{date ? withWeekday(date) : '불러오는 중'}</span>
           {mode && <span className="mode">{mode} 모드</span>}
-          {mode && (
+          {mode && modePerm?.allowed && (
             <button type="button" className="mode-btn" onClick={() => setSwitching(true)}>
               모드 전환
             </button>
+          )}
+          {mode && modePerm && !modePerm.allowed && (
+            <details className="mode-why">
+              <summary>모드 전환 불가</summary>
+              <p>{modePerm.reason ?? '이 사람은 모드를 바꿀 수 없어요'}</p>
+            </details>
           )}
         </span>
         {demo && date && (
@@ -121,7 +129,7 @@ function TopBar() {
             <button type="button" onClick={() => advance(addDays(date, 1))} title="기준일을 하루 뒤(다음 날)로 옮겨요">
               다음 날로
             </button>
-            <input type="date" aria-label="이동할 날짜" value={target} onChange={(e) => setTarget(e.target.value)} />
+            <input type="date" lang="ko" aria-label="이동할 날짜" value={target} onChange={(e) => setTarget(e.target.value)} />
             <button type="button" disabled={!target} onClick={() => advance(target)}>
               날짜로 이동
             </button>

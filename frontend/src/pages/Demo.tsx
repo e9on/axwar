@@ -6,7 +6,7 @@ import { useLoad } from '../state/useLoad'
 import { DEMO_MODE } from '../decisions'
 import { koDate } from '../date'
 import { actionLine } from '../format'
-import type { Scenario, ScenarioStep, StepOutcome } from '../adminTypes'
+import type { DemoState, Scenario, ScenarioStep, StepOutcome } from '../adminTypes'
 import FormDialog from '../components/FormDialog'
 import LoadFailed from '../components/LoadFailed'
 import './Admin.css'
@@ -34,14 +34,19 @@ function DemoPanel() {
   const { date, refresh, advance } = useClock()
   const { run, setRun } = useDemoRun()
   const scenes = useLoad<Scenario[]>('/api/demo/scenarios', [])
+  const position = useLoad<DemoState>('/api/demo/state', [])
   const [asking, setAsking] = useState<Scenario | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const guard = useRef(false)
 
-  const active = scenes.data?.find((s) => s.name === run.scenario) ?? null
+  // 진행 위치는 서버가 기억한다(새로고침해도 그대로). 이 접속에서 받은 결과 글은 같은 장면일 때만 붙인다.
+  const where = position.data
+  const active = scenes.data?.find((s) => s.name === where?.scenario) ?? null
   const script = active?.script ?? []
-  const finished = !!active && run.done >= script.length
+  const done = where?.done ?? 0
+  const finished = !!active && !!where?.finished
+  const outcomes = run.scenario === where?.scenario ? run.outcomes : {}
   const dates = Array.from(new Set(script.map((s) => s.date).filter((d): d is string => !!d))).sort()
 
   async function guarded(job: () => Promise<void>, onError?: (message: string) => void) {
@@ -61,13 +66,16 @@ function DemoPanel() {
     }
   }
 
+  /** 서버의 진행 위치와 기준일을 다시 읽는다(중간에 멈춰도 지금까지의 위치로 맞춘다) */
+  const sync = () => Promise.all([position.retry(), refresh()])
+
   const reset = (scene: Scenario) =>
     guarded(
       async () => {
         await api.post('/api/demo/reset', { scenario: scene.name })
-        setRun({ scenario: scene.name, done: 0, outcomes: [] })
+        setRun({ scenario: scene.name, outcomes: {} })
         setAsking(null)
-        await refresh()
+        await sync()
       },
       () => undefined,
     )
@@ -75,28 +83,26 @@ function DemoPanel() {
   const playOne = () =>
     guarded(async () => {
       if (!active || finished) return
-      const out = await api.post<StepOutcome>('/api/demo/play', { step: script[run.done] })
-      setRun((r) => ({ ...r, done: r.done + 1, outcomes: [...r.outcomes, out] }))
-      await refresh()
+      try {
+        const out = await api.post<StepOutcome>('/api/demo/play', { step: script[done] })
+        setRun((r) => ({ scenario: active.name, outcomes: { ...(r.scenario === active.name ? r.outcomes : {}), [done]: out } }))
+      } finally {
+        await sync()
+      }
     })
 
+  // 끝까지: 서버에 지금 위치(from_step)를 알려 남은 단계만 돌린다
   const playAll = () =>
     guarded(async () => {
       if (!active || finished) return
       try {
-        if (run.done === 0) {
-          // 처음부터면 서버가 대본을 한 번에 돌린다
-          const outs = await api.post<StepOutcome[]>('/api/demo/run', { scenario: active.name })
-          setRun((r) => ({ ...r, done: outs.length, outcomes: outs }))
-        } else {
-          // 이미 진행했으면 남은 단계를 차례로(처음부터 다시 돌리면 같은 일이 두 번 일어난다)
-          for (let i = run.done; i < script.length; i++) {
-            const out = await api.post<StepOutcome>('/api/demo/play', { step: script[i] })
-            setRun((r) => ({ ...r, done: i + 1, outcomes: [...r.outcomes, out] }))
-          }
-        }
+        const outs = await api.post<StepOutcome[]>('/api/demo/run', { scenario: active.name, from_step: done })
+        setRun((r) => ({
+          scenario: active.name,
+          outcomes: { ...(r.scenario === active.name ? r.outcomes : {}), ...Object.fromEntries(outs.map((o, i) => [done + i, o])) },
+        }))
       } finally {
-        await refresh() // 중간에 멈춰도 지금까지의 날짜로 다른 화면을 다시 읽게
+        await sync()
       }
     })
 
@@ -119,7 +125,7 @@ function DemoPanel() {
           <ul className="scenes">
             {scenes.data.map((s) => (
               <li key={s.name}>
-                <button type="button" className="scene" aria-pressed={s.name === run.scenario} disabled={busy} onClick={() => setAsking(s)}>
+                <button type="button" className="scene" aria-pressed={s.name === where?.scenario} disabled={busy} onClick={() => setAsking(s)}>
                   <span className="k">{s.title}</span>
                   <span className="sub" title={s.description}>{s.description}</span>
                 </button>
@@ -144,7 +150,7 @@ function DemoPanel() {
               처음부터
             </button>
             <span className="muted" role="status">
-              {busy ? '진행 중…' : `${run.done} / ${script.length}단계 진행`}
+              {busy ? '진행 중…' : `${done} / ${script.length}단계 진행`}
             </span>
           </div>
           {error && (
@@ -175,14 +181,14 @@ function DemoPanel() {
 
           <ul className="ledger steps" aria-label="대본 단계">
             {script.map((s, i) => {
-              const out = run.outcomes[i]
-              const next = i === run.done
+              const out = outcomes[i]
+              const next = i === done
               return (
                 <li key={i} data-next={next}>
                   <span className="no">{i + 1}</span>
                   <div>
                     <span className="k">{s.action}</span>
-                    {out && <span className="state">진행함</span>}
+                    {i < done && <span className="state">진행함</span>}
                     {next && !finished && <span className="next">다음</span>}
                     <div className="sub">
                       {[s.date ? s.date : '날짜 그대로', who(s), target(s)].filter(Boolean).join(' · ')}

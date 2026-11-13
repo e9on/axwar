@@ -11,7 +11,7 @@ const LEVEL: Record<SignalLine['level'], { text: string; cls: string }> = {
   unmeasurable: { text: '측정 불가', cls: 'none' },
 }
 
-function DetailPanel({ detail, note }: { detail: Detail | undefined; note?: string }) {
+export function DetailPanel({ detail, note }: { detail: Detail | undefined; note?: string }) {
   const d = detail ?? { formula: '', inputs: [], sources: [], policies: [] }
   const empty = !d.formula && d.inputs.length === 0 && d.sources.length === 0 && d.policies.length === 0 && !note
   if (empty) return <p className="muted">자세한 근거가 아직 없어요</p>
@@ -34,7 +34,7 @@ function DetailPanel({ detail, note }: { detail: Detail | undefined; note?: stri
             {d.inputs.map((i) => (
               <div key={i.label}>
                 <dt>{i.label}</dt>
-                <dd>{anyValue(i.value)}</dd>
+                <dd>{typeof i.value === 'number' && i.unit ? unitValue(i.value, i.unit) : anyValue(i.value)}</dd>
               </div>
             ))}
           </dl>
@@ -93,7 +93,7 @@ type RowProps = {
 }
 
 /** 줄 하나 = 펼침 버튼 + 펼쳐지는 칸. 누르면 아래가 열리고 다시 누르면 닫힌다. */
-function Row({ id, open, toggle, detail, note, kind, assumed, superseded, children }: RowProps) {
+export function Row({ id, open, toggle, detail, note, kind, assumed, superseded, children }: RowProps) {
   const panel = `${id}-detail`
   return (
     <li className="erow" data-open={open} data-assumed={assumed ? 'true' : undefined} data-superseded={superseded ? 'true' : undefined}>

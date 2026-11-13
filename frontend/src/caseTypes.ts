@@ -132,7 +132,7 @@ export type CaseDetailData = {
 
 export type Detail = {
   formula: string
-  inputs: { label: string; value: unknown }[]
+  inputs: { label: string; value: unknown; unit?: string | null }[]
   sources: string[]
   policies: { key: string; value: unknown; source: string | null; description: string; /** 정책 파일에서 없어진 항목 */ missing?: boolean }[]
 }

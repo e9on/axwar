@@ -3,7 +3,7 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import App from './App'
-import { fakeServer } from './test/fakeServer'
+import { fakeServer, permissionsReply, PERMISSIONS_ROUTE } from './test/fakeServer'
 
 const PEOPLE = [
   { name: 'Masil 대표', role: 'Masil 대표' },
@@ -22,6 +22,7 @@ const HISTORY = [
 
 function mount(extra: Record<string, never> = {}, as = 'Masil 대표') {
   const server = fakeServer({
+    [PERMISSIONS_ROUTE]: permissionsReply(),
     'GET /api/people': { json: PEOPLE },
     'GET /api/clock': { json: { date: '2026-07-01', mode: '시연' } },
     'GET /api/policy': { json: ROWS },
@@ -150,5 +151,19 @@ describe('정책 설정', () => {
     mount({ 'GET /api/policy': { status: 500, json: { detail: '정책 고장' } } } as never)
     expect((await screen.findAllByText(/정책 고장/)).length).toBeGreaterThan(0)
     expect(screen.getAllByRole('button', { name: '다시 시도' }).length).toBeGreaterThan(0)
+  })
+
+  it('정책을_고칠_권한이_없으면_고치기_버튼_대신_서버_이유가_보인다', async () => {
+    const reason = '마케팅팀장(마케팅팀)는 정책을 고칠 수 없음 — Masil 대표만'
+    mount({ [PERMISSIONS_ROUTE]: permissionsReply({ policy: reason }) } as never, '마케팅팀장')
+    const list = await screen.findByRole('list', { name: '정책 항목' })
+    expect(await screen.findByText(/Masil 대표만/)).toBeInTheDocument()
+    expect(within(list).queryByRole('button', { name: /고치기/ })).toBeNull()
+  })
+
+  it('권한을_읽기_전에는_고치기_버튼이_없다', async () => {
+    mount({ [PERMISSIONS_ROUTE]: { status: 500, json: { detail: '권한 서버 고장' } } } as never)
+    const list = await screen.findByRole('list', { name: '정책 항목' })
+    expect(within(list).queryByRole('button', { name: /고치기/ })).toBeNull()
   })
 })

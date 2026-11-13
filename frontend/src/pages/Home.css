@@ -10,6 +10,7 @@
 
 /* 표시 한 칸: 글자 두 줄까지. --dot-px·--dot-border·--dot-font는 Timeline.tsx가 폭 추정과 같은 값으로 채운다. */
 .track-wrap { --tl-top: calc(var(--s-7) + var(--s-2)); }
+.track-wrap[data-bands="true"] { --tl-top: calc(var(--s-7) + var(--s-4)); } /* 하회 구간 이름표 전용 줄만큼 표시를 아래로 */
 .track {
   --tl-dot: calc(var(--dot-font) * 2.5 + var(--s-3)); --tl-row: calc(var(--tl-dot) + var(--s-2));
   position: relative;
@@ -28,7 +29,7 @@
   border-left: var(--bw) solid var(--c-band); border-right: var(--bw) solid var(--c-band);
 }
 .band span {
-  position: absolute; top: calc(var(--s-5) + var(--s-1)); left: var(--s-2);
+  position: absolute; top: var(--s-4); left: var(--s-2);
   font-size: var(--t-1); font-weight: var(--w-bold); color: var(--c-band-ink);
   background: var(--c-sheet); padding: 0 var(--s-1); border-radius: var(--r-1); white-space: nowrap;
 }
@@ -85,7 +86,9 @@
   background: none; border: 0; border-bottom: 1px solid var(--c-rule); padding: var(--s-2) 0; color: var(--c-ink);
 }
 .todo button:hover .name { color: var(--c-navy); text-decoration: underline; }
+.todo .head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--s-2); }
 .todo .name { font-weight: var(--w-bold); }
+.todo .ref { font-size: var(--t-1); color: var(--c-ink-3); }
 .todo .sub { display: flex; flex-wrap: wrap; gap: 0 var(--s-2); font-size: var(--t-1); color: var(--c-ink-3); }
 .todo .sub [data-seal="true"] { color: var(--c-seal); font-weight: var(--w-bold); }
 

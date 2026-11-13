@@ -3,7 +3,7 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import App from './App'
-import { fakeServer } from './test/fakeServer'
+import { fakeServer, permissionsReply, PERMISSIONS_ROUTE } from './test/fakeServer'
 
 const PEOPLE = [
   { name: '캠페인 담당자', role: '캠페인 담당' },
@@ -20,6 +20,7 @@ const CONTRACTS = [
 
 function mount(extra: Record<string, unknown> = {}) {
   const server = fakeServer({
+    [PERMISSIONS_ROUTE]: permissionsReply(),
     'GET /api/people': { json: PEOPLE },
     'GET /api/clock': { json: { date: '2026-07-01', mode: '시연' } },
     'GET /api/plans': { json: PLANS },
@@ -146,7 +147,7 @@ describe('기안·계약 등록', () => {
   it('수정은_바뀐_항목만_보낸다', async () => {
     const { calls } = mount({ 'PUT /api/plans/DEMO-PLAN-001': { json: { plan_id: 'DEMO-PLAN-001', actions: [] } } })
     const rows = within(await screen.findByRole('list', { name: '기안 목록' })).getAllByRole('listitem')
-    await userEvent.click(within(rows[1]).getByRole('button', { name: '수정' }))
+    await userEvent.click(await within(rows[1]).findByRole('button', { name: '수정' }))
     const dlg = await screen.findByRole('dialog', { name: 'DEMO-PLAN-001 수정' })
     expect(within(dlg).getByRole('button', { name: '고치기' })).toBeDisabled() // 바뀐 게 없음
     expect(within(dlg).getByLabelText(/기안 번호/)).toBeDisabled() // 식별 항목은 못 고침
@@ -166,12 +167,12 @@ describe('기안·계약 등록', () => {
       'POST /api/contracts/INF-001/open': { json: { influencer_code: 'INF-001', case_id: 6 } },
     })
     const rows = within(await screen.findByRole('list', { name: '기안 목록' })).getAllByRole('listitem')
-    await userEvent.click(within(rows[0]).getByRole('button', { name: '건 열기' }))
+    await userEvent.click(await within(rows[0]).findByRole('button', { name: '건 열기' }))
     await waitFor(() => expect(calls).toContainEqual({ method: 'POST', path: '/api/plans/PLAN-019/open', body: { actor: '캠페인 담당자' } }))
     expect(await screen.findByRole('link', { name: /건 #5/ })).toHaveAttribute('href', expect.stringContaining('/cases/5'))
 
     const crow = within(await screen.findByRole('list', { name: '계약 목록' })).getByRole('listitem')
-    await userEvent.click(within(crow).getByRole('button', { name: '건 열기' }))
+    await userEvent.click(await within(crow).findByRole('button', { name: '건 열기' }))
     await waitFor(() => expect(calls).toContainEqual({ method: 'POST', path: '/api/contracts/INF-001/open', body: { actor: '캠페인 담당자' } }))
     expect(await screen.findByRole('link', { name: /건 #6/ })).toBeInTheDocument()
   })
@@ -179,7 +180,7 @@ describe('기안·계약 등록', () => {
   it('건_열기_거부는_서버_문장', async () => {
     mount({ 'POST /api/plans/PLAN-019/open': { status: 409, json: { detail: '등록부를 바꿀 수 없음 — 캠페인 담당만' } } })
     const rows = within(await screen.findByRole('list', { name: '기안 목록' })).getAllByRole('listitem')
-    await userEvent.click(within(rows[0]).getByRole('button', { name: '건 열기' }))
+    await userEvent.click(await within(rows[0]).findByRole('button', { name: '건 열기' }))
     expect((await screen.findAllByText(/등록부를 바꿀 수 없음/)).length).toBeGreaterThan(0)
     expect(within(rows[0]).getByRole('button', { name: '건 열기' })).toBeEnabled()
   })
@@ -218,5 +219,15 @@ describe('기안·계약 등록', () => {
     mount({ 'GET /api/plans': { json: [] }, 'GET /api/contracts': { json: [] } })
     expect(await screen.findByText('등록된 기안이 없어요')).toBeInTheDocument()
     expect(screen.getByText('등록된 계약이 없어요')).toBeInTheDocument()
+  })
+
+  it('등록_권한이_없으면_등록_버튼_대신_서버_이유가_보인다', async () => {
+    mount({ [PERMISSIONS_ROUTE]: permissionsReply({ registry: '캠페인 담당자(캠페인 담당)는 등록부를 바꿀 수 없음 — 계약 담당만' }) } as never)
+    await screen.findByRole('list', { name: '기안 목록' })
+    expect(await screen.findByText(/계약 담당만/)).toBeInTheDocument()
+    for (const name of ['새 기안', '새 계약', '기안 원본 가져오기', '계약 통보 가져오기', '원본 다시 맞추기']) {
+      expect(screen.queryByRole('button', { name })).toBeNull()
+    }
+    expect(screen.queryByRole('button', { name: '수정' })).toBeNull()
   })
 })

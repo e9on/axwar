@@ -25,14 +25,32 @@ const OUT = [
   { action: '승인', actions: [{ date: '2026-09-07', case_id: 1, action: '조기경고', targets: ['Masil 대표'], text: '미승인 경고 문장' }], case_id: 1, status: '1차 집행', changed: true },
 ]
 
-function mount(mode = '시연') {
+/** 서버가 기억하는 시연 진행 위치(새로고침해도 유지). init으로 이미 진행한 상태에서 시작할 수 있다 */
+function mount(mode = '시연', init: { scenario: string | null; done: number } = { scenario: null, done: 0 }) {
+  const pos = { ...init }
+  const stateReply = () => {
+    const total = pos.scenario ? SCENARIOS.find((x) => x.name === pos.scenario)!.script.length : 0
+    return { json: { scenario: pos.scenario, title: pos.scenario ? '장면' : null, done: pos.done, total, finished: !!pos.scenario && pos.done >= total, next_step: null, date: '2026-07-01' } }
+  }
   const server = fakeServer({
     'GET /api/people': { json: PEOPLE },
     'GET /api/clock': { json: { date: '2026-07-01', mode } },
     'GET /api/demo/scenarios': { json: SCENARIOS },
-    'POST /api/demo/reset': { json: { scenario: 'scenario_1', case_ids: [1], date: '2026-07-01' } },
-    'POST /api/demo/play': () => ({ json: OUT[server.calls.filter((c) => c.path === '/api/demo/play').length - 1] }),
-    'POST /api/demo/run': { json: OUT },
+    'GET /api/demo/state': stateReply,
+    'POST /api/demo/reset': () => {
+      pos.scenario = 'scenario_1'
+      pos.done = 0
+      return { json: { scenario: 'scenario_1', case_ids: [1], date: '2026-07-01' } }
+    },
+    'POST /api/demo/play': () => {
+      pos.done += 1
+      return { json: OUT[server.calls.filter((c) => c.path === '/api/demo/play').length - 1] }
+    },
+    'POST /api/demo/run': () => {
+      const from = pos.done
+      pos.done = 3
+      return { json: OUT.slice(from) }
+    },
     'POST /api/clock': { json: { date: '2026-09-04', mode: '시연', actions: [] } },
   })
   render(
@@ -82,7 +100,8 @@ describe('시연 조작판', () => {
     expect(items[2]).toHaveTextContent('결정')
     expect(items[2]).toHaveTextContent('2026-09-07')
     expect(items[2]).toHaveTextContent('Masil 대표')
-    // 초기화 뒤 기준일을 다시 읽는다(다른 화면이 새 날짜로 다시 읽게)
+    // 초기화 뒤 진행 위치와 기준일을 서버에서 다시 읽는다(다른 화면이 새 날짜로 다시 읽게)
+    expect(calls.some((c) => c.method === 'GET' && c.path === '/api/demo/state')).toBe(true)
     expect(calls.filter((c) => c.path === '/api/clock' && c.method === 'GET').length).toBeGreaterThanOrEqual(2)
   })
 
@@ -96,13 +115,10 @@ describe('시연 조작판', () => {
     expect(first).toHaveTextContent('건 상태: 승인 대기')
     expect(first).toHaveTextContent('AI 해석: 수용')
 
-    // 끝까지: 이미 진행한 단계가 있으면 남은 단계를 차례로 진행한다(처음부터 다시 돌리지 않음)
+    // 끝까지: 서버가 알려 준 현재 위치(1)부터 남은 단계만 한 번에 보낸다(play를 되풀이하지 않음)
     await userEvent.click(screen.getByRole('button', { name: '끝까지' }))
-    await waitFor(() => expect(calls.filter((c) => c.path === '/api/demo/play')).toHaveLength(3))
-    expect(calls.some((c) => c.path === '/api/demo/run')).toBe(false)
-    const plays = calls.filter((c) => c.path === '/api/demo/play').map((c) => c.body)
-    expect(plays[1]).toEqual({ step: STEPS[1] })
-    expect(plays[2]).toEqual({ step: STEPS[2] })
+    await waitFor(() => expect(calls).toContainEqual({ method: 'POST', path: '/api/demo/run', body: { scenario: 'scenario_1', from_step: 1 } }))
+    expect(calls.filter((c) => c.path === '/api/demo/play')).toHaveLength(1)
     const last = stepItems()[2]
     expect(await within(last).findByText(/미승인 경고 문장/)).toBeInTheDocument()
     expect(last).toHaveTextContent('건 상태: 1차 집행')
@@ -114,10 +130,23 @@ describe('시연 조작판', () => {
   it('처음부터_끝까지는_run_한_번으로', async () => {
     const { calls } = await start()
     await userEvent.click(screen.getByRole('button', { name: '끝까지' }))
-    await waitFor(() => expect(calls).toContainEqual({ method: 'POST', path: '/api/demo/run', body: { scenario: 'scenario_1' } }))
+    await waitFor(() => expect(calls).toContainEqual({ method: 'POST', path: '/api/demo/run', body: { scenario: 'scenario_1', from_step: 0 } }))
     await screen.findByRole('list', { name: '대본 단계' })
     await waitFor(() => expect(within(stepItems()[2]).getByText('진행함')).toBeInTheDocument())
     expect(calls.some((c) => c.path === '/api/demo/play')).toBe(false)
+  })
+
+  it('새로고침해도_서버가_기억한_진행_위치에서_이어진다', async () => {
+    const { calls } = mount('시연', { scenario: 'scenario_1', done: 2 })
+    expect(await screen.findByText('2 / 3단계 진행')).toBeInTheDocument()
+    const items = stepItems()
+    expect(within(items[0]).getByText('진행함')).toBeInTheDocument()
+    expect(within(items[1]).getByText('진행함')).toBeInTheDocument()
+    expect(within(items[2]).queryByText('진행함')).toBeNull()
+    expect(within(items[2]).getByText('다음')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '한 단계 진행' }))
+    await waitFor(() => expect(calls).toContainEqual({ method: 'POST', path: '/api/demo/play', body: { step: STEPS[2] } }))
+    await screen.findByText('3 / 3단계 진행')
   })
 
   it('처음부터는_확인_뒤_다시_초기화한다', async () => {
@@ -142,6 +171,7 @@ describe('시연 조작판', () => {
       'GET /api/people': { json: PEOPLE },
       'GET /api/clock': { json: { date: '2026-07-01', mode: '시연' } },
       'GET /api/demo/scenarios': { json: SCENARIOS },
+      'GET /api/demo/state': { json: { scenario: 'scenario_1', title: '장면', done: 0, total: 3, finished: false, next_step: null, date: '2026-07-01' } },
       'POST /api/demo/reset': { json: { scenario: 'scenario_1', case_ids: [1], date: '2026-07-01' } },
       'POST /api/demo/play': { status: 409, json: { detail: '서버 거절 문장' } },
     })
@@ -169,6 +199,7 @@ describe('시연 조작판', () => {
     fakeServer({
       'GET /api/people': { json: PEOPLE },
       'GET /api/clock': { json: { date: '2026-07-01', mode: '시연' } },
+      'GET /api/demo/state': { json: { scenario: null, title: null, done: 0, total: 0, finished: false, next_step: null, date: '2026-07-01' } },
       'GET /api/demo/scenarios': { status: 500, json: { detail: '대본을 못 읽음' } },
     })
     render(

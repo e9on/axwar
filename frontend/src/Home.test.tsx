@@ -78,6 +78,33 @@ describe('메인 화면', () => {
     expect(heads).toEqual(['승인 대기', '알림', '작업'])
   })
 
+  it('할일_줄_이름은_서버_title이고_번호는_작게_따로_보인다', async () => {
+    fakeServer(routes({
+      ...EMPTY_TODO,
+      '승인 대기': [item(1, 'PLAN-019', { title: '봄 선케어 캠페인 · 혜인' }), item(3, 'PLAN-020')],
+      작업: [item(2, 'PLAN-021', { task_id: 5, title: '물량 입력', detail: '', due: '2026-07-14' })],
+    }))
+    mount()
+    const named = await screen.findByRole('button', { name: /봄 선케어 캠페인 · 혜인/ })
+    expect(within(named).getByText('봄 선케어 캠페인 · 혜인')).toHaveClass('name')
+    expect(within(named).getByText('PLAN-019')).toHaveClass('ref')
+    // title이 없으면 번호가 이름이고 같은 글을 두 번 쓰지 않는다
+    const bare = screen.getByRole('button', { name: /PLAN-020/ })
+    expect(within(bare).getAllByText('PLAN-020')).toHaveLength(1)
+    expect(within(bare).getByText('PLAN-020')).toHaveClass('name')
+    // 작업은 서버가 title에 작업 이름을 준다
+    const task = screen.getByRole('button', { name: /물량 입력/ })
+    expect(within(task).getByText('물량 입력')).toHaveClass('name')
+    expect(within(task).getByText('PLAN-021')).toHaveClass('ref')
+  })
+
+  it('회신_대기_링크_끝에_화살표가_없다', async () => {
+    fakeServer(routes({ ...EMPTY_TODO, '회신 대기': [item(4, 'P-4')] }))
+    mount()
+    const link = await screen.findByRole('link', { name: /회신 입력으로 가기/ })
+    expect(link.textContent).not.toMatch(/→/)
+  })
+
   it('할_일이_모두_없으면_한_줄', async () => {
     fakeServer(routes())
     mount()
@@ -114,6 +141,15 @@ describe('메인 화면', () => {
     const band = await screen.findByTestId('band')
     expect(within(band).getByText('현금 하회 구간 7/20~8/10')).toBeInTheDocument()
     expect(screen.getByTestId('today')).toBeInTheDocument()
+  })
+
+  it('하회_구간_이름표는_표시_줄_위의_전용_줄을_쓰도록_표시된다', async () => {
+    fakeServer(routes())
+    mount()
+    await screen.findByTestId('band')
+    // 띠가 있을 때만 이름표 줄만큼 표시 시작 위치를 내린다(실제 겹침은 브라우저 e2e에서 잰다)
+    expect(document.querySelector('.track-wrap')).toHaveAttribute('data-bands', 'true')
+    expect(css).toMatch(/\.track-wrap\[data-bands="true"\]\s*\{[^}]*--tl-top/)
   })
 
   it('겹치는_일정은_다른_줄로_간다', async () => {
