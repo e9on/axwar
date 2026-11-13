@@ -35,6 +35,7 @@ from app import config, policy
 from app.ai import judge, writer
 from app.ai.providers import FakeProvider, Provider, make_provider
 from app.calc import evidence as evidence_calc
+from app.calc import explain
 from app.calc import inventory
 from app.calc import volume as volume_calc
 from app.calc.campaign import RETURN_RATE_SOURCES, return_count_rate
@@ -2847,7 +2848,8 @@ class Engine:
                 ("split.stop_z", "split.return_observe_days"))
             items.append({"label": label, "baseline": base, "phase1_qty": n, "limit": chk["limit"], "count": count,
                           "rate": chk["rate"], "over": chk["over"], "unit": "ratio",
-                          "detail": evidence_calc.resolve_detail(detail)})
+                          "detail": evidence_calc.resolve_detail(detail),
+                          "explain": explain.returns_item(label, base, n, chk["limit"], count, chk["rate"], chk["over"])})
         return {"entered": bool(f.get("returns")), "phase1_qty": n, "sales_orders": (f.get("sales") or {}).get("orders"), "z": z,
                 "exception_applied": bool(f.get("phase2_exception")),
                 "observation": {"required_days": required, "elapsed_days": elapsed,
@@ -3078,13 +3080,19 @@ class Engine:
         out = evidence_calc.evidence(kind, case["ref_id"], f.get("source_plan_id"))
         by_key = {s["key"]: s for s in out["signals"]}
 
+        delegate = (f.get("approvers") or [None])[0]
+
         def line(h: dict, from_signal: bool, stage: str | None = None) -> dict:
             if h.get("detail") is None and from_signal and h["rule_id"] in by_key:
                 resolved = by_key[h["rule_id"]]["detail"]  # 옛 저장 행: 같은 이름의 지금 신호 줄을 따른다
             else:
                 resolved = evidence_calc.resolve_detail(h.get("detail"), h["text"])
+            if from_signal:  # 지표 근거 줄: 신호 줄과 같은 풀이(신호가 아니면 지표 좋음·근거 없음 줄)
+                why = by_key[h["rule_id"]]["explain"] if h["rule_id"] in by_key else explain.indicator_hit(h)
+            else:
+                why = explain.approver_hit(h, {i["label"]: i["value"] for i in resolved["inputs"]}, delegate)
             return {**{k: h[k] for k in ("rule_id", "text", "source", "badge")}, **({"stage": stage} if stage else {}),
-                    "detail": resolved}
+                    "detail": resolved, "explain": why}
 
         out["rule"] = {"approver_hits": [{**line(h, False), **({"superseded": True} if h.get("superseded") else {})}
                                          for h in self._approver_view(f, "1차")],
