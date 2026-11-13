@@ -60,6 +60,7 @@
 .tick[data-mine="true"] { border-left-color: var(--c-navy); }
 .tick[data-alert="true"] { border-left-color: var(--c-seal); }
 .dot[data-mine="true"] { background: var(--c-navy); border-color: var(--c-navy); color: var(--c-sheet); font-weight: var(--w-bold); }
+.dot[data-past="true"] { background: var(--c-sheet); border-color: var(--c-rule); color: var(--c-ink-3); font-weight: var(--w-medium); } /* 지난 일정은 내 차례여도 흐리게 */
 .dot[data-alert="true"] { border: var(--dot-border) solid var(--c-seal); color: var(--c-seal); }
 .dot[data-alert="true"][data-mine="true"] { color: var(--c-sheet); }
 .dot[aria-disabled="true"] { cursor: default; }

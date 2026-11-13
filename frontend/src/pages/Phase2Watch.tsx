@@ -6,8 +6,8 @@ import { useViewer } from '../state/viewer'
 import { useLoad } from '../state/useLoad'
 import { usePreview } from '../state/preview'
 import { koDate } from '../date'
-import { num, pct, unitValue, won } from '../format'
-import { ACT_CANCEL, ACT_CONTINUE, ACT_EXCEPTION, ACT_RETURN, ACT_REVIEW, ACT_SALES, S_PHASE2_HOLD, SELL_ADJUST, SELL_HOLD, SELL_SOLDOUT, ST_PHASE2_WAIT } from '../decisions'
+import { josa, num, pct, unitValue, won } from '../format'
+import { ACT_CANCEL, ACT_CONTINUE, ACT_EXCEPTION, ACT_RETURN, ACT_REVIEW, ACT_SALES, S_PHASE2_HOLD, SELL_ADJUST, SELL_HOLD, SELL_SOLDOUT, ST_ENDED, ST_PHASE2_WAIT } from '../decisions'
 import type { Gate, ObserveCase, Phase2Observe } from '../replyTypes'
 import LoadFailed from '../components/LoadFailed'
 import { Row } from '../components/EvidenceList'
@@ -15,13 +15,14 @@ import '../components/EvidenceList.css'
 import './Phase2Watch.css'
 
 /** 잠금 상태 글자: 보류(자동 보류·판매율 보류) / 열림 / 잠금 */
-function lockState(status: string, gate: Gate): '잠금' | '보류' | '열림' {
+function lockState(status: string, gate: Gate, ended: boolean): '잠금' | '보류' | '열림' | '끝남' {
+  if (ended) return '끝남' // 서버가 끝난 건(stage)이라 알려 주면 잠금 글자보다 먼저
   if (status === S_PHASE2_HOLD || gate.auto_stopped) return '보류'
   return gate.open ? '열림' : '잠금'
 }
 
-function LockBox({ status, gate }: { status: string; gate: Gate }) {
-  const state = lockState(status, gate)
+function LockBox({ status, gate, ended }: { status: string; gate: Gate; ended: boolean }) {
+  const state = lockState(status, gate, ended)
   return (
     <section className="obs" aria-label="2차 잠금 상태">
       <h3>2차 잠금 상태</h3>
@@ -127,8 +128,8 @@ function ReturnBox({ p2 }: { p2: Phase2Observe }) {
                     {num(it.count)}건 · {it.rate === null ? '계산 불가' : unitValue(it.rate, it.unit)}
                   </span>
                   <span className="ecell cmp">
-                    {it.limit !== null && `한계 ${unitValue(it.limit, it.unit)}`}
-                    {it.baseline !== null && ` · 기준선 ${unitValue(it.baseline, it.unit)} · `}
+                    {[it.limit !== null && `한계 ${unitValue(it.limit, it.unit)}`, it.baseline !== null && `기준선 ${unitValue(it.baseline, it.unit)}`].filter(Boolean).join(' · ')}
+                    {(it.limit !== null || it.baseline !== null) && ' · '}
                     <span className={it.over ? 'over' : undefined}>{it.over ? '초과' : '기준 이내'}</span>
                   </span>
                 </Row>
@@ -228,7 +229,7 @@ function JudgeBox({ caseId, actor, buttons, planQty, busy, onDone }: { caseId: s
       setOpen(null)
       setReason('')
       setQty('')
-      await onDone(`${got.choice ?? spec.name}으로 판단했어요${got.status ? ` · 건 상태 ${got.status}` : ''}`)
+      await onDone(`${josa(got.choice ?? spec.name, '로')} 판단했어요${got.status ? ` · 건 상태 ${got.status}` : ''}`)
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -373,6 +374,7 @@ export default function Phase2Watch() {
   // 누가 무엇을 할 수 있는지는 서버(viewer)가 판정한다. 화면은 역할 이름을 모른다.
   const v = p2.viewer
   const known = !!v && !v.error
+  const ended = d.case.stage === ST_ENDED // 끝난 건: 서버가 stage로 알려 줌
   const allowed = (action: string) => !!v?.actions.includes(action)
   const reasonOf = (action: string) => v?.blocked.find((b) => b.action === action)?.reason
   const hold = status === S_PHASE2_HOLD && !p2.decision
@@ -441,7 +443,7 @@ export default function Phase2Watch() {
           <p className="muted">2차 집행이 없는 건이에요. 1차만 진행하거나 2차가 취소됐어요.</p>
         ) : (
           <>
-            <LockBox status={status} gate={p2.gate} />
+            <LockBox status={status} gate={p2.gate} ended={ended} />
             <ReviewBox c={d} p2={p2} />
             <ReturnBox p2={p2} />
             <SellBox p2={p2} />
@@ -499,6 +501,7 @@ export default function Phase2Watch() {
               <section className="obs p2inputs" aria-label="입력">
                 <h3>입력</h3>
                 <p className="muted">누가 입력할 수 있는지는 서버가 판단해요.</p>
+                {ended && <p className="muted">끝난 건이라 더 입력받지 않아요.</p>}
                 {inputs
                   .filter((x) => !x.ok && x.reason)
                   .map((x) => (
@@ -507,7 +510,7 @@ export default function Phase2Watch() {
                     </p>
                   ))}
                 <div className="iforms">
-                  {inputs[0].ok && (
+                  {!ended && inputs[0].ok && (
                     <InputForm
                       title="리뷰"
                       button="리뷰 저장"
@@ -530,7 +533,7 @@ export default function Phase2Watch() {
                       </label>
                     </InputForm>
                   )}
-                  {inputs[1].ok && (
+                  {!ended && inputs[1].ok && (
                     <InputForm
                       title="반품"
                       button="반품 저장"
@@ -553,7 +556,7 @@ export default function Phase2Watch() {
                       </label>
                     </InputForm>
                   )}
-                  {inputs[2].ok && (
+                  {!ended && inputs[2].ok && (
                     <InputForm
                       title="판매 실적"
                       button="판매 실적 저장"

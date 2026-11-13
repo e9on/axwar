@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { api } from '../api'
 import { D_APPROVE, D_REJECT, D_SPLIT, KIND_CONTRACT, OPINIONS, ST_PHASE2_WAIT } from '../decisions'
 import { koDate } from '../date'
-import { num, won } from '../format'
+import { josa, num, won } from '../format'
 import type { CaseDetailData, SplitPreview } from '../caseTypes'
 import './DecisionPanel.css'
 
@@ -42,7 +42,7 @@ function SplitDiff({ preview, approveBlocked }: { preview: SplitPreview; approve
         <p>일반 승인은 지금 할 수 없어요: {approveBlocked.reason}</p>
       ) : (
         <p>
-          <b>일반 승인</b>: 2차 없이 한 번에 집행해요.
+          <b>일반 승인</b>: 2차 없이 1차만 집행해요. 1차 수량은 승인 뒤 재고·물류 몫에 따라 정해져요.
         </p>
       )}
       <p>
@@ -175,11 +175,14 @@ export default function DecisionPanel({ detail, actor, onDone }: Props) {
   const blockedList =
     blocked.length > 0 ? (
       <ul className="blocked" aria-label="지금 할 수 없는 결정">
-        {groupBlocked(blocked).map((g) => (
-          <li key={g.reason}>
-            <b>{g.actions.join('·')}</b>은 지금 할 수 없어요 · {g.reason}
-          </li>
-        ))}
+        {groupBlocked(blocked).map((g) => {
+          const names = g.actions.join('·')
+          return (
+            <li key={g.reason}>
+              <b>{names}</b>{josa(names, '은').slice(names.length)} 지금 할 수 없어요 · {g.reason}
+            </li>
+          )
+        })}
       </ul>
     ) : null
   const c = detail.case
@@ -190,7 +193,7 @@ export default function DecisionPanel({ detail, actor, onDone }: Props) {
       {canDecide ? (
         <>
           <p>
-            {v?.role}로 결재합니다
+            {josa(v?.role ?? '', '로')} 결재합니다
             {busy && <span className="muted"> · 보내는 중…</span>}
             {!busy && notice && <span className="muted"> · {notice}</span>}
           </p>
@@ -246,7 +249,7 @@ export default function DecisionPanel({ detail, actor, onDone }: Props) {
                     {phase2 ? '2차 집행 ' : '요청액 '}
                     <b>{(phase2 ? detail.phase2?.plan?.amount_krw : amount) !== undefined ? won((phase2 ? detail.phase2?.plan?.amount_krw : amount) as number) : '금액 미정'}</b> · 집행일 <b>{dateText(execDate)}</b>
                   </p>
-                  <p>{phase2 ? `2차 ${num(detail.phase2?.plan?.qty ?? 0)}개를 집행해요.` : c.kind === KIND_CONTRACT ? '이 결정을 확정해요.' : '분할 없이 전량을 1차로 한 번에 집행해요.'}</p>
+                  <p>{phase2 ? `2차 ${num(detail.phase2?.plan?.qty ?? 0)}개를 집행해요.` : c.kind === KIND_CONTRACT ? '이 결정을 확정해요.' : '2차 없이 1차만 집행해요. 1차 수량은 승인 뒤 재고·물류 몫에 따라 정해져요.'}</p>
                 </div>
               </>
             )}

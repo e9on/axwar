@@ -389,6 +389,34 @@ describe('건 상세', () => {
     expect(within(clock).getByText('9월 7일')).toBeInTheDocument()
   })
 
+  it('기본_거부_날이_지나면_서버_사정이_아닌_사용자_말투', async () => {
+    fakeServer({
+      'GET /api/people': { json: PEOPLE },
+      'GET /api/clock': { json: { date: '2026-09-10', mode: '시연' } },
+      [`GET ${DETAIL_PATH('Masil 대표')}`]: { json: detailOf(MAY) },
+      'GET /api/cases/7/evidence': { json: EVIDENCE },
+    })
+    mount('Masil 대표')
+    const clock = await screen.findByLabelText('남은 날')
+    expect(within(clock).getByText('지남')).toBeInTheDocument()
+    expect(clock).toHaveTextContent(/기본 거부 날 9월 8일이 지났어요/)
+    expect(clock).toHaveTextContent(/기본 거부로 처리돼요/)
+    expect(clock).not.toHaveTextContent(/서버/)
+  })
+
+  it('남은_작업은_부서_이름을_두_번_쓰지_않는다', async () => {
+    const tasks = [
+      { id: 1, dept: 'CS', title: 'CS 대비', status: '대기', due: '2026-09-08' },
+      { id: 2, dept: '물류', title: '출고', status: '대기', due: '2026-09-09' },
+    ]
+    Setup(MAY, 'Masil 대표', {}, { tasks })
+    mount('Masil 대표')
+    const items = (await screen.findByRole('heading', { name: '남은 작업' })).nextElementSibling!.querySelectorAll('li')
+    expect(items[0].textContent).not.toMatch(/CS\s*CS/)
+    expect(items[0]).toHaveTextContent('CS 대비')
+    expect(items[1]).toHaveTextContent('물류 출고')
+  })
+
   it('끝난_건은_남은_날_대신_결과_문장', async () => {
     const closed = { rule: { approvers: [], hits: [], required_roles: ['마케팅팀'], approved_roles: [], pending_roles: [] }, case: { id: 7, kind: '기안', ref_id: 'P-1', status: '기본 거부', open: false, stage: '끝남', origin: '화면' } }
     Setup(NOT, '마케팅팀장', {}, closed)
@@ -749,7 +777,9 @@ describe('승인 확인 창과 서버가 준 열린 여부·막힘', () => {
     expect(within(dlg).getByRole('heading', { name: /이 건을 승인합니다/ })).toBeInTheDocument()
     expect(within(dlg).getByText(/8,000,000원/)).toBeInTheDocument()
     expect(within(dlg).getByText(/2026년 9월 14일|9월 14일/)).toBeInTheDocument()
-    expect(within(dlg).getByText(/나누지 않고|분할 없이|한 번에/)).toBeInTheDocument()
+    // 수량은 화면이 단정하지 않는다(서버가 승인 뒤 정함)
+    expect(within(dlg).getByText(/1차 수량은 승인 뒤/)).toBeInTheDocument()
+    expect(dlg).not.toHaveTextContent(/전량/)
     expect(within(dlg).getByRole('button', { name: '승인 확정' })).toHaveFocus()
     expect(calls.some((c) => c.method === 'POST')).toBe(false)
     await userEvent.click(within(dlg).getByRole('button', { name: '승인 확정' }))

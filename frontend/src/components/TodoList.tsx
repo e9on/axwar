@@ -3,6 +3,7 @@ import { useViewer } from '../state/viewer'
 import { useCaseLink } from '../state/caseLink'
 import { useLoad } from '../state/useLoad'
 import { Link } from 'react-router-dom'
+import { koDate } from '../date'
 import LoadFailed from './LoadFailed'
 
 type Item = {
@@ -28,18 +29,18 @@ const ALARM = '마감 알림' // 서버 알림 종류 이름: 도장색 글씨�
 function second(column: string, it: Item): { meta: string; text: string; seal: boolean } {
   const parts: string[] = []
   if (column === '작업') {
-    if (it.due) parts.push(`기한 ${it.due}`)
+    if (it.due) parts.push(`기한 ${koDate(it.due)}`)
     if (it.detail) parts.push(it.detail)
     return { meta: parts.join(' · '), text: '', seal: false }
   }
   if (column === '승인 대기') {
-    if (it.approval_deadline) parts.push(`마지막 승인일 ${it.approval_deadline}`)
+    if (it.approval_deadline) parts.push(`마지막 승인일 ${koDate(it.approval_deadline)}`)
     parts.push(`${it.stage ?? '1차'} 승인`)
     const up = it.상신?.[0]
     if (up) parts.push(`${up.from}에서 올림: ${up.reason}`)
     return { meta: parts.join(' · '), text: '', seal: false }
   }
-  if (it.approval_deadline && column === '기한 임박') parts.push(`마지막 승인일 ${it.approval_deadline}`)
+  if (it.approval_deadline && column === '기한 임박') parts.push(`마지막 승인일 ${koDate(it.approval_deadline)}`)
   if (it.stage) parts.push(it.stage)
   return { meta: parts.join(' · '), text: it.text ?? it.reason ?? '', seal: column === '알림' && it.kind === ALARM }
 }

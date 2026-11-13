@@ -23,7 +23,7 @@ function outcomeLines(o: StepOutcome): string[] {
 }
 
 function who(step: ScenarioStep): string {
-  return step.actor ?? step.dept ?? '—'
+  return step.actor ?? step.dept ?? ''
 }
 
 function target(step: ScenarioStep): string {
@@ -191,7 +191,7 @@ function DemoPanel() {
                     {i < done && <span className="state">진행함</span>}
                     {next && !finished && <span className="next">다음</span>}
                     <div className="sub">
-                      {[s.date ? s.date : '날짜 그대로', who(s), target(s)].filter(Boolean).join(' · ')}
+                      {[s.date ? koDate(s.date) : '', who(s), target(s)].filter(Boolean).join(' · ')}
                     </div>
                     {out && (
                       <ul className="result">

@@ -67,3 +67,38 @@ test('키보드: Tab 으로 가는 곳마다 초점 표시가 보인다', async 
   }
   expect([...new Set(missing)]).toEqual([])
 })
+
+test('PR #33 검토 반영 스크린샷(마무리_* 덮어쓰기)', async ({ page, request }) => {
+  test.setTimeout(180_000)
+  const api = 'http://127.0.0.1:8000'
+  const shot = (name: string) => page.screenshot({ path: join(OUT, `마무리_${name}.png`), fullPage: true })
+  await page.setViewportSize({ width: 1440, height: 900 })
+
+  // 승인 확인 창: 장면 1을 두 단계 진행해 승인만 남긴 상태
+  await request.post(`${api}/api/demo/reset`, { data: { scenario: 'scenario_1' } })
+  await request.post(`${api}/api/demo/run`, { data: { scenario: 'scenario_1', upto: 2 } })
+  const list = (await (await request.get(`${api}/api/cases`)).json()) as { id: number; ref_id: string }[]
+  const first = list.find((c) => c.ref_id === 'PLAN-019')
+  expect(first).toBeTruthy()
+  await page.goto(`/cases/${first!.id}?as=${encodeURIComponent('Masil 대표')}`)
+  await page.getByRole('group', { name: '결정' }).getByRole('button', { name: '승인', exact: true }).click()
+  await expect(page.getByRole('dialog')).toBeVisible()
+  await shot('승인확인창_1440')
+  await page.keyboard.press('Escape')
+
+  // 메인·시연 조작판·2차(끝난 건)
+  await request.post(`${api}/api/demo/reset`, { data: { scenario: 'scenario_2' } })
+  await request.post(`${api}/api/demo/run`, { data: { scenario: 'scenario_2' } })
+  const cases = (await (await request.get(`${api}/api/cases`)).json()) as { id: number; ref_id: string }[]
+  const id = cases.find((c) => c.ref_id === 'PLAN-001')?.id
+  expect(id).toBeTruthy()
+  await page.goto(`/?as=${encodeURIComponent('캠페인 담당자')}`)
+  await page.waitForLoadState('networkidle')
+  await shot('메인_1440')
+  await page.goto('/demo')
+  await page.waitForLoadState('networkidle')
+  await shot('시연_1440')
+  await page.goto(`/cases/${id}/phase2?as=${encodeURIComponent('캠페인 담당자')}`)
+  await page.waitForLoadState('networkidle')
+  await shot('2차_1440')
+})

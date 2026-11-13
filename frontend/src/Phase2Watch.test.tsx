@@ -314,6 +314,34 @@ describe('2차 집행 관찰', () => {
     expect(cancel?.body).toEqual({ actor: '마케팅팀장', reason: '판매가 너무 낮음' })
     // 보낸 뒤 다시 읽는다
     await waitFor(() => expect(calls.filter((c) => c.path === observePath('마케팅팀장')).length).toBeGreaterThanOrEqual(2))
+    // 알림 문장은 받침에 맞는 조사로(2차 취소 + 로)
+    expect(await screen.findByText(/2차 취소로 판단했어요/)).toBeInTheDocument()
+    expect(screen.queryByText(/취소으로/)).toBeNull()
+  })
+
+  it('끝난_건은_열림_대신_끝남이고_입력_칸이_없다', async () => {
+    setup({
+      status: '완료',
+      detail: { case: { id: 9, kind: '기안', ref_id: 'DEMO-PLAN-001', status: '완료', open: false, stage: '끝남', origin: '시연', title: '초혜핏 선케어 캠페인' } },
+      p2: { gate: { open: true, auto_stopped: false, reasons: [], actions: [], blocked: false } },
+    })
+    mount('캠페인 담당자')
+    const box = await screen.findByRole('region', { name: '2차 잠금 상태' })
+    expect(within(box).getByText('끝남')).toBeInTheDocument()
+    expect(within(box).queryByText('열림')).toBeNull()
+    expect(screen.queryByRole('button', { name: '리뷰 저장' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '반품 저장' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '판매 실적 저장' })).toBeNull()
+  })
+
+  it('반품_줄은_한계값이_없어도_이음표가_앞에_붙지_않는다', async () => {
+    const rc = { ...RETURNS_CHECK, items: [{ ...RETURNS_CHECK.items[0], limit: null }] }
+    setup({ status: '2차 보류', p2: { gate: HOLD_BLOCK, returns_check: rc } })
+    mount('캠페인 담당자')
+    const box = await screen.findByRole('region', { name: '반품' })
+    const row = within(box).getByText('단순변심').closest('li') as HTMLElement
+    expect(row.textContent).not.toMatch(/\s·\s*기준선/)
+    expect(row.textContent).not.toMatch(/·\s*$/)
   })
 
   it('2차_계속은_수량과_이유를_보낸다', async () => {

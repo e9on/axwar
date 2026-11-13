@@ -108,7 +108,7 @@ test('scenario_3: 승인 없이 기본 거부 날이 되면 기본 거부와 통
 
   await viewAs(page, '계약 담당자')
   await goHome(page)
-  await expect(page.getByText('2026-07-14').first()).toBeVisible()
+  await expect(page.getByText('7월 14일').first()).toBeVisible()
   await openTodo(page, 'INF-001')
   await expect(page.getByText(/기본 거부/).first()).toBeVisible()
   await expect(page.getByText(/조건변경 통보|통보 초안/).first()).toBeVisible()
@@ -225,4 +225,31 @@ test('768px: 위쪽 막대는 두 줄 이내', async ({ page, problems }) => {
     return count
   })
   expect(rows).toBeLessThanOrEqual(2)
+})
+
+test('1440px: 모드 전환 불가 이유가 펼치면 잘리지 않고 전부 보인다', async ({ page, problems }) => {
+  void problems
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/')
+  await viewAs(page, '마케팅팀장')
+  const why = page.locator('.mode-why')
+  await expect(why).toBeVisible()
+  await why.locator('summary').click()
+  const p = why.locator('p')
+  await expect(p).toBeVisible()
+  const probe = await p.evaluate((el) => {
+    const r = el.getBoundingClientRect()
+    const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+    return {
+      fits: el.scrollWidth <= el.clientWidth + 1,
+      visibleOnTop: !!top && el.contains(top),
+      marker: getComputedStyle(el.parentElement!.querySelector('summary')!).listStyleType,
+      floating: getComputedStyle(el).position,
+      textRect: r.width,
+    }
+  })
+  expect(probe.fits, '이유 문장이 한 줄로 잘리지 않아야 해요').toBe(true)
+  expect(probe.visibleOnTop, '이유 문장이 다른 것에 가려지지 않아야 해요').toBe(true)
+  expect(probe.marker).toBe('none')
+  expect(probe.floating).toBe('absolute')
 })

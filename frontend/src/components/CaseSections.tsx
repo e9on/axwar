@@ -146,7 +146,7 @@ export function Tasks({ detail }: { detail: CaseDetailData }) {
       <ul className="tasks">
         {open.map((t) => (
           <li key={t.id}>
-            <b>{t.dept}</b> {t.title} <span className="muted">· 기한 {koDate(t.due)}</span>
+            {t.title.startsWith(t.dept) ? null : <><b>{t.dept}</b>{' '}</>}{t.title} <span className="muted">· 기한 {koDate(t.due)}</span>
           </li>
         ))}
       </ul>

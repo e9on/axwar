@@ -98,7 +98,11 @@ describe('시연 조작판', () => {
     expect(items[0]).toHaveTextContent('회신')
     expect(items[0]).toHaveTextContent('물류')
     expect(items[2]).toHaveTextContent('결정')
-    expect(items[2]).toHaveTextContent('2026-09-07')
+    expect(items[2]).toHaveTextContent('9월 7일')
+    expect(items[2]).not.toHaveTextContent('2026-09-07')
+    // 날짜·사람이 없는 단계는 그 칸을 비우고 "—"나 "날짜 그대로"를 쓰지 않는다
+    expect(items[0]).not.toHaveTextContent('—')
+    expect(items[0]).not.toHaveTextContent('날짜 그대로')
     expect(items[2]).toHaveTextContent('Masil 대표')
     // 초기화 뒤 진행 위치와 기준일을 서버에서 다시 읽는다(다른 화면이 새 날짜로 다시 읽게)
     expect(calls.some((c) => c.method === 'GET' && c.path === '/api/demo/state')).toBe(true)

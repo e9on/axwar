@@ -50,7 +50,7 @@ function DenyClock({ prefix = '', waiting, status, today, deny, last }: ClockPro
       <p>
         {days < 0 ? (
           <>
-            {prefix}기본 거부 날 <b>{koDate(deny)}</b>이 지났어요. 서버가 기본 거부로 처리해야 해요.
+            {prefix}기본 거부 날 <b>{koDate(deny)}</b>이 지났어요. 기한이 지나 결정할 수 없고 기본 거부로 처리돼요.
           </>
         ) : (
           <>

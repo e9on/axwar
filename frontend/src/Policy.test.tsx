@@ -97,6 +97,9 @@ describe('정책 설정', () => {
     await waitFor(() =>
       expect(calls).toContainEqual({ method: 'PUT', path: '/api/policy/roles.campaign', body: { actor: 'Masil 대표', value: '홍보 담당', reason: '이름 변경' } }),
     )
+    // 알림은 조사 없이 바뀐 값을 보인다(" 로 바꿨어요" 띄어쓰기·조사 문제 없음)
+    expect(await screen.findByText(/roles\.campaign 바꿨어요/)).toBeInTheDocument()
+    expect(screen.queryByText(/ 로 바꿨어요/)).toBeNull()
   })
 
   it('권한이_없으면_서버_문장을_창_안에_보이고_닫지_않는다', async () => {

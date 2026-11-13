@@ -19,8 +19,8 @@ const FALLBACK_WIDTH = 1000 // 폭을 잴 수 없을 때
 const isAlert = (kind: string) => ALERT_KINDS.includes(kind)
 
 /** 스크린리더용 이름: 날짜, 내용, 색에만 기대지 않도록 내 차례·알림 여부. */
-function spoken(date: string, text: string, mine: boolean, kind: string): string {
-  const tags = [mine && '내 차례', isAlert(kind) && '기본 거부 직전 알림'].filter(Boolean)
+function spoken(date: string, text: string, mine: boolean, alert: boolean): string {
+  const tags = [mine && '내 차례', alert && '기본 거부 직전 알림'].filter(Boolean)
   return `${koDate(date)}, ${text}${tags.length ? ` (${tags.join(', ')})` : ''}`
 }
 
@@ -107,7 +107,7 @@ function Wide({ events, today, role }: { events: CalEvent[]; today: string; role
             className="tick"
             data-testid="tick"
             data-mine={m.mine}
-            data-alert={isAlert(m.kind)}
+            data-alert={isAlert(m.kind) && m.date >= today}
             style={{ left: `${rows[i].at}%`, ['--row' as string]: rows[i].row }}
           />
         ))}
@@ -117,13 +117,14 @@ function Wide({ events, today, role }: { events: CalEvent[]; today: string; role
             type="button"
             className="dot"
             data-mine={m.mine}
-            data-alert={isAlert(m.kind)}
+            data-alert={isAlert(m.kind) && m.date >= today}
+            data-past={m.date < today}
             data-row={rows[i].row}
             data-group={m.events.length > 1}
             aria-disabled={m.events.length === 1 && m.events[0].case_id === null}
             aria-expanded={m.events.length > 1 ? open === m.key : undefined}
-            aria-label={spoken(m.date, m.text, m.mine, m.kind)}
-            title={spoken(m.date, m.text, m.mine, m.kind)}
+            aria-label={spoken(m.date, m.text, m.mine, isAlert(m.kind) && m.date >= today)}
+            title={spoken(m.date, m.text, m.mine, isAlert(m.kind) && m.date >= today)}
             style={{ left: rows[i].left, width: rows[i].width, top: `calc(var(--tl-top) + ${rows[i].row} * var(--tl-row))` }}
             onClick={() => press(m)}
           >
@@ -164,7 +165,7 @@ function Narrow({ events, today, role }: { events: CalEvent[]; today: string; ro
               data-mine={role !== undefined && e.roles.includes(role)}
               data-alert={isAlert(e.kind)}
               data-past={e.date < today}
-              aria-label={spoken(e.date, e.label, role !== undefined && e.roles.includes(role), e.kind)}
+              aria-label={spoken(e.date, e.label, role !== undefined && e.roles.includes(role), isAlert(e.kind))}
               aria-disabled={e.case_id === null}
               onClick={() => e.case_id !== null && go(e.case_id)}
             >

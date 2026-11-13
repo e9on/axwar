@@ -94,6 +94,8 @@ describe('메인 화면', () => {
     expect(within(bare).getByText('PLAN-020')).toHaveClass('name')
     // 작업은 서버가 title에 작업 이름을 준다
     const task = screen.getByRole('button', { name: /물량 입력/ })
+    expect(task).toHaveTextContent('기한 7월 14일')
+    expect(task).not.toHaveTextContent('2026-07-14')
     expect(within(task).getByText('물량 입력')).toHaveClass('name')
     expect(within(task).getByText('PLAN-021')).toHaveClass('ref')
   })
@@ -150,6 +152,29 @@ describe('메인 화면', () => {
     // 띠가 있을 때만 이름표 줄만큼 표시 시작 위치를 내린다(실제 겹침은 브라우저 e2e에서 잰다)
     expect(document.querySelector('.track-wrap')).toHaveAttribute('data-bands', 'true')
     expect(css).toMatch(/\.track-wrap\[data-bands="true"\]\s*\{[^}]*--tl-top/)
+  })
+
+  it('넓은_띠에서도_지난_일정은_흐리게_하고_붉은_알림_강조를_뺀다', async () => {
+    fakeServer(routes(EMPTY_TODO, [
+      ev('2026-07-10', '알림', 'P-9 마지막 승인일(내일 기본 거부)', 9, []),
+      ev('2026-07-15', '알림', 'P-1 마지막 승인일', 1, []),
+    ]))
+    mount()
+    const past = await screen.findByRole('button', { name: /P-9 마지막 승인일/ })
+    expect(past).toHaveAttribute('data-past', 'true')
+    expect(past).toHaveAttribute('data-alert', 'false')
+    const future = screen.getByRole('button', { name: /P-1 마지막 승인일/ })
+    expect(future).toHaveAttribute('data-past', 'false')
+    expect(future).toHaveAttribute('data-alert', 'true')
+    expect(css).toMatch(/\.dot\[data-past="true"\]\s*\{[^}]*--c-ink-3/)
+  })
+
+  it('승인_대기_줄의_마지막_승인일도_한국어_날짜다', async () => {
+    fakeServer(routes({ ...EMPTY_TODO, '승인 대기': [item(1, 'P-1')] }))
+    mount()
+    const row = await within(screen.getByRole('region', { name: '할 일' })).findByRole('button', { name: /P-1/ })
+    expect(row).toHaveTextContent('마지막 승인일 7월 16일')
+    expect(row).not.toHaveTextContent('2026-07-16')
   })
 
   it('겹치는_일정은_다른_줄로_간다', async () => {
