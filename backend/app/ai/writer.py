@@ -15,6 +15,13 @@ FALLBACK_TEXT = "AI 응답 없음 — 규칙 판정만 표시합니다"
 MIN_CHECKED_DIGITS = 3  # 이 자리수 이상 숫자만 사실과 대조한다(1·2자리는 "3가지" 같은 문장 숫자)
 _NUMBER = re.compile(r"\d[\d,]*\d|\d")
 
+BRIEFING_HEADS = ("권고", "이유", "주의")  # 브리핑은 정확히 이 세 줄
+COUNTER_HEADS = ("반대로 결정하려면", "확인할 것")  # 반대 근거는 이 두 줄
+LINE_MAX = 90  # 머리말 포함 한 줄 상한(프롬프트는 60자 안팎을 요청). 넘으면 정리하지 않고 실패로 본다
+_BULLET = re.compile(r"^(?:[-*•·]+|\d+[.)])\s*")
+_INTERNAL_WORDS = ("covenant", "z=", "판정")  # 화면에 보이면 안 되는 내부 용어(대소문자 무시)
+_INTERNAL = re.compile(r"설계\s*\d|[A-Za-z]+_[A-Za-z_]+|[\u2600-\u27bf\U0001f000-\U0001faff]")
+
 
 @dataclass(frozen=True)
 class AiText:
@@ -65,12 +72,50 @@ def _write(p: Provider, system: str, user: str) -> AiText:
     return AiText(text, c.model, True, c.ledger_id)
 
 
+def _shape(text: str, heads: tuple[str, ...]) -> str | None:
+    """응답을 머리말 줄 형식으로 맞춘다. 맞출 수 없으면 None.
+
+    - 머리말이 모두 있으면 순서대로 다시 놓고 남는 줄은 버린다
+    - 머리말이 하나도 없으면 앞에서부터 줄 수만큼 골라 머리말을 붙인다(줄이 모자라면 None)
+    - 머리말이 일부만 있거나, 빈 내용·너무 긴 줄·내부 용어가 있으면 None
+    """
+    lines = [_BULLET.sub("", l.strip()).replace("：", ":") for l in text.splitlines()]
+    lines = [l for l in lines if l]
+    found: dict[str, str] = {}
+    for l in lines:
+        for h in heads:
+            m = re.match(rf"{re.escape(h)}\s*:\s*(.*)$", l)
+            if m and h not in found:
+                found[h] = m.group(1).strip()
+    if found:
+        if set(found) != set(heads):
+            return None
+        bodies = [found[h] for h in heads]
+    else:
+        if len(lines) < len(heads):
+            return None
+        bodies = [l.strip() for l in lines[:len(heads)]]
+    out = [f"{h}: {b}" for h, b in zip(heads, bodies)]
+    for h, b, l in zip(heads, bodies, out):
+        if not b or len(l) > LINE_MAX or _INTERNAL.search(l) or any(w in l.lower() for w in _INTERNAL_WORDS):
+            return None
+    return "\n".join(out)
+
+
+def _write_shaped(p: Provider, system: str, user: str, heads: tuple[str, ...]) -> AiText:
+    r = _write(p, system, user)
+    if not r.ok:
+        return r
+    shaped = _shape(r.text, heads)
+    return AiText(shaped, r.model, True, r.ledger_id) if shaped else _fail(r.model, r.ledger_id)
+
+
 def briefing(p: Provider, facts: dict) -> AiText:
-    return _write(p, prompts.BRIEFING_SYSTEM, _lines("사실", facts))
+    return _write_shaped(p, prompts.BRIEFING_SYSTEM, _lines("사실", facts), BRIEFING_HEADS)
 
 
 def counterpoints(p: Provider, facts: dict) -> AiText:
-    return _write(p, prompts.COUNTERPOINTS_SYSTEM, _lines("사실", facts))
+    return _write_shaped(p, prompts.COUNTERPOINTS_SYSTEM, _lines("사실", facts), COUNTER_HEADS)
 
 
 def notice_draft(p: Provider, contract: dict, proposal: dict) -> AiText:

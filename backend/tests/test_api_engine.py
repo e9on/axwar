@@ -10,7 +10,7 @@ from app.engine.flow import Engine
 from app.store.db import open_db
 
 sys.path.insert(0, str(Path(__file__).parent))
-from test_flow_11b import ACCEPT, SCM_PART, scene2, scm_request  # noqa: E402
+from test_flow_11b import ACCEPT, BRIEF_A, BRIEF_B, COUNTER_A, COUNTER_B, SCM_PART, scene2, scm_request  # noqa: E402
 
 
 @pytest.fixture
@@ -146,25 +146,25 @@ def test_브리핑은_만들_때만_AI를_부르고_사실이_같으면_저장�
     eng, fake, cid, st = scene2(store, ACCEPT)
     eng.play(st[0])
     n = len(fake.calls)
-    fake._responses.extend(["브리핑 문장입니다.", "반대 근거 문장입니다."])
+    fake._responses.extend([BRIEF_A, COUNTER_A])
     out = eng.write_briefing(cid, "그룹 CEO")
-    assert out["briefing"]["text"] == "브리핑 문장입니다." and out["counterpoints"]["text"] == "반대 근거 문장입니다."
+    assert out["briefing"]["text"] == BRIEF_A and out["counterpoints"]["text"] == COUNTER_A
     assert out["briefing"]["ok"] is True and len(fake.calls) == n + 2
     again = eng.write_briefing(cid, "그룹 CEO")  # 사실이 안 바뀌었으니 새로 부르지 않는다
-    assert again["briefing"]["text"] == "브리핑 문장입니다." and len(fake.calls) == n + 2
+    assert again["briefing"]["text"] == BRIEF_A and len(fake.calls) == n + 2
     d = eng.case_detail(cid)
-    assert d["briefing"]["text"] == "브리핑 문장입니다." and d["briefing"]["stale"] is False
+    assert d["briefing"]["text"] == BRIEF_A and d["briefing"]["stale"] is False
 
 
 def test_사실이_바뀌면_저장된_브리핑은_낡았다고_표시되고_다시_만든다(store):
-    eng, fake, cid, st = scene2(store, ACCEPT, "브리핑 1", "반대 1", SCM_PART, "브리핑 2", "반대 2")
+    eng, fake, cid, st = scene2(store, ACCEPT, BRIEF_A, COUNTER_A, SCM_PART, BRIEF_B, COUNTER_B)
     eng.play(st[0])
     eng.write_briefing(cid, "그룹 CEO")
     eng.play(st[1]); eng.play(st[2]); eng.play(st[3])  # SCM 회신으로 분할안이 바뀜
     d = eng.case_detail(cid)
-    assert d["briefing"]["text"] == "브리핑 1" and d["briefing"]["stale"] is True
+    assert d["briefing"]["text"] == BRIEF_A and d["briefing"]["stale"] is True
     n = len(fake.calls)
-    assert eng.write_briefing(cid, "그룹 CEO")["briefing"]["text"] == "브리핑 2" and len(fake.calls) == n + 2
+    assert eng.write_briefing(cid, "그룹 CEO")["briefing"]["text"] == BRIEF_B and len(fake.calls) == n + 2
 
 
 def test_브리핑_실패는_대체_문구와_ok_거짓(store):

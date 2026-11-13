@@ -18,7 +18,7 @@ from app.engine.flow import Engine
 from app.store.db import open_db
 
 sys.path.insert(0, str(Path(__file__).parent))
-from test_flow_11b import ACCEPT, REVIEWS, SCM_PART, SCM_REFUSE  # noqa: E402
+from test_flow_11b import ACCEPT, BRIEF_A, COUNTER_A, REVIEWS, SCM_PART, SCM_REFUSE  # noqa: E402
 
 
 @pytest.fixture
@@ -598,12 +598,12 @@ def test_리뷰와_반품_입력(store):
 
 
 def test_브리핑은_요청할_때만_AI를_부른다(store):
-    c, fake, _, sc, cid = seeded(store, ACCEPT, "브리핑 문장입니다.", "반대 근거 문장입니다.")
+    c, fake, _, sc, cid = seeded(store, ACCEPT, BRIEF_A, COUNTER_A)
     sc.play(sc.steps[0])
     n = len(fake.calls)
     assert ok(c.get(f"/api/cases/{cid}"))["briefing"] is None and len(fake.calls) == n
     r = ok(c.post(f"/api/cases/{cid}/briefing", json={"actor": "그룹 CEO"}))
-    assert r["briefing"]["text"] == "브리핑 문장입니다." and r["counterpoints"]["text"] == "반대 근거 문장입니다."
+    assert r["briefing"]["text"] == BRIEF_A and r["counterpoints"]["text"] == COUNTER_A
     assert ok(c.get(f"/api/cases/{cid}"))["briefing"]["stale"] is False and len(fake.calls) == n + 2
 
 

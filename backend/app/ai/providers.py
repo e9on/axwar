@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Callable, Protocol
 
 from app import config, policy
+from app.ai import prompts
 
 TOKENS_PER_PRICE_UNIT = 1_000_000
 logger = logging.getLogger(__name__)
@@ -227,21 +228,93 @@ def _fake_reply(user: str) -> str:
                        "confidence": 1.0}, ensure_ascii=False)
 
 
-def _fake_writer(user: str) -> str:
-    return "[시연용 초안] " + user.strip()
+def _facts_of(user: str) -> dict[str, str]:
+    """글쓰기 입력("- 이름: 값" 줄들)을 이름 -> 값(글자)으로 읽는다. 같은 이름이 또 나오면 처음 값을 둔다."""
+    out: dict[str, str] = {}
+    for line in user.splitlines():
+        m = re.match(r"^- ([^:]+): (.*)$", line)
+        if m:
+            out.setdefault(m.group(1).strip(), m.group(2).strip())
+    return out
 
 
-_FAKE_RULES = {"review": _fake_review, "reply": _fake_reply, "writer": _fake_writer}
+def _fake_briefing(f: dict[str, str]) -> str:
+    """사실의 지표 판정·분할안·규칙 근거에서 세 줄(권고·이유·주의)을 규칙으로 만든다(시연용, 모델이 아니다)."""
+    rule, bad = f.get("규칙 근거", ""), f.get("지표 판정") == "반대 근거 있음"
+    split = re.search(r"1차 수량 ([\d,]+); .*2차 수량 ([\d,]+)", f.get("분할안", ""))
+    contract = f.get("종류") == "계약"
+    if split:
+        rec = "분할 승인으로 결재하길 권해요."
+    elif bad:
+        rec = "거절하는 쪽을 먼저 검토하길 권해요."
+    else:
+        rec = "승인하길 권해요."
+    window = "하회 구간" in rule
+    if window and bad:
+        why = "집행일이 현금이 모자란 기간 안이고 성과도 나빠요."
+    elif window:
+        why = "집행일이 현금이 모자란 기간 안이에요."
+    elif bad:
+        why = "성과가 하위인데 예산 비중이 커요." if not contract else "성과가 낮은데 계약 금액이 커요."
+    elif "초과" in rule:
+        why = "금액이 커서 높은 결재선이 필요해요."
+    else:
+        why = "규칙상 승인권자가 확인할 건이에요."
+    if split:
+        first, second = split.group(1), split.group(2)
+        care = (f"먼저 {first}개만 집행하고 나머지는 재고 회신 뒤에 정해요." if second.replace(",", "") == "0"
+                else f"{first}개를 먼저, {second}개를 나중에 집행하는 안이에요.")
+    elif f.get("상태") == "회신 대기":
+        care = "부서 회신을 기다리는 중이라 내용이 바뀔 수 있어요."
+    else:
+        care = "결재가 늦으면 기한 전에 기본 거부될 수 있어요."
+    return f"권고: {rec}\n이유: {why}\n주의: {care}"
+
+
+def _fake_counterpoints(f: dict[str, str]) -> str:
+    bad = f.get("지표 판정") == "반대 근거 있음"
+    if f.get("분할안"):
+        cond, check = "한 번에 승인하려면 재고가 충분하다는 확인이 있어야 해요.", "재고 부서 회신으로 수량이 바뀌었는지 보세요."
+    elif bad:
+        cond, check = "승인하려면 성과가 나쁜 이유를 설명할 근거가 있어야 해요.", "지표 근거에 적힌 위험이 풀렸는지 보세요."
+    else:
+        cond, check = "거절하려면 지표에 안 잡힌 다른 위험이 있어야 해요.", "그 위험이 실제 자료로 확인되는지 보세요."
+    return f"반대로 결정하려면: {cond}\n확인할 것: {check}"
+
+
+def _fake_notice(f: dict[str, str]) -> str:
+    """조건변경 통보문 틀: 인사, 변경 요지, 재협상안 두 축(고정 피·성과 피 기준), 회신 요청."""
+    base = f.get("성과 피 기준", "").split(" (")[0]
+    return "\n".join([
+        f"{f.get('인플루언서', '')}님께,",
+        f"안녕하세요. 계약 만료({f.get('계약 만료', '')})를 앞두고 계약 조건 변경을 알려 드립니다.",
+        f"고정 피는 {f.get('연 고정 피(원)', '')}원으로 하고, 성과 피는 {base} 기준으로 정산하는 안을 제안드립니다.",
+        f"공제 항목은 {f.get('공제 항목', '')}입니다.",
+        "내용을 확인하시고 회신 부탁드립니다."])
+
+
+def _fake_writer(system: str, user: str) -> str:
+    """지시문으로 어떤 글인지 가려 같은 형식의 글을 규칙으로 만든다. 입력 자료를 그대로 돌려주지 않는다."""
+    f = _facts_of(user)
+    if system == prompts.BRIEFING_SYSTEM:
+        return _fake_briefing(f)
+    if system == prompts.COUNTERPOINTS_SYSTEM:
+        return _fake_counterpoints(f)
+    return _fake_notice(f)
+
+
+_FAKE_RULES = {"review": _fake_review, "reply": _fake_reply}
 
 
 class _RuleProvider:
     model = "fake"
 
     def __init__(self, task: str):
-        self._rule = _FAKE_RULES[task]
+        self._task = task
 
     def complete(self, system: str, user: str) -> Completion:
-        return Completion(self._rule(user), 0, 0, self.model)
+        text = _fake_writer(system, user) if self._task == "writer" else _FAKE_RULES[self._task](user)
+        return Completion(text, 0, 0, self.model)
 
 
 # ---------------------------------------------------------------- 예비 모델
