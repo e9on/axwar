@@ -665,6 +665,19 @@ def test_frontend_dist가_있으면_루트에_정적_파일(store, tmp_path):
     assert c.get("/api/없는길").status_code == 404
 
 
+def test_화면_주소로_바로_들어오면_index_html을_돌려준다(store, tmp_path):
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<html><body>화면</body></html>", encoding="utf-8")
+    (dist / "assets" / "app.js").write_text("console.log(1)", encoding="utf-8")
+    c, _, _ = client(store, static_dir=dist)
+    r = c.get("/cases/7?as=Masil%20대표")
+    assert r.status_code == 200 and "화면" in r.text  # 화면 경로 새로고침
+    assert "console.log" in c.get("/assets/app.js").text  # 실제 파일은 그대로
+    assert c.get("/assets/없음.js").status_code == 404  # 없는 파일은 화면으로 바꾸지 않음
+    assert c.get("/api/없는길").status_code == 404  # API는 화면으로 바꾸지 않음
+
+
 def test_frontend_dist가_없어도_API는_동작한다(store, tmp_path):
     c, _, _ = client(store, static_dir=tmp_path / "없음")
     assert c.get("/").status_code == 404

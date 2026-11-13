@@ -524,8 +524,22 @@ def create_app(store: Store, engine: Engine, static_dir: str | Path | None = Non
     # ------------------------------------------------------------ 정적 파일(API 경로 뒤에 둔다)
     dist = Path(static_dir) if static_dir is not None else config.frontend_dist()
     if dist.is_dir():
-        app.mount("/", StaticFiles(directory=dist, html=True), name="web")
+        app.mount("/", _SpaFiles(directory=dist, html=True), name="web")
     return app
+
+
+class _SpaFiles(StaticFiles):
+    """화면 정적 파일. 화면 경로(/cases/7 등)로 바로 들어오거나 새로고침하면 index.html을 돌려준다.
+    확장자가 있는 파일 요청(없는 .js 등)과 API 경로는 그대로 404."""
+
+    async def get_response(self, path: str, scope):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as e:
+            last = path.rsplit("/", 1)[-1]
+            if e.status_code != 404 or path.startswith("api") or "." in last:
+                raise
+            return await super().get_response("index.html", scope)
 
 
 def build_app() -> FastAPI:
