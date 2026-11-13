@@ -364,14 +364,14 @@ class Store:
     def get_case(self, case_id: int) -> dict:
         row = self._one("SELECT * FROM cases WHERE id=?", case_id)
         if row is None:
-            raise KeyError(f"없는 사건: {case_id}")
+            raise KeyError(_missing_case(case_id))
         return {**dict(row), "facts": json.loads(row["facts"])}
 
     def set_status(self, case_id: int, status: str, actor: str, note: str) -> None:
         with self._tx() as db:
             row = db.execute("SELECT status FROM cases WHERE id=?", (case_id,)).fetchone()
             if row is None:
-                raise KeyError(f"없는 사건: {case_id}")
+                raise KeyError(_missing_case(case_id))
             db.execute("UPDATE cases SET status=?, updated_at=? WHERE id=?", (status, _now(), case_id))
             self._event(db, case_id, "상태변경", actor, {"from": row[0], "to": status, "note": note})
 
@@ -455,7 +455,7 @@ class Store:
         with self._tx() as db:
             row = db.execute("SELECT facts FROM cases WHERE id=?", (case_id,)).fetchone()
             if row is None:
-                raise KeyError(f"없는 사건: {case_id}")
+                raise KeyError(_missing_case(case_id))
             old = json.loads(row[0])
             new = json.loads(_json(facts))
             keys = sorted(k for k in set(old) | set(new) if old.get(k) != new.get(k))
@@ -842,6 +842,12 @@ class Store:
         with self._tx() as db:
             db.execute("DELETE FROM ai_calls WHERE id=? AND state IN ('예약', '미정산')", (reservation_id,))
 
+
+
+def _missing_case(case_id) -> str:
+    """사용자에게 보이는 '없는 건' 문장: 왜 없는지와 무엇을 하면 되는지(번호는 끝에 작게)."""
+    return ("이 건을 찾을 수 없어요. 시연을 다시 시작했거나 서버가 새로 켜져 데이터가 처음으로 돌아갔을 수 있어요. "
+            f"메인에서 할 일을 다시 열어 주세요. (건 번호 {case_id})")
 
 def open_db(path: str | Path | None = None, today: Callable[[], date] = date.today) -> Store:
     """DB를 연다(폴더·테이블이 없으면 만든다). path를 안 주면 config.db_path()."""
