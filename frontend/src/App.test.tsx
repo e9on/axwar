@@ -64,12 +64,12 @@ describe('화면 골격', () => {
       'GET /api/clock': { json: { date: '2026-07-12', mode: '시연' } },
       'POST /api/clock': { json: { date: '2026-07-13', mode: '시연', actions: [] } },
     })
-    mount('/')
+    mount('/demo')
     await userEvent.click(await screen.findByRole('button', { name: '다음 날로' }))
     await waitFor(() =>
       expect(calls).toContainEqual({ method: 'POST', path: '/api/clock', body: { date: '2026-07-13' } }),
     )
-    expect(await screen.findByText(/2026-07-13/)).toBeInTheDocument()
+    expect((await screen.findAllByText('7월 13일')).length).toBeGreaterThan(0)
   })
 
   it('날짜_입력은_한국어_표시를_요청한다', async () => {
@@ -77,7 +77,7 @@ describe('화면 골격', () => {
       'GET /api/people': { json: PEOPLE },
       'GET /api/clock': { json: { date: '2026-07-12', mode: '시연' } },
     })
-    mount('/')
+    mount('/demo')
     expect(await screen.findByLabelText('이동할 날짜')).toHaveAttribute('lang', 'ko')
   })
 
@@ -87,7 +87,7 @@ describe('화면 골격', () => {
       'GET /api/clock': { json: { date: '2026-07-12', mode: '운영' } },
     })
     mount('/')
-    expect(await screen.findByText(/2026-07-12/)).toBeInTheDocument()
+    expect(await screen.findByText('7월 12일')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '다음 날로' })).toBeNull()
     expect(screen.queryByLabelText('이동할 날짜')).toBeNull()
   })
@@ -101,12 +101,14 @@ describe('화면 골격', () => {
       'GET /api/calendar': { json: [] },
     })
     mount('/')
-    const alert = await screen.findByRole('alert')
+    const alert = (await screen.findAllByRole('alert'))[0]
     expect(alert).toHaveTextContent('기준일을 읽지 못했어요')
     await userEvent.click(screen.getByRole('button', { name: '알림 닫기' }))
     expect(screen.queryByRole('alert')).toBeNull()
   })
 })
+
+const POLICY = { 'GET /api/policy': { json: [] }, 'GET /api/policy/history': { json: [] } }
 
 describe('화면 이동과 모드 전환', () => {
   const clockOf = (mode: string) => ({ date: '2026-07-12', mode })
@@ -118,10 +120,10 @@ describe('화면 이동과 모드 전환', () => {
     })
     mount('/log?as=' + encodeURIComponent('마케팅팀장'))
     const nav = await screen.findByRole('navigation', { name: '화면 이동' })
-    for (const name of ['메인', '회신 입력', '처리 기록', '정책', '등록', '시연']) {
+    for (const name of ['메인', '회신', '기록', '정책', '등록', '시연']) {
       expect(await within(nav).findByRole('link', { name })).toBeInTheDocument()
     }
-    expect(within(nav).getByRole('link', { name: '처리 기록' })).toHaveAttribute('aria-current', 'page')
+    expect(within(nav).getByRole('link', { name: '기록' })).toHaveAttribute('aria-current', 'page')
     expect(within(nav).getByRole('link', { name: '메인' })).not.toHaveAttribute('aria-current')
     // 보는 사람이 링크에 따라간다
     expect(within(nav).getByRole('link', { name: '정책' })).toHaveAttribute('href', '/policy?as=' + encodeURIComponent('마케팅팀장'))
@@ -149,8 +151,9 @@ describe('화면 이동과 모드 전환', () => {
     fakeServer({
       'GET /api/people': { json: PEOPLE },
       'GET /api/clock': { json: clockOf('운영') },
+      ...POLICY,
     })
-    mount('/')
+    mount('/policy')
     await screen.findByText(/운영 모드/)
     expect(screen.queryByRole('link', { name: '시연' })).toBeNull()
     expect(screen.getByRole('link', { name: '정책' })).toBeInTheDocument()
@@ -167,7 +170,7 @@ describe('화면 이동과 모드 전환', () => {
         return { json: { mode } }
       },
     })
-    mount('/?as=' + encodeURIComponent('Masil 대표'))
+    mount('/policy?as=' + encodeURIComponent('Masil 대표'))
     await userEvent.click(await screen.findByRole('button', { name: '모드 전환' }))
     const dlg = await screen.findByRole('dialog')
     expect(dlg).toHaveTextContent('운영 모드로')
@@ -179,17 +182,18 @@ describe('화면 이동과 모드 전환', () => {
     await waitFor(() => expect(calls).toContainEqual({ method: 'PUT', path: '/api/mode', body: { actor: 'Masil 대표', mode: '운영' } }))
     // 바꾼 뒤 기준일·모드를 다시 읽어 시연 링크가 사라진다
     await waitFor(() => expect(screen.queryByRole('link', { name: '시연' })).toBeNull())
-    expect(screen.getByText(/운영 모드/)).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '모드' })).toHaveTextContent('운영 모드')
   })
 
   it('모드_전환_거부는_서버_문장을_창에_보인다', async () => {
     fakeServer({
       'GET /api/people': { json: PEOPLE },
       'GET /api/clock': { json: clockOf('시연') },
+      ...POLICY,
       [PERMISSIONS_ROUTE]: permissionsReply(),
       'PUT /api/mode': { status: 409, json: { detail: '마케팅팀장(마케팅팀)는 실행 모드을(를) 바꿀 수 없음 — Masil 대표·CEO만' } },
     })
-    mount('/?as=' + encodeURIComponent('마케팅팀장'))
+    mount('/policy?as=' + encodeURIComponent('마케팅팀장'))
     await userEvent.click(await screen.findByRole('button', { name: '모드 전환' }))
     const dlg = await screen.findByRole('dialog')
     await userEvent.click(within(dlg).getByRole('button', { name: '운영 모드로 바꾸기' }))
@@ -202,9 +206,10 @@ describe('화면 이동과 모드 전환', () => {
     fakeServer({
       'GET /api/people': { json: PEOPLE },
       'GET /api/clock': { json: clockOf('시연') },
+      ...POLICY,
       [PERMISSIONS_ROUTE]: permissionsReply({ mode: reason }),
     })
-    mount('/?as=' + encodeURIComponent('마케팅팀장'))
+    mount('/policy?as=' + encodeURIComponent('마케팅팀장'))
     expect(await screen.findByText(/Masil 대표·CEO만/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '모드 전환' })).toBeNull()
   })
@@ -213,8 +218,9 @@ describe('화면 이동과 모드 전환', () => {
     fakeServer({
       'GET /api/people': { json: PEOPLE },
       'GET /api/clock': { json: clockOf('시연') },
+      ...POLICY,
     })
-    mount('/?as=' + encodeURIComponent('Masil 대표'))
+    mount('/policy?as=' + encodeURIComponent('Masil 대표'))
     await screen.findByText(/시연 모드/)
     expect(screen.queryByRole('button', { name: '모드 전환' })).toBeNull()
   })

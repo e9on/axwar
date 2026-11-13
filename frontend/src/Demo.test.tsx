@@ -78,7 +78,7 @@ afterEach(() => vi.unstubAllGlobals())
 describe('시연 조작판', () => {
   it('시연_초기화와_장면선택', async () => {
     const { calls } = mount()
-    expect(await screen.findByText('정상으로 승인되는 장면')).toBeInTheDocument()
+    expect(await screen.findByText('회신을 받고 Masil 대표가 승인해요')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: /장면 1\. 정상/ }))
     // 확인 창: 취소하면 아무것도 보내지 않는다
     let dlg = await screen.findByRole('dialog')
@@ -95,15 +95,12 @@ describe('시연 조작판', () => {
     const items = within(steps).getAllByRole('listitem')
     expect(items).toHaveLength(3)
     expect(items[0]).toHaveTextContent('1')
-    expect(items[0]).toHaveTextContent('회신')
-    expect(items[0]).toHaveTextContent('물류')
-    expect(items[2]).toHaveTextContent('결정')
-    expect(items[2]).toHaveTextContent('9월 7일')
+    expect(items[0]).toHaveTextContent('물류가 회신해요')
+    expect(items[2]).toHaveTextContent('Masil 대표가 승인해요')
     expect(items[2]).not.toHaveTextContent('2026-09-07')
     // 날짜·사람이 없는 단계는 그 칸을 비우고 "—"나 "날짜 그대로"를 쓰지 않는다
     expect(items[0]).not.toHaveTextContent('—')
     expect(items[0]).not.toHaveTextContent('날짜 그대로')
-    expect(items[2]).toHaveTextContent('Masil 대표')
     // 초기화 뒤 진행 위치와 기준일을 서버에서 다시 읽는다(다른 화면이 새 날짜로 다시 읽게)
     expect(calls.some((c) => c.method === 'GET' && c.path === '/api/demo/state')).toBe(true)
     expect(calls.filter((c) => c.path === '/api/clock' && c.method === 'GET').length).toBeGreaterThanOrEqual(2)
@@ -111,11 +108,11 @@ describe('시연 조작판', () => {
 
   it('한_단계_진행과_끝까지', async () => {
     const { calls } = await start()
-    await userEvent.click(screen.getByRole('button', { name: '한 단계 진행' }))
+    await userEvent.click(screen.getByRole('button', { name: '다음 단계' }))
     await waitFor(() => expect(calls).toContainEqual({ method: 'POST', path: '/api/demo/play', body: { step: STEPS[0] } }))
     await screen.findByRole('list', { name: '대본 단계' })
     const first = stepItems()[0]
-    expect(await within(first).findByText('진행함')).toBeInTheDocument()
+    await waitFor(() => expect(first).toHaveAttribute('data-done', 'true'))
     expect(first).toHaveTextContent('건 상태: 승인 대기')
     expect(first).toHaveTextContent('AI 해석: 수용')
 
@@ -127,7 +124,7 @@ describe('시연 조작판', () => {
     expect(await within(last).findByText(/미승인 경고 문장/)).toBeInTheDocument()
     expect(last).toHaveTextContent('건 상태: 1차 집행')
     // 다 끝나면 진행 버튼이 잠긴다
-    expect(screen.getByRole('button', { name: '한 단계 진행' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '다음 단계' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '끝까지' })).toBeDisabled()
   })
 
@@ -136,7 +133,7 @@ describe('시연 조작판', () => {
     await userEvent.click(screen.getByRole('button', { name: '끝까지' }))
     await waitFor(() => expect(calls).toContainEqual({ method: 'POST', path: '/api/demo/run', body: { scenario: 'scenario_1', from_step: 0 } }))
     await screen.findByRole('list', { name: '대본 단계' })
-    await waitFor(() => expect(within(stepItems()[2]).getByText('진행함')).toBeInTheDocument())
+    await waitFor(() => expect(stepItems()[2]).toHaveAttribute('data-done', 'true'))
     expect(calls.some((c) => c.path === '/api/demo/play')).toBe(false)
   })
 
@@ -144,24 +141,24 @@ describe('시연 조작판', () => {
     const { calls } = mount('시연', { scenario: 'scenario_1', done: 2 })
     expect(await screen.findByText('2 / 3단계 진행')).toBeInTheDocument()
     const items = stepItems()
-    expect(within(items[0]).getByText('진행함')).toBeInTheDocument()
-    expect(within(items[1]).getByText('진행함')).toBeInTheDocument()
-    expect(within(items[2]).queryByText('진행함')).toBeNull()
+    expect(items[0]).toHaveAttribute('data-done', 'true')
+    expect(items[1]).toHaveAttribute('data-done', 'true')
+    expect(items[2]).toHaveAttribute('data-done', 'false')
     expect(within(items[2]).getByText('다음')).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: '한 단계 진행' }))
+    await userEvent.click(screen.getByRole('button', { name: '다음 단계' }))
     await waitFor(() => expect(calls).toContainEqual({ method: 'POST', path: '/api/demo/play', body: { step: STEPS[2] } }))
     await screen.findByText('3 / 3단계 진행')
   })
 
   it('처음부터는_확인_뒤_다시_초기화한다', async () => {
     const { calls } = await start()
-    await userEvent.click(screen.getByRole('button', { name: '한 단계 진행' }))
-    await screen.findByText('진행함')
+    await userEvent.click(screen.getByRole('button', { name: '다음 단계' }))
+    await waitFor(() => expect(stepItems()[0]).toHaveAttribute('data-done', 'true'))
     await userEvent.click(screen.getByRole('button', { name: '처음부터' }))
     const dlg = await screen.findByRole('dialog')
     await userEvent.click(within(dlg).getByRole('button', { name: '초기화하고 시작' }))
     await waitFor(() => expect(calls.filter((c) => c.path === '/api/demo/reset')).toHaveLength(2))
-    await waitFor(() => expect(screen.queryByText('진행함')).toBeNull())
+    await waitFor(() => expect(stepItems()[0]).toHaveAttribute('data-done', 'false'))
   })
 
   it('기준일_바로_이동_버튼', async () => {
@@ -186,9 +183,9 @@ describe('시연 조작판', () => {
     )
     await userEvent.click(await screen.findByRole('button', { name: /장면 1\. 정상/ }))
     await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: '초기화하고 시작' }))
-    await userEvent.click(await screen.findByRole('button', { name: '한 단계 진행' }))
+    await userEvent.click(await screen.findByRole('button', { name: '다음 단계' }))
     expect((await screen.findAllByText(/서버 거절 문장/)).length).toBeGreaterThan(0)
-    expect(screen.getByRole('button', { name: '한 단계 진행' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '다음 단계' })).toBeEnabled()
   })
 
   it('운영_모드에서는_시연_조작판이_없다', async () => {

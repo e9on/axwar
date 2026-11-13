@@ -3,6 +3,8 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import App from './App'
+import { mountPage } from './test/pageMount'
+import RepliesPage from './pages/Replies'
 import { fakeServer } from './test/fakeServer'
 
 const PEOPLE = [
@@ -211,7 +213,7 @@ describe('회신 입력', () => {
 
   it('기준일이_바뀌면_목록을_다시_읽는다', async () => {
     const { calls } = base({ 'POST /api/clock': { json: { date: '2026-09-06', mode: '시연' } } })
-    mount()
+    mountPage(<RepliesPage />, '/replies?as=' + encodeURIComponent('물류 담당자'), '/replies', '2026-09-06')
     await screen.findByRole('button', { name: /DEMO-PLAN-001/ })
     expect(calls.filter((c) => c.path === MINE)).toHaveLength(1)
     await userEvent.click(screen.getByRole('button', { name: '다음 날로' }))

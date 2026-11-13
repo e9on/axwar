@@ -6,7 +6,8 @@ export type Call = { method: string; path: string; body?: unknown }
 type Reply = { status?: number; json?: unknown; wait?: Promise<void> } | Error
 
 /** fetch를 가짜로 바꾼다. 길(method+경로)마다 답을 정하고, 부른 기록을 남긴다. */
-export function fakeServer(routes: Record<string, Reply | (() => Reply)>) {
+export function fakeServer(given: Record<string, Reply | (() => Reply)>) {
+  const routes: Record<string, Reply | (() => Reply)> = { 'GET /api/cases': { json: [] }, ...given } // 일정 이름용 건 목록은 비어 있어도 되는 길
   const calls: Call[] = []
   const fn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const method = (init?.method ?? 'GET').toUpperCase()
