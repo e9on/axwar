@@ -1,11 +1,15 @@
 import { useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import { useClock } from '../state/clock'
 import { useDemoRun } from '../state/demoRun'
+import { useViewer } from '../state/viewer'
 import { useLoad } from '../state/useLoad'
 import { DEMO_MODE } from '../decisions'
-import { koDate } from '../date'
-import { actionLine } from '../format'
+import { addDays, koDate } from '../date'
+import { DECISION_ACTIONS, plainLine, sceneSummary, shortTitle, stepSentence } from '../copy'
+import { actionLine, josa } from '../format'
+import type { CaseListRow } from '../caseTypes'
 import type { DemoState, Scenario, ScenarioStep, StepOutcome } from '../adminTypes'
 import FormDialog from '../components/FormDialog'
 import LoadFailed from '../components/LoadFailed'
@@ -14,25 +18,21 @@ import './Admin.css'
 /** 단계 하나의 결과를 몇 줄 글로. 서버 응답에 있는 항목만 쓴다 */
 function outcomeLines(o: StepOutcome): string[] {
   const lines: string[] = []
-  if (o.ignored) lines.push(`저장하지 않았어요: ${o.reason ?? '이미 처리된 요청'}`)
+  if (o.ignored) lines.push(`저장하지 않았어요: ${plainLine(o.reason ?? '', 80) || '이미 처리된 요청'}`)
   if (o.status) lines.push(`건 상태: ${o.status}${o.changed === false ? ' (그대로)' : ''}`)
   if (o.judgment?.stance) lines.push(`AI 해석: ${o.judgment.stance}`)
-  for (const a of o.actions ?? []) lines.push(actionLine(a))
+  for (const a of o.actions ?? []) lines.push(actionLine({ ...a, text: plainLine(a.text, 80) }))
   if (lines.length === 0) lines.push('바뀐 것이 없어요')
   return lines
 }
 
-function who(step: ScenarioStep): string {
-  return step.actor ?? step.dept ?? ''
-}
-
-function target(step: ScenarioStep): string {
-  return step.plan ?? step.contract ?? ''
-}
-
 function DemoPanel() {
   const { date, refresh, advance } = useClock()
+  const { setPerson } = useViewer()
+  const navigate = useNavigate()
   const { run, setRun } = useDemoRun()
+  const caseRows = useLoad<CaseListRow[]>('/api/cases', [])
+  const [target, setTarget] = useState('')
   const scenes = useLoad<Scenario[]>('/api/demo/scenarios', [])
   const position = useLoad<DemoState>('/api/demo/state', [])
   const [asking, setAsking] = useState<Scenario | null>(null)
@@ -106,10 +106,35 @@ function DemoPanel() {
       }
     })
 
+  const byRef = new Map((caseRows.data ?? []).map((c) => [c.ref_id, c]))
+  const nameOf = (ref: string | undefined) => (ref ? shortTitle(byRef.get(ref)?.title, ref) : '')
+  const nextStep = active && !finished ? script[done] : undefined
+  const guide = nextStep && DECISION_ACTIONS.includes(nextStep.action) && nextStep.actor ? nextStep : undefined
+  const guideCase = guide?.plan ? byRef.get(guide.plan) : undefined
+  const fullName = guideCase?.title || guideCase?.ref_id || ''
+  const goAs = () => {
+    if (!guide?.actor || !guideCase) return
+    setPerson(guide.actor)
+    navigate(`/cases/${guideCase.id}?as=${encodeURIComponent(guide.actor)}`)
+  }
+
   return (
     <main className="admin">
       <h1>시연 조작판</h1>
-      <p className="lead">장면을 고르면 시연 데이터를 지우고 처음부터 시작해요. 한 단계씩 또는 끝까지 진행하면 메인과 건 상세가 새 기준일로 다시 읽혀요.</p>
+      <p className="lead">장면을 고르고 단계를 하나씩 진행하세요.</p>
+
+      <section className="date-line" aria-label="기준일">
+        <span>
+          기준일 <b>{date ? koDate(date) : '불러오는 중'}</b>
+        </span>
+        <button type="button" className="btn small" disabled={!date} onClick={() => date && advance(addDays(date, 1))} title="기준일을 하루 뒤로 옮겨요">
+          다음 날로
+        </button>
+        <input type="date" lang="ko" aria-label="이동할 날짜" value={target} onChange={(e) => setTarget(e.target.value)} />
+        <button type="button" className="btn small" disabled={!target} onClick={() => advance(target)}>
+          날짜로 이동
+        </button>
+      </section>
 
       <section aria-label="장면 목록">
         <h2>장면</h2>
@@ -127,7 +152,7 @@ function DemoPanel() {
               <li key={s.name}>
                 <button type="button" className="scene" aria-pressed={s.name === where?.scenario} disabled={busy} onClick={() => setAsking(s)}>
                   <span className="k">{s.title}</span>
-                  <span className="sub" title={s.description}>{s.description}</span>
+                  <span className="sub">{sceneSummary(s.name, s.description)}</span>
                 </button>
               </li>
             ))}
@@ -138,10 +163,13 @@ function DemoPanel() {
       {active && (
         <section aria-label="진행">
           <h2>{active.title}</h2>
-          <p className="scene-desc">{active.description}</p>
+          <details className="scene-more">
+            <summary>자세히</summary>
+            <p className="scene-desc">{active.description}</p>
+          </details>
           <div className="bar-tools">
             <button type="button" className="btn pri" disabled={busy || finished} onClick={playOne}>
-              한 단계 진행
+              다음 단계
             </button>
             <button type="button" className="btn" disabled={busy || finished} onClick={playAll}>
               끝까지
@@ -159,9 +187,21 @@ function DemoPanel() {
             </p>
           )}
 
+          {guide && guideCase && guide.actor && (
+            <p className="guide">
+              <span>
+                이제 {josa(guide.actor, '로')} 바꿔 {fullName}
+                {josa(fullName, '은').endsWith('은') ? '을' : '를'} 열어 보세요.
+              </span>
+              <button type="button" className="btn small" onClick={goAs}>
+                {josa(guide.actor, '로')} 바꿔 열기
+              </button>
+            </p>
+          )}
+
           {dates.length > 0 && (
             <div className="bar-tools">
-              <span className="muted">기준일 바로 이동</span>
+              <span className="muted">대본 날짜로 이동</span>
               <span className="dates">
                 {dates.map((d) => (
                   <button
@@ -182,17 +222,15 @@ function DemoPanel() {
           <ul className="ledger steps" aria-label="대본 단계">
             {script.map((s, i) => {
               const out = outcomes[i]
-              const next = i === done
+              const next = i === done && !finished
+              const target = nameOf(s.plan ?? s.contract)
               return (
-                <li key={i} data-next={next}>
-                  <span className="no">{i + 1}</span>
+                <li key={i} data-next={next} data-done={i < done}>
+                  <span className="no">{i < done ? '✓' : i + 1}</span>
                   <div>
-                    <span className="k">{s.action}</span>
-                    {i < done && <span className="state">진행함</span>}
-                    {next && !finished && <span className="next">다음</span>}
-                    <div className="sub">
-                      {[s.date ? koDate(s.date) : '', who(s), target(s)].filter(Boolean).join(' · ')}
-                    </div>
+                    <span className="k">{stepSentence(s)}</span>
+                    {next && <span className="next">다음</span>}
+                    {target && <div className="sub">{target}</div>}
                     {out && (
                       <ul className="result">
                         {outcomeLines(out).map((line, j) => (

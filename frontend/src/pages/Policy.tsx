@@ -7,6 +7,7 @@ import { anyValue, num } from '../format'
 import { ASSUMPTION_PREFIX } from '../decisions'
 import type { PolicyChangeRow, PolicyItem } from '../adminTypes'
 import Badge from '../components/Badge'
+import ModeControl from '../components/ModeControl'
 import FormDialog from '../components/FormDialog'
 import LoadFailed from '../components/LoadFailed'
 import './Admin.css'
@@ -93,7 +94,8 @@ export default function Policy() {
   return (
     <main className="admin">
       <h1>정책 설정</h1>
-      <p className="lead">기준 값과 그 출처예요. 값을 고치면 이유와 함께 변경 이력에 남아요.</p>
+      <p className="lead">고칠 기준 값을 찾아 고치세요. 이유와 함께 이력에 남아요.</p>
+      <ModeControl />
       {perm && !perm.allowed && <p className="note">{perm.reason ?? '이 사람은 정책을 고칠 수 없어요'}</p>}
       {notice && (
         <p className="note" role="status">

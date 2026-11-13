@@ -1,5 +1,6 @@
 import { useId, useState, type ReactNode } from 'react'
 import Badge from './Badge'
+import Fold from './Fold'
 import { anyValue, splitPath, unitValue } from '../format'
 import type { Detail, EvidenceData, IndicatorLine, SignalLine } from '../caseTypes'
 import './EvidenceList.css'
@@ -110,7 +111,7 @@ export function Row({ id, open, toggle, detail, note, kind, assumed, superseded,
   )
 }
 
-function signalValue(s: SignalLine): string {
+export function signalValue(s: SignalLine): string {
   return s.value === null || s.level === 'unmeasurable' ? '측정 불가' : unitValue(s.value, s.unit)
 }
 
@@ -118,6 +119,11 @@ function indicatorValue(i: IndicatorLine): string {
   if (i.value === null) return '측정 불가'
   const v = typeof i.value === 'boolean' ? (i.value ? '있음' : '없음') : unitValue(i.value, i.unit)
   return i.rank !== null && i.of !== null ? `${v} (${i.rank}위/${i.of})` : v
+}
+
+function signalSummary(signals: SignalLine[]): string {
+  const n = (lv: SignalLine['level']) => signals.filter((s) => s.level === lv).length
+  return `나쁨 ${n('red')}건 · 주의 ${n('yellow')}건 · 좋음 ${n('green')}건`
 }
 
 export default function EvidenceList({ data }: { data: EvidenceData }) {
@@ -143,8 +149,7 @@ export default function EvidenceList({ data }: { data: EvidenceData }) {
 
   return (
     <div className="evidence">
-      <section aria-labelledby={rid('h-rule')}>
-        <h3 id={rid('h-rule')}>왜 이 사람이 결재하나</h3>
+      <Fold title="결재 이유" summary={ruleLines.length === 0 ? '이유가 아직 없어요' : `${ruleLines.length}개`}>
         {ruleLines.length === 0 ? (
           <p className="muted">결재선 이유가 아직 없어요</p>
         ) : (
@@ -163,17 +168,15 @@ export default function EvidenceList({ data }: { data: EvidenceData }) {
             ))}
           </ul>
         )}
-      </section>
+      </Fold>
 
       {!data.available ? (
-        <section>
-          <h3>지표 근거</h3>
+        <Fold title="지표 근거" summary="만들 수 없어요">
           <p className="muted">{data.reason ?? '이 건은 지표 근거를 만들 수 없어요'}</p>
-        </section>
+        </Fold>
       ) : (
         <>
-          <section aria-labelledby={rid('h-sig')}>
-            <h3 id={rid('h-sig')}>위험 신호</h3>
+          <Fold title="위험 신호" summary={signalSummary(data.signals)}>
             <div className="ehead signal">
               <span>신호</span>
               <span>지표</span>
@@ -193,16 +196,15 @@ export default function EvidenceList({ data }: { data: EvidenceData }) {
                     <span className="ecell cmp">
                       <Badge kind={s.badge} />
                       {s.compare}
-                      {s.judgment === '참고' && <span className="muted"> · 판정에는 쓰지 않음</span>}
+                      {s.judgment === '참고' && <span className="muted"> · 참고용</span>}
                     </span>
                   </Row>
                 )
               })}
             </ul>
-          </section>
+          </Fold>
 
-          <section aria-labelledby={rid('h-key')}>
-            <h3 id={rid('h-key')}>핵심 지표</h3>
+          <Fold title="핵심 지표" summary={`${data.key_indicators.length}개`}>
             <ul className="elist">
               {data.key_indicators.map((k) => (
                 <Row key={k.key} {...props(`key-${k.key}`)} detail={k.detail} kind="indicator" assumed={k.badge === '가정'}>
@@ -215,10 +217,9 @@ export default function EvidenceList({ data }: { data: EvidenceData }) {
                 </Row>
               ))}
             </ul>
-          </section>
+          </Fold>
 
-          <section aria-labelledby={rid('h-cost')}>
-            <h3 id={rid('h-cost')}>비용 분해</h3>
+          <Fold title="비용 분해" summary={`${data.cost_breakdown.rows.length}개 항목`}>
             <p className="note">{data.cost_breakdown.note}</p>
             <ul className="elist">
               {data.cost_breakdown.rows.map((r) => (
@@ -231,12 +232,10 @@ export default function EvidenceList({ data }: { data: EvidenceData }) {
                 </Row>
               ))}
             </ul>
-          </section>
-
-          {data.breakeven && (
-            <section aria-labelledby={rid('h-be')}>
-              <h3 id={rid('h-be')}>본전 조건</h3>
-              <ul className="elist">
+            {data.breakeven && (
+              <>
+                <p className="dh-line">본전 조건</p>
+                <ul className="elist">
                 <Row {...props('be')} detail={data.breakeven.detail} kind="indicator" assumed={data.breakeven.badge === '가정'}>
                   <span className="ecell">{data.breakeven.label}</span>
                   <span className="ecell n">{data.breakeven.value === null ? '측정 불가' : unitValue(data.breakeven.value, data.breakeven.unit ?? 'ratio')}</span>
@@ -245,13 +244,13 @@ export default function EvidenceList({ data }: { data: EvidenceData }) {
                     {data.breakeven.compare}
                   </span>
                 </Row>
-              </ul>
-            </section>
-          )}
+                </ul>
+              </>
+            )}
+            {data.attribution_note && <p className="limit">측정 한계: {data.attribution_note}</p>}
+          </Fold>
         </>
       )}
-
-      {data.attribution_note && <p className="limit">측정 한계: {data.attribution_note}</p>}
     </div>
   )
 }

@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import Badge from './Badge'
-import type { AiText, ApproverChange, CaseDetailData, CaseEvent, CaseRequest, Escalation, ReplyJudgment } from '../caseTypes'
+import Fold from './Fold'
+import { signalValue } from './EvidenceList'
+import { RULE_LABEL, RULE_LABEL_FALLBACK, changeLine } from '../copy'
+import type { AiText, ApproverChange, CaseDetailData, CaseEvent, CaseRequest, Escalation, EvidenceData, ReplyJudgment } from '../caseTypes'
 import { koDate } from '../date'
 
 /** 결재선이 바뀐 이력: 상신은 "A → B, 상신(의견): 이유", 그 밖의 권한 이동은 "A → B: 이유" */
@@ -21,6 +24,22 @@ export function ChangeLines({ escalations, changes }: { escalations: Escalation[
         </li>
       ))}
     </ul>
+  )
+}
+
+/** 결재선 변경: 한 줄(가장 최근)만 접혀 있고, 펼치면 원문 목록 */
+export function ChangeFold({ escalations, changes }: { escalations: Escalation[]; changes: ApproverChange[] }) {
+  const other = changes.filter((c) => !c.reason.startsWith('상신'))
+  const all = [
+    ...escalations.map((e) => ({ from: e.from, to: e.to, at: e.at })),
+    ...other.map((c) => ({ from: c.before.join('·'), to: c.after.join('·'), at: c.at.slice(0, 10) })),
+  ]
+  if (all.length === 0) return null
+  const last = [...all].sort((a, b) => a.at.localeCompare(b.at))[all.length - 1]
+  return (
+    <Fold title={changeLine(last.from, last.to, last.at) + (all.length > 1 ? ` 외 ${all.length - 1}건` : '')}>
+      <ChangeLines escalations={escalations} changes={changes} />
+    </Fold>
   )
 }
 
@@ -74,13 +93,13 @@ export function Requests({ requests }: { requests: CaseRequest[] }) {
   )
 }
 
-type AiProps = { title: string; text: AiText | null; canMake: boolean; making?: boolean; onMake?: () => void; emptyHint: string }
+type AiProps = { title: string; bare?: boolean; text: AiText | null; canMake: boolean; making?: boolean; onMake?: () => void; emptyHint: string }
 
 /** AI가 쓴 글(브리핑·반대 근거). AI 배지, 모델과 날짜, 낡았으면 다시 만들어야 한다는 문장. */
-export function AiBlock({ title, text, canMake, making, onMake, emptyHint }: AiProps) {
+export function AiBlock({ title, bare, text, canMake, making, onMake, emptyHint }: AiProps) {
   return (
     <section className="ai">
-      <h3>{title}</h3>
+      {!bare && <h3>{title}</h3>}
       {text ? (
         <div className="brief">
           <p>
@@ -137,12 +156,15 @@ export function History({ events }: { events: CaseEvent[] }) {
   )
 }
 
+export function openTasks(detail: CaseDetailData) {
+  return detail.tasks.filter((t) => t.status === '대기')
+}
+
 export function Tasks({ detail }: { detail: CaseDetailData }) {
-  const open = detail.tasks.filter((t) => t.status === '대기')
+  const open = openTasks(detail)
   if (open.length === 0) return null
   return (
     <>
-      <h3>남은 작업</h3>
       <ul className="tasks">
         {open.map((t) => (
           <li key={t.id}>
@@ -151,5 +173,55 @@ export function Tasks({ detail }: { detail: CaseDetailData }) {
         ))}
       </ul>
     </>
+  )
+}
+
+const FIRST_SENTENCE = /^.*?[.!?。](?=\s|$)/
+
+/** 핵심 세 줄: 왜 이 사람이 결재하나 / 가장 큰 위험 / AI 의견. 이름표와 값만, 원문은 아래 접힌 칸에 있다 */
+export function KeyLines({ detail, evidence, canMake, making, onMake }: { detail: CaseDetailData; evidence: EvidenceData | null; canMake: boolean; making: boolean; onMake: () => void }) {
+  const hits = evidence ? [...evidence.rule.approver_hits, ...evidence.rule.phase2_approver_hits].filter((h) => !h.superseded) : []
+  const tags = Array.from(new Set(hits.map((h) => RULE_LABEL[h.rule_id] ?? RULE_LABEL_FALLBACK))).slice(0, 2)
+  const reds = evidence ? evidence.signals.filter((s) => s.level === 'red').slice(0, 3) : []
+  const b = detail.briefing
+  const first = b && b.ok ? (FIRST_SENTENCE.exec(b.text)?.[0] ?? b.text) : ''
+  return (
+    <dl className="keylines" aria-label="핵심">
+      <div>
+        <dt>왜 이 결재선</dt>
+        <dd>{tags.length > 0 ? tags.map((t) => <span className="tag" key={t}>{t}</span>) : <span className="muted">{detail.rule.required_roles.join('·')}</span>}</dd>
+      </div>
+      <div>
+        <dt>가장 큰 위험</dt>
+        <dd>
+          {!evidence ? (
+            <span className="muted">불러오는 중…</span>
+          ) : reds.length > 0 ? (
+            reds.map((s) => (
+              <span className="tag red" key={s.key}>
+                {s.label} {signalValue(s)}
+              </span>
+            ))
+          ) : (
+            <span className="muted">나쁨으로 나온 신호가 없어요</span>
+          )}
+        </dd>
+      </div>
+      <div>
+        <dt>AI 의견</dt>
+        <dd>
+          {first ? (
+            <span>{first}</span>
+          ) : (
+            <span className="muted">아직 없어요</span>
+          )}
+          {canMake && (!b || b.stale || !b.ok) && (
+            <button type="button" className="btn-sm" disabled={making} onClick={onMake}>
+              {making ? '만드는 중…' : b ? 'AI 브리핑 다시 만들기' : 'AI 브리핑 만들기'}
+            </button>
+          )}
+        </dd>
+      </div>
+    </dl>
   )
 }

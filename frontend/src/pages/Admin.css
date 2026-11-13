@@ -77,3 +77,13 @@
   .ledger .acts { justify-content: flex-start; }
   .ledger .label { display: inline; color: var(--c-ink-3); font-size: var(--t-1); margin-right: var(--s-2); }
 }
+
+/* 화면 첫 줄 도구: 기준일 이동(시연 조작판), 모드 줄(정책) */
+.date-line, .mode-line { display: flex; flex-wrap: wrap; gap: var(--s-2) var(--s-3); align-items: center; margin: 0 0 var(--s-3); color: var(--c-ink-2); }
+.date-line b { color: var(--c-ink); }
+.date-line input[type="date"] { padding: var(--s-1) var(--s-2); border: 1px solid var(--c-rule); border-radius: var(--r-2); background: var(--c-sheet); }
+.scene-more { margin: 0 0 var(--s-2); }
+.scene-more summary { cursor: pointer; color: var(--c-navy); font-size: var(--t-1); }
+.guide { display: flex; flex-wrap: wrap; gap: var(--s-2) var(--s-3); align-items: center; margin: var(--s-3) 0; padding: var(--s-2) var(--s-3); border-left: 3px solid var(--c-navy); background: var(--c-navy-soft); }
+.steps li[data-done="true"] .k { color: var(--c-ink-3); }
+.steps li[data-done="true"] .no { color: var(--c-ok); }

@@ -1,5 +1,5 @@
 /* 건 상세 (시안 A 결재판) */
-.case { max-width: 1080px; margin: 0 auto; padding-bottom: calc(var(--s-8) + var(--s-7) + var(--s-5)); }
+.case { max-width: 1080px; margin: 0 auto; padding-bottom: var(--s-7); }
 .case .back { display: inline-block; margin-bottom: var(--s-3); color: var(--c-navy); }
 .case .muted { color: var(--c-ink-3); }
 .case .missing { color: var(--c-seal); }
@@ -17,6 +17,18 @@
 .head .facts { display: flex; flex-wrap: wrap; gap: var(--s-1) var(--s-5); color: var(--c-ink-2); }
 .head .facts b { color: var(--c-ink); font-weight: var(--w-bold); }
 .demo { margin: 0 0 var(--s-2); color: var(--c-ink-2); font-size: var(--t-1); }
+.demo summary { cursor: pointer; }
+.demo p { margin: var(--s-1) 0 0; }
+
+/* 핵심 세 줄 */
+.keylines { margin: 0 0 var(--s-3); border-top: 1px solid var(--c-rule); }
+.keylines > div { display: grid; grid-template-columns: minmax(7em, 11em) minmax(0, 1fr); gap: var(--s-3); padding: var(--s-2) var(--s-1); border-bottom: 1px solid var(--c-rule); align-items: baseline; }
+.keylines dt { font-weight: var(--w-bold); color: var(--c-ink-2); }
+.keylines dd { margin: 0; display: flex; flex-wrap: wrap; gap: var(--s-1) var(--s-2); align-items: baseline; }
+.keylines .tag { border: 1px solid var(--c-rule-strong); border-radius: var(--r-1); padding: 0 var(--s-2); background: var(--c-paper); }
+.keylines .tag.red { border-color: var(--c-seal); color: var(--c-seal); background: var(--c-seal-soft); font-weight: var(--w-bold); }
+.keylines .btn-sm { margin-top: 0; }
+@media (max-width: 760px) { .keylines > div { grid-template-columns: minmax(0, 1fr); gap: var(--s-1); } }
 .demo-tag { color: var(--c-warn); background: var(--c-warn-soft); border: 1px solid var(--c-warn); border-radius: var(--r-1); padding: 0 var(--s-2); margin-right: var(--s-1); }
 
 /* 결재란 */
@@ -63,7 +75,6 @@
 .history li { padding: var(--s-1) 0; border-bottom: 1px solid var(--c-rule); font-size: var(--t-1); overflow-wrap: anywhere; }
 
 @media (max-width: 900px) {
-  .case { padding-bottom: calc(var(--s-8) * 2 + var(--s-5)); }
   .doc { padding: var(--s-4); }
   .head { grid-template-columns: minmax(0, 1fr); }
   .stamps { grid-template-columns: repeat(var(--n), minmax(0, 1fr)); width: 100%; max-width: calc(var(--n) * var(--s-8) * 2); }

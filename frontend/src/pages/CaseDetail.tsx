@@ -4,16 +4,17 @@ import { api } from '../api'
 import { useClock } from '../state/clock'
 import { useViewer } from '../state/viewer'
 import { useLoad } from '../state/useLoad'
-import { daysBetween, koDate } from '../date'
+import { koDate } from '../date'
 import { num, won } from '../format'
-import { KIND_CONTRACT, S_DEFAULT_DENY, ST_PHASE2_WAIT } from '../decisions'
+import { KIND_CONTRACT, ST_PHASE2_WAIT } from '../decisions'
 import type { CaseDetailData, EvidenceData } from '../caseTypes'
 import ApprovalStamps from '../components/ApprovalStamps'
 import Badge from '../components/Badge'
 import DecisionPanel from '../components/DecisionPanel'
 import EvidenceList from '../components/EvidenceList'
 import LoadFailed from '../components/LoadFailed'
-import { AiBlock, ChangeLines, History, Requests, Tasks } from '../components/CaseSections'
+import Fold from '../components/Fold'
+import { AiBlock, ChangeFold, History, KeyLines, Requests, Tasks, openTasks } from '../components/CaseSections'
 import './CaseDetail.css'
 
 const ORIGIN_DEMO = '시연' // 서버 출처 이름
@@ -27,50 +28,33 @@ function adjustedAmount(d: CaseDetailData): number | null {
   return base - (dec.amount_before - dec.amount_after)
 }
 
-type ClockProps = { prefix?: string; waiting: boolean; status: string; today: string | null; deny: string | null; last: string | null }
+const FIRST = /^.*?[.!?。](?=\s|$)/
+function firstLine(text: string): string {
+  return FIRST.exec(text)?.[0] ?? text
+}
 
-/** 기본 거부까지 남은 날. 기다리는 중이면 큰 숫자(도장색)와 문장, 아니면 결과 문장. */
-function DenyClock({ prefix = '', waiting, status, today, deny, last }: ClockProps) {
-  if (!waiting) {
-    return (
-      <div className="clock" aria-label={`${prefix}남은 날`}>
-        <p>
-          {status === S_DEFAULT_DENY && deny
-            ? `${prefix}기본 거부 날(${koDate(deny)})까지 승인이 없어 확정 보류됐어요.`
-            : `${prefix}결정이 끝났어요. 지금 상태: ${status}`}
-        </p>
-      </div>
-    )
-  }
-  if (!deny || !today) return null
-  const days = daysBetween(today, deny)
-  return (
-    <div className="clock" aria-label={`${prefix}남은 날`}>
-      <span className="big">{days < 0 ? '지남' : days === 0 ? '오늘' : `${days}일`}</span>
-      <p>
-        {days < 0 ? (
-          <>
-            {prefix}기본 거부 날 <b>{koDate(deny)}</b>이 지났어요. 기한이 지나 결정할 수 없고 기본 거부로 처리돼요.
-          </>
-        ) : (
-          <>
-            {prefix}승인이 없으면 <b>{koDate(deny)}에 기본 거부</b>로 확정 보류됩니다.
-            {last && (
-              <>
-                {' '}마지막 승인일은 <b>{koDate(last)}</b>입니다.
-              </>
-            )}
-          </>
-        )}
-      </p>
-    </div>
-  )
+function requestSummary(d: CaseDetailData): string {
+  if (d.requests.length === 0) return '요청 없음'
+  const replies = d.requests.reduce((n, r) => n + r.replies.length, 0)
+  return `요청 ${d.requests.length}건 · 회신 ${replies}건`
+}
+
+function phase2Summary(d: CaseDetailData): string {
+  const p = d.phase2
+  if (!p) return ''
+  if (p.plan) return `2차 ${num(p.plan.qty)}개${p.plan.date ? ` · ${koDate(p.plan.date)}` : ''}`
+  return p.gate.open ? '열 수 있어요' : '아직 열 수 없어요'
+}
+
+function historySummary(d: CaseDetailData): string {
+  const last = d.history[d.history.length - 1]
+  return last ? `${d.history.length}건 · 마지막 ${koDate(last.sim_date)}` : '기록 없음'
 }
 
 export default function CaseDetailPage() {
   const { id } = useParams()
   const { person, failed: viewerFailed, retry: retryViewer } = useViewer()
-  const { version, date: today } = useClock()
+  const { version } = useClock()
   const [making, setMaking] = useState(false)
 
   const detailPath = person ? `/api/cases/${id}?viewer=${encodeURIComponent(person.name)}` : null
@@ -153,9 +137,12 @@ export default function CaseDetailPage() {
             </span>
             <h1>{c.title || c.ref_id}</h1>
             {c.origin === ORIGIN_DEMO && note && (
-              <p className="demo">
-                <b className="demo-tag">시연용 가정</b> {note}
-              </p>
+              <details className="demo">
+                <summary>
+                  <b className="demo-tag">시연용 가정</b>
+                </summary>
+                <p>{note}</p>
+              </details>
             )}
             <div className="facts">
               {contract ? (
@@ -181,71 +168,16 @@ export default function CaseDetailPage() {
                   {contract ? '계약 만료' : '집행일'} <b>{koDate(shownDay)}</b>
                 </span>
               )}
-              {d.deadline && (
-                <span>
-                  {contract ? '통보 기한' : '확정 기한'} <b>{koDate(d.deadline)}</b>
-                </span>
-              )}
-              <span>
-                상태 <b>{status}</b>
-              </span>
             </div>
           </div>
           <ApprovalStamps label="결재란" roles={d.rule.required_roles} approved={d.rule.approved_roles} viewerRole={viewerRole} canAct={!phase2Wait && !!d.viewer?.can_decide} status={status} stage={c.stage} />
         </div>
 
-        <ChangeLines escalations={d.escalations} changes={d.approver_changes} />
+        <DecisionPanel detail={d} actor={person?.name ?? ''} onDone={reload} />
 
-        <DenyClock
-          waiting={d.rule.pending_roles.length > 0}
-          status={status}
-          today={today}
-          deny={d.deny_date}
-          last={d.approval_deadline}
-        />
+        <KeyLines detail={d} evidence={evidence.data} canMake={canMakeBriefing} making={making} onMake={makeBriefing} />
 
-        {d.phase2 && (
-          <section className="phase2" aria-labelledby="p2-h">
-            <h3 id="p2-h">2차 집행</h3>
-            <p>
-              <Link to={`/cases/${id}/phase2` + (person ? `?as=${encodeURIComponent(person.name)}` : '')}>2차 집행 관찰 화면 열기</Link>
-            </p>
-            {d.phase2.plan && (
-              <p>
-                2차 계획 <b>{num(d.phase2.plan.qty)}개</b>
-                {d.phase2.plan.date && <> · {koDate(d.phase2.plan.date)}</>}
-                {d.phase2.plan.amount_krw !== undefined && <> · {won(d.phase2.plan.amount_krw)}</>}
-              </p>
-            )}
-            <p className="muted">
-              {d.phase2.gate.open ? '2차 집행을 열 수 있어요' : `2차는 아직 열 수 없어요${d.phase2.gate.reasons?.length ? `: ${d.phase2.gate.reasons.join(', ')}` : ''}`}
-            </p>
-            {d.phase2.hits.length > 0 && (
-              <ul className="phase2-hits">
-                {d.phase2.hits.map((h, i) => (
-                  <li key={i}>
-                    <Badge kind={h.badge} />
-                    {h.text}
-                  </li>
-                ))}
-              </ul>
-            )}
-            {d.phase2.required_roles.length > 0 && (
-              <ApprovalStamps
-                label="2차 결재란"
-                roles={d.phase2.required_roles}
-                approved={d.phase2.approved_roles}
-                viewerRole={viewerRole}
-                canAct={phase2Wait && !!d.viewer?.can_decide_phase2}
-                status={status}
-                stage={c.stage}
-              />
-            )}
-            {phase2Wait && (
-              <DenyClock prefix="2차 " waiting={d.phase2.pending_roles.length > 0} status={status} today={today} deny={d.phase2.deny_date} last={d.phase2.approval_deadline} />
-            )}
-          </section>
-        )}
+        <ChangeFold escalations={d.escalations} changes={d.approver_changes} />
 
         {evidence.data ? (
           <EvidenceList data={evidence.data} />
@@ -257,25 +189,73 @@ export default function CaseDetailPage() {
           </p>
         )}
 
-        <h3>부서 요청과 회신</h3>
-        <Requests requests={d.requests} />
+        <Fold title="부서 회신" summary={requestSummary(d)}>
+          <Requests requests={d.requests} />
+        </Fold>
 
-        <AiBlock
-          title="AI 브리핑"
-          text={d.briefing}
-          canMake={canMakeBriefing}
-          making={making}
-          onMake={makeBriefing}
-          emptyHint="아직 AI 브리핑이 없어요. 결재할 수 있는 사람이 만들 수 있어요."
-        />
-        <AiBlock title="반대 근거" text={d.counterpoints} canMake={false} emptyHint="아직 반대 근거가 없어요." />
+        {d.phase2 && (
+          <Fold title="2차 집행" summary={phase2Summary(d)}>
+            <section className="phase2" aria-label="2차 집행 내용">
+              <p>
+                <Link to={`/cases/${id}/phase2` + (person ? `?as=${encodeURIComponent(person.name)}` : '')}>2차 집행 관찰 화면 열기</Link>
+              </p>
+              {d.phase2.plan && (
+                <p>
+                  2차 계획 <b>{num(d.phase2.plan.qty)}개</b>
+                  {d.phase2.plan.date && <> · {koDate(d.phase2.plan.date)}</>}
+                  {d.phase2.plan.amount_krw !== undefined && <> · {won(d.phase2.plan.amount_krw)}</>}
+                </p>
+              )}
+              <p className="muted">
+                {d.phase2.gate.open ? '2차 집행을 열 수 있어요' : `2차는 아직 열 수 없어요${d.phase2.gate.reasons?.length ? `: ${d.phase2.gate.reasons.join(', ')}` : ''}`}
+              </p>
+              {d.phase2.hits.length > 0 && (
+                <ul className="phase2-hits">
+                  {d.phase2.hits.map((h, i) => (
+                    <li key={i}>
+                      <Badge kind={h.badge} />
+                      {h.text}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {d.phase2.required_roles.length > 0 && (
+                <ApprovalStamps
+                  label="2차 결재란"
+                  roles={d.phase2.required_roles}
+                  approved={d.phase2.approved_roles}
+                  viewerRole={viewerRole}
+                  canAct={phase2Wait && !!d.viewer?.can_decide_phase2}
+                  status={status}
+                  stage={c.stage}
+                />
+              )}
+            </section>
+          </Fold>
+        )}
 
-        <Tasks detail={d} />
+        {d.counterpoints && (
+          <Fold title="반대 근거" summary={firstLine(d.counterpoints.text)}>
+            <AiBlock bare title="반대 근거" text={d.counterpoints} canMake={false} emptyHint="아직 반대 근거가 없어요." />
+          </Fold>
+        )}
 
-        <h3>처리 기록</h3>
-        <History events={d.history} />
+        {d.briefing && (
+          <Fold title="AI 브리핑" summary={firstLine(d.briefing.text)}>
+            <AiBlock bare title="AI 브리핑" text={d.briefing} canMake={false} emptyHint="아직 AI 브리핑이 없어요." />
+          </Fold>
+        )}
+
+        {openTasks(d).length > 0 && (
+          <Fold title="남은 작업" summary={`${openTasks(d).length}건`}>
+            <Tasks detail={d} />
+          </Fold>
+        )}
+
+        <Fold title="처리 기록" summary={historySummary(d)}>
+          <History events={d.history} />
+        </Fold>
       </article>
-      <DecisionPanel detail={d} actor={person?.name ?? ''} onDone={reload} />
     </main>
   )
 }

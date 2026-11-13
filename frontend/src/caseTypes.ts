@@ -175,3 +175,6 @@ export type EvidenceData = {
   attribution_note: string
   rule: { approver_hits: RuleLine[]; indicator_hits: RuleLine[]; phase2_approver_hits: RuleLine[] }
 }
+
+/** 건 목록(GET /api/cases) 한 줄 */
+export type CaseListRow = { id: number; kind: string; ref_id: string; title?: string; status: string }

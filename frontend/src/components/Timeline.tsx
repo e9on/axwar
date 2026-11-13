@@ -9,12 +9,15 @@ import {
   BOLD_RATIO, DOT_BORDER_PX, DOT_CHAR_PX, DOT_GAP_PX, DOT_MAX_PX, DOT_PAD_PX,
   bandSpan, estimateWidth, monthRange, monthsIn, packRows, pct, placeLeft, toMarks, type CalEvent, type Mark,
 } from '../timelineLayout'
+import { shortTitle } from '../copy'
+import type { CaseListRow } from '../caseTypes'
 import LoadFailed from './LoadFailed'
 
 const BAND_KIND = '하회 구간' // 서버 calendar의 kind 이름
 const ALERT_KINDS = ['알림', '2차 알림'] // 기본 거부 직전 알림 종류
 const GROUP_MIN = 3 // 같은 날 같은 종류가 이 개수 이상이면 묶어 보임
 const FALLBACK_WIDTH = 1000 // 폭을 잴 수 없을 때
+const KEY_KINDS = /기한|집행일|만료/ // 기본으로 보이는 일정 종류(서버 일정 종류 이름에 들어 있는 말)
 
 const isAlert = (kind: string) => ALERT_KINDS.includes(kind)
 
@@ -183,18 +186,42 @@ function Narrow({ events, today, role }: { events: CalEvent[]; today: string; ro
   )
 }
 
+/** 서버 일정 이름 앞의 번호를 건 이름의 짧은 형태로("PLAN-001 확정 기한" -> "혜인 기초 · 확정 기한") */
+function relabel(e: CalEvent, cases: Map<number, CaseListRow>): CalEvent {
+  const c = e.case_id === null ? undefined : cases.get(e.case_id)
+  if (!c || !e.label.startsWith(c.ref_id)) return e
+  const rest = e.label.slice(c.ref_id.length).trim()
+  return { ...e, label: rest ? `${shortTitle(c.title, c.ref_id)} · ${rest}` : shortTitle(c.title, c.ref_id) }
+}
+
 export default function Timeline() {
   const { version, date, failed: clockFailed, retry: retryClock } = useClock()
   const { person } = useViewer()
   const narrow = useNarrow()
   const { data, error, loading, retry } = useLoad<CalEvent[]>('/api/calendar', [version])
+  const caseRows = useLoad<CaseListRow[]>('/api/cases', [version])
+  const [all, setAll] = useState(false)
   const today = date ?? ''
+  const role = person?.role
+
+  const named = useMemo(() => {
+    const byId = new Map((caseRows.data ?? []).map((c) => [c.id, c]))
+    return (data ?? []).map((e) => relabel(e, byId))
+  }, [data, caseRows.data])
+  const isKey = (e: CalEvent) => e.kind === BAND_KIND || (role !== undefined && e.roles.includes(role)) || KEY_KINDS.test(e.kind)
+  const shown = all ? named : named.filter(isKey)
+  const hidden = named.length - shown.length
 
   return (
     <section className="tl" aria-label="일정">
       <div className="tl-head">
         <h2>일정</h2>
-        <span>남색은 내 차례, 붉은 테두리는 기본 거부 직전 알림</span>
+        <span>남색은 내 차례</span>
+        {(hidden > 0 || all) && (
+          <button type="button" className="more-sched" aria-pressed={all} onClick={() => setAll(!all)}>
+            {all ? '중요한 일정만 보기' : '모든 일정 보기'}
+          </button>
+        )}
       </div>
       {error ? (
         <LoadFailed retry={retry} />
@@ -205,9 +232,9 @@ export default function Timeline() {
       ) : data.length === 0 ? (
         <p className="muted">잡힌 일정이 없어요</p>
       ) : narrow ? (
-        <Narrow events={data} today={today} role={person?.role} />
+        <Narrow events={shown} today={today} role={role} />
       ) : (
-        <Wide events={data} today={today} role={person?.role} />
+        <Wide events={shown} today={today} role={role} />
       )}
     </section>
   )
