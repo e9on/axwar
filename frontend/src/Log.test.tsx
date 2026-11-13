@@ -61,7 +61,7 @@ describe('처리 기록·가정 목록', () => {
     expect(within(list).getAllByRole('listitem')).toHaveLength(4)
     // 이전/이후 상태와 건 링크
     const moved = within(list).getAllByRole('listitem').find((li) => li.textContent?.includes('회신 대기')) as HTMLElement
-    expect(moved).toHaveTextContent('기안 → 회신 대기')
+    expect(moved).toHaveTextContent('기안에서 회신 대기로')
     expect(moved).toHaveTextContent('시스템')
     expect(within(moved).getByRole('link', { name: /건 #3/ })).toHaveAttribute('href', expect.stringContaining('/cases/3'))
 
@@ -71,7 +71,7 @@ describe('처리 기록·가정 목록', () => {
     await userEvent.selectOptions(screen.getByLabelText('건으로 거르기'), '4')
     const rows = within(screen.getByRole('list', { name: '처리 기록' })).getAllByRole('listitem')
     expect(rows).toHaveLength(1)
-    expect(rows[0]).toHaveTextContent('승인 대기 → 1차 집행')
+    expect(rows[0]).toHaveTextContent('승인 대기에서 1차 집행으로')
 
     await userEvent.selectOptions(screen.getByLabelText('종류로 거르기'), '')
     await userEvent.selectOptions(screen.getByLabelText('건으로 거르기'), '')

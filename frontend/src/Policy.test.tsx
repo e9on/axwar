@@ -138,10 +138,10 @@ describe('정책 설정', () => {
     // 최신이 위
     expect(rows[0]).toHaveTextContent('deadline.early_warning_days')
     expect(rows[0]).toHaveTextContent('그룹 CEO')
-    expect(rows[0]).toHaveTextContent('4 → 5')
+    expect(rows[0]).toHaveTextContent('4에서 5로')
     expect(rows[0]).toHaveTextContent('이유 없음')
     expect(rows[1]).toHaveTextContent('Masil 대표')
-    expect(rows[1]).toHaveTextContent('캠페인 → 캠페인 담당')
+    expect(rows[1]).toHaveTextContent('캠페인에서 캠페인 담당으로')
     expect(rows[1]).toHaveTextContent('조직 이름이 바뀜')
   })
 

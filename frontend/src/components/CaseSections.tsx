@@ -2,11 +2,11 @@ import { useState } from 'react'
 import Badge from './Badge'
 import Fold from './Fold'
 import { signalValue } from './EvidenceList'
-import { RULE_LABEL, RULE_LABEL_FALLBACK, changeLine } from '../copy'
+import { RULE_LABEL, RULE_LABEL_FALLBACK, changeLine, fromTo } from '../copy'
 import type { AiText, ApproverChange, CaseDetailData, CaseEvent, CaseRequest, Escalation, EvidenceData, ReplyJudgment } from '../caseTypes'
 import { koDate } from '../date'
 
-/** 결재선이 바뀐 이력: 상신은 "A → B, 상신(의견): 이유", 그 밖의 권한 이동은 "A → B: 이유" */
+/** 결재선이 바뀐 이력: 상신은 "A에서 B로, 상신(의견): 이유", 그 밖의 권한 이동은 "A에서 B로: 이유" */
 export function ChangeLines({ escalations, changes }: { escalations: Escalation[]; changes: ApproverChange[] }) {
   const other = changes.filter((c) => !c.reason.startsWith('상신'))
   if (escalations.length === 0 && other.length === 0) return null
@@ -15,12 +15,12 @@ export function ChangeLines({ escalations, changes }: { escalations: Escalation[
       {escalations.map((e, i) => (
         <li key={`e${i}`}>
           {e.stage === '2차' && '2차 '}
-          {e.from} → {e.to}, 상신({e.opinion}): {e.reason} <span className="muted">· {e.actor}, {koDate(e.at)}</span>
+          {fromTo(e.from, e.to)}, 상신({e.opinion}): {e.reason} <span className="muted">· {e.actor}, {koDate(e.at)}</span>
         </li>
       ))}
       {other.map((c, i) => (
         <li key={`c${i}`}>
-          {c.before.join('·')} → {c.after.join('·')}: {c.reason} <span className="muted">· {koDate(c.at.slice(0, 10))}</span>
+          {fromTo(c.before.join('·'), c.after.join('·'))}: {c.reason} <span className="muted">· {koDate(c.at.slice(0, 10))}</span>
         </li>
       ))}
     </ul>
@@ -129,7 +129,7 @@ function eventText(e: CaseEvent): string {
   const d = e.detail
   const pick = ['note', 'text', 'reason', 'comment'].map((k) => d[k]).find((v) => typeof v === 'string' && v)
   if (typeof pick === 'string') return pick
-  if (typeof d.from === 'string' && typeof d.to === 'string') return `${d.from} → ${d.to}`
+  if (typeof d.from === 'string' && typeof d.to === 'string') return fromTo(d.from, d.to)
   return ''
 }
 

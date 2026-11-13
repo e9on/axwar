@@ -114,9 +114,9 @@ describe('회신 입력', () => {
     expect(r.getByText(/사람 확인 필요/)).toBeInTheDocument()
     expect(r.getByText('아니오')).toBeInTheDocument()
     // 바뀐 상태: 건 상태, 새 작업, 집행일 변경
-    await waitFor(() => expect(r.getByText(/회신 대기 → 승인 대기/)).toBeInTheDocument())
+    await waitFor(() => expect(r.getByText(/회신 대기에서 승인 대기로/)).toBeInTheDocument())
     expect(r.getByText(/물량 입력/)).toBeInTheDocument()
-    expect(r.getByText(/9월 14일 → 9월 15일/)).toBeInTheDocument()
+    expect(r.getByText(/9월 14일에서 9월 15일로/)).toBeInTheDocument()
     const post = calls.find((c) => c.method === 'POST')
     expect(post?.path).toBe('/api/requests/5/reply')
     expect(post?.body).toEqual({ actor: '물류 담당자', text: '3,000개까지 가능합니다', attachments: 0 })
@@ -213,7 +213,7 @@ describe('회신 입력', () => {
 
   it('기준일이_바뀌면_목록을_다시_읽는다', async () => {
     const { calls } = base({ 'POST /api/clock': { json: { date: '2026-09-06', mode: '시연' } } })
-    mountPage(<RepliesPage />, '/replies?as=' + encodeURIComponent('물류 담당자'), '/replies', '2026-09-06')
+    mountPage(<RepliesPage />, '/replies?as=' + encodeURIComponent('물류 담당자'), '/replies')
     await screen.findByRole('button', { name: /DEMO-PLAN-001/ })
     expect(calls.filter((c) => c.path === MINE)).toHaveLength(1)
     await userEvent.click(screen.getByRole('button', { name: '다음 날로' }))

@@ -1,3 +1,4 @@
+import { fromTo } from '../copy'
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useViewer } from '../state/viewer'
@@ -24,10 +25,10 @@ function timeText(ts: string): string {
   return ts.slice(0, 16).replace('T', ' ')
 }
 
-/** 이벤트 상세를 "이전 → 이후"와 나머지 항목으로 */
+/** 이벤트 상세를 "이전에서 이후로"와 나머지 항목으로 */
 function detailParts(detail: Record<string, unknown>): { change: string | null; rest: string } {
   const pair = 'from' in detail && 'to' in detail ? ['from', 'to'] : 'before' in detail && 'after' in detail ? ['before', 'after'] : null
-  const change = pair ? `${anyValue(detail[pair[0]])} → ${anyValue(detail[pair[1]])}` : null
+  const change = pair ? fromTo(anyValue(detail[pair[0]]), anyValue(detail[pair[1]])) : null
   const rest = Object.entries(detail)
     .filter(([k]) => !pair?.includes(k))
     .map(([k, v]) => (k === 'note' ? String(v) : `${k}: ${anyValue(v)}`))
@@ -242,6 +243,7 @@ export default function Log() {
   return (
     <main className="admin">
       <h1>처리 기록·가정</h1>
+      <p className="lead">지난 처리와 AI 호출, 가정을 확인하세요.</p>
       <div className="tabs" role="group" aria-label="기록 종류">
         {TABS.map((t) => (
           <button key={t} type="button" aria-pressed={tab === t} onClick={() => setTab(t)}>

@@ -269,7 +269,7 @@ describe('2차 집행 관찰', () => {
     })
     mount('캠페인 담당자')
     const b = within(await screen.findByRole('region', { name: '판매율' }))
-    expect(b.getByText(/1,400개 → 1,190개/)).toBeInTheDocument()
+    expect(b.getByText(/1,400개에서 1,190개로/)).toBeInTheDocument()
     expect(b.getByText(/조절/)).toBeInTheDocument()
   })
 

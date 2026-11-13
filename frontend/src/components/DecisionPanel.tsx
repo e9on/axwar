@@ -201,7 +201,7 @@ export default function DecisionPanel({ detail, actor, onDone }: Props) {
     lead = `${prefix}승인이 필요해요.`
     if (deny) lead += last ? ` ${koDate(last)}까지 결정하지 않으면 ${koDate(deny)}에 기본 거부돼요.` : ` 결정하지 않으면 ${koDate(deny)}에 기본 거부돼요.`
   } else if (pending.length > 0) lead = `${pending.join('·')}의 결정을 기다리고 있어요.`
-  else if (c.open || phase2) lead = '다른 회신이나 결정을 기다리고 있어요.'
+  else if (c.open || phase2) lead = `${c.status} 상태예요. 다른 회신이나 결정을 기다리고 있어요.`
   else if (c.status === S_DEFAULT_DENY && deny) lead = `기본 거부 날(${koDate(deny)})까지 승인이 없어 확정 보류됐어요.`
   else lead = `${c.status} 상태예요.`
   return (

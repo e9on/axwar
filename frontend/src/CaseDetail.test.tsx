@@ -343,8 +343,8 @@ describe('건 상세', () => {
     await openFolds()
     expect(screen.getByRole('button', { name: /결재선이 바뀌었어요 \(Masil 대표에서 Masil 대표·그룹 CEO로, 9월 5일\) 외 1건/ })).toBeInTheDocument()
     const list = await screen.findByRole('list', { name: '결재선 변경 이력' })
-    expect(within(list).getByText(/마케팅팀 → Masil 대표, 상신\(승인 권고\): 대표 확인이 필요함/)).toBeInTheDocument()
-    expect(within(list).getByText(/Masil 대표 → Masil 대표·그룹 CEO: 하회 구간이라 CEO 추가/)).toBeInTheDocument()
+    expect(within(list).getByText(/마케팅팀에서 Masil 대표로, 상신\(승인 권고\): 대표 확인이 필요함/)).toBeInTheDocument()
+    expect(within(list).getByText(/Masil 대표에서 Masil 대표·그룹 CEO로: 하회 구간이라 CEO 추가/)).toBeInTheDocument()
     expect(within(list).getAllByRole('listitem')).toHaveLength(2) // 상신은 한 번만
   })
 
@@ -473,7 +473,7 @@ describe('건 상세', () => {
 
   it('기준일이_바뀌면_다시_읽는다', async () => {
     const { calls } = Setup(MAY, 'Masil 대표', { 'POST /api/clock': { json: { date: '2026-09-06', mode: '시연' } } })
-    mountPage(<CaseDetailPage />, `/cases/7?as=${encodeURIComponent('Masil 대표')}`, '/cases/:id', '2026-09-06')
+    mountPage(<CaseDetailPage />, `/cases/7?as=${encodeURIComponent('Masil 대표')}`, '/cases/:id')
     await screen.findByRole('button', { name: '승인' })
     await userEvent.click(screen.getByRole('button', { name: '다음 날로' }))
     await waitFor(() => expect(calls.filter((c) => c.path === DETAIL_PATH('Masil 대표')).length).toBe(2))
@@ -734,7 +734,6 @@ describe('낮은 항목', () => {
     Setup(NOT, '마케팅팀장', {}, open)
     mount('마케팅팀장')
     expect(await screen.findByText(/다른 회신이나 결정을 기다리고 있어요/)).toBeInTheDocument()
-    expect(screen.queryByText(/상태예요/)).toBeNull()
   })
 
   it('다른_종료_상태도_남은_칸에_상태가_적힌다', async () => {

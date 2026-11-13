@@ -1,3 +1,4 @@
+import { fromTo } from '../copy'
 import { useId, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api } from '../api'
@@ -176,7 +177,7 @@ function SellBox({ p2 }: { p2: Phase2Observe }) {
                 판매율 <b>{pct(s.rate, 1)}</b> <span className="muted">· 하한 {pct(s.hold_ratio, 1)}</span>
               </p>
               <p className="outcome">
-                {s.outcome === SELL_ADJUST && `판매율에 맞춰 2차 수량 ${num(s.qty_before)}개 → ${num(s.qty_after)}개로 조절 (${won(s.amount_before)} → ${won(s.amount_after)})`}
+                {s.outcome === SELL_ADJUST && `판매율에 맞춰 2차 수량을 ${fromTo(`${num(s.qty_before)}개`, `${num(s.qty_after)}개`)} 조절 (금액 ${fromTo(won(s.amount_before), won(s.amount_after))})`}
                 {s.outcome === SELL_HOLD && `하한에 못 미쳐 2차를 자동으로 줄이지 않고 2차 보류 — 사람이 판단해요`}
                 {s.outcome === SELL_SOLDOUT && `1차 전량 판매(품절) — 2차 계획 ${num(s.qty_before)}개 유지${s.excess ? `, 넘친 수요 ${num(s.excess)}개` : ''}`}
               </p>
@@ -187,7 +188,7 @@ function SellBox({ p2 }: { p2: Phase2Observe }) {
       {p2.decision && (
         <p className="decided">
           <b>담당 판단</b> {p2.decision.choice} · {p2.decision.actor} · {koDate(p2.decision.at)} — {p2.decision.reason}
-          {p2.decision.qty_before !== p2.decision.qty_after && ` (2차 ${num(p2.decision.qty_before)}개 → ${num(p2.decision.qty_after)}개)`}
+          {p2.decision.qty_before !== p2.decision.qty_after && ` (2차 ${fromTo(`${num(p2.decision.qty_before)}개`, `${num(p2.decision.qty_after)}개`)})`}
         </p>
       )}
     </section>
@@ -410,6 +411,7 @@ export default function Phase2Watch() {
         <div className="phead">
           <span className="no">{d.case.ref_id} · 2차 집행 관찰</span>
           <h1>{d.case.title || d.case.ref_id}</h1>
+          <p className="muted">2차 집행을 이어 갈지 지켜보고 판단하세요.</p>
           {p2.plan ? (
             <div className="facts">
               <span>

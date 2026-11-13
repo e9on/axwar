@@ -1,3 +1,4 @@
+import { fromTo } from '../copy'
 import { useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
@@ -85,9 +86,9 @@ function SavedResult({ saved, now }: { saved: Saved; now: ReplyCase | null }) {
           <h4>바뀐 상태</h4>
           <ul className="changed">
             <li>
-              건 상태: {saved.before.status === r.status ? `${r.status} (그대로)` : `${saved.before.status} → ${r.status}`}
+              건 상태: {saved.before.status === r.status ? `${r.status} (그대로)` : fromTo(String(saved.before.status), r.status)}
             </li>
-            {r.needs_human && <li>이 회신은 사람 확인으로 넘어갔어요. 담당자가 확인해야 해요.</li>}
+            {r.needs_human && <li>이 회신은 사람 확인으로 넘어갔어요. 담당자 확인이 필요해요.</li>}
             {newTasks.map((t) => (
               <li key={t.id}>
                 새 작업: {t.title} ({t.dept}, 기한 {koDate(t.due)})
@@ -95,7 +96,7 @@ function SavedResult({ saved, now }: { saved: Saved; now: ReplyCase | null }) {
             ))}
             {dateChanged && (
               <li>
-                집행일: {koDate(saved.before.phase1Date as string)} → {koDate(nowDate as string)}
+                집행일: {fromTo(koDate(saved.before.phase1Date as string), koDate(nowDate as string))}
               </li>
             )}
           </ul>
@@ -312,6 +313,7 @@ export default function Replies() {
   return (
     <main className="page replies">
       <h1>회신 입력</h1>
+      <p className="muted">내 부서 요청을 골라 회신을 입력하세요.</p>
       <div className="rgrid">
         <div className="rlist">
           <section aria-label="내 부서 요청">

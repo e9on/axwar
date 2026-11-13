@@ -121,6 +121,11 @@ export function stepSentence(s: StepLike): string {
 /** 결정 성격의 단계(보는 사람을 바꿔 건을 열어야 하는 단계) */
 export const DECISION_ACTIONS = ['결정', '상신', '예외 승인']
 
+/** "A에서 B로" 한 덩이(받침에 맞는 조사) */
+export function fromTo(a: string, b: string): string {
+  return `${a}에서 ${josa(b, '로')}`
+}
+
 /** 결재선 변경 한 줄 */
 export function changeLine(from: string, to: string, at: string): string {
   return `결재선이 바뀌었어요 (${from}에서 ${to}로, ${koDate(at)})`

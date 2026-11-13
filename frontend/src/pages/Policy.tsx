@@ -1,3 +1,4 @@
+import { fromTo } from '../copy'
 import { useState } from 'react'
 import { api } from '../api'
 import { useViewer } from '../state/viewer'
@@ -43,7 +44,7 @@ function Editor({ item, onClose, onDone }: { item: PolicyItem; onClose: () => vo
     setError(null)
     try {
       const row = await api.put<PolicyItem>(`/api/policy/${item.key}`, { actor: person.name, value: coerce(value, item.value), reason: reason.trim() })
-      await onDone(`${item.key} 바꿨어요: ${anyValue(item.value)} → ${anyValue(row.value)}`)
+      await onDone(`${item.key} 바꿨어요: ${fromTo(anyValue(item.value), anyValue(row.value))}`)
     } catch (e) {
       setError((e as Error).message) // 권한·형식 오류는 서버 문장 그대로
       setBusy(false)
@@ -174,7 +175,7 @@ export default function Policy() {
                   <div className="sub">{h.actor}</div>
                 </div>
                 <span>
-                  {anyValue(h.before)} → {anyValue(h.after)}
+                  {fromTo(anyValue(h.before), anyValue(h.after))}
                 </span>
                 <span>{h.reason ? h.reason : <span className="muted">이유 없음</span>}</span>
               </li>

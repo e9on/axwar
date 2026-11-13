@@ -23,7 +23,7 @@ async function startScene(page: Page, title: string) {
 
 async function playSteps(page: Page, count: number, total: number) {
   for (let i = 1; i <= count; i++) {
-    await page.getByRole('button', { name: '한 단계 진행' }).click()
+    await page.getByRole('button', { name: '다음 단계' }).click()
     await expect(page.getByText(`${i} / ${total}단계 진행`)).toBeVisible()
   }
 }
@@ -39,8 +39,8 @@ async function goHome(page: Page) {
 
 async function openTodo(page: Page, ref: string, column?: string) {
   const todo = page.getByRole('region', { name: '할 일' })
-  const scope = column ? todo.locator('.col', { has: page.getByRole('heading', { name: column }) }) : todo
-  await scope.getByRole('button', { name: new RegExp(ref) }).first().click()
+  const scope = column ? todo.locator(`li[data-column="${column}"]`) : todo
+  await scope.getByRole('button', { name: new RegExp(`${ref} 열기`) }).first().click()
   await expect(page).toHaveURL(/\/cases\/\d+/)
 }
 
@@ -53,9 +53,17 @@ test('scenario_1: 물류·SCM 회신 뒤 Masil 대표가 근거를 보고 승인
   await goHome(page)
   await openTodo(page, 'PLAN-019', '승인 대기')
 
-  // 근거 한 줄을 펼쳐 계산식을 본다
+  // 첫 화면(1440x900) 안에 지금 할 일 문장과 버튼이 보인다
+  const now = page.getByRole('group', { name: '결정' })
+  await expect(now).toContainText('승인이 필요해요')
+  const box = await now.boundingBox()
+  expect(box!.y + box!.height).toBeLessThanOrEqual(900)
+  await expect(now.getByRole('button', { name: '승인', exact: true })).toBeInViewport()
+
+  // 근거 칸은 접혀 있다. 펼치고 한 줄을 눌러 계산식을 본다
   const evidence = page.locator('.evidence')
-  const row = evidence.getByRole('button', { expanded: false }).first()
+  await evidence.getByRole('button', { name: /위험 신호/ }).click()
+  const row = evidence.locator('.ebtn').first()
   await row.click()
   await expect(evidence.getByText('계산식').first()).toBeVisible()
 
@@ -93,11 +101,11 @@ test('scenario_2: 재고 부족으로 막힌 이유를 보고 분할 승인한�
   // 시연 조작판으로 이어서 진행(이사회 분할 승인 → SCM 일부 허용 → 재승인 둘). 이미 한 CEO 승인 단계는 서버가 건너뛴다
   await page.getByRole('navigation', { name: '화면 이동' }).getByRole('link', { name: '시연' }).click()
   for (let i = 2; i <= 6; i++) {
-    await page.getByRole('button', { name: '한 단계 진행' }).click()
+    await page.getByRole('button', { name: '다음 단계' }).click()
     await expect(page.getByText(`${i} / 10단계 진행`)).toBeVisible()
   }
   await page.goBack() // 건 상세로 돌아와 다시 읽힌다
-  await expect(page.getByRole('heading', { name: '2차 집행' })).toBeVisible()
+  await page.getByRole('button', { name: /^2차 집행/ }).click()
   await expect(page.getByText(/2차 계획 [\d,]+개/)).toBeVisible()
 })
 
@@ -134,7 +142,7 @@ test('scenario_1_escalate: 마케팅팀장이 위로 올리면 Masil 대표 결�
   // Masil 대표의 승인 대기에 올라온 문장과 함께 보인다
   await viewAs(page, 'Masil 대표')
   await goHome(page)
-  const col = page.getByRole('region', { name: '할 일' }).locator('.col', { has: page.getByRole('heading', { name: '승인 대기' }) })
+  const col = page.getByRole('region', { name: '할 일' }).locator('li[data-column="승인 대기"]')
   await expect(col).toContainText('DEMO-PLAN-001')
   await expect(col).toContainText('마케팅팀에서 올림')
 })
@@ -149,6 +157,7 @@ test('시연 조작판: 장면 설명은 두 줄로 줄여 보이고, 고른 장
   for (const h of heights) expect(h).toBeLessThanOrEqual(line * 2 + 2)
 
   await startScene(page, '장면 1\. 정상')
+  await page.getByRole('region', { name: '진행' }).getByText('자세히').click()
   await expect(page.getByRole('region', { name: '진행' }).locator('.scene-desc')).toContainText('SCM이 전량 허용하고 Masil 대표가 승인하면')
 })
 
@@ -161,7 +170,7 @@ test('scenario_2_exception: 반품 기준 숫자와 예외 승인 뒤 상태가 
   // 새로고침해도 서버가 기억한 진행 위치가 그대로다
   await page.reload()
   await expect(page.getByText(/^13 \/ 13단계 진행$/)).toBeVisible()
-  await expect(page.getByRole('button', { name: '한 단계 진행' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '다음 단계' })).toBeDisabled()
 
   const id = await page.evaluate(async () => {
     const list = (await (await fetch('/api/cases')).json()) as { id: number; ref_id: string }[]
@@ -208,7 +217,7 @@ test('768px: 위쪽 막대는 두 줄 이내', async ({ page, problems }) => {
   void problems
   await page.setViewportSize({ width: 768, height: 900 })
   await page.goto('/')
-  await expect(page.getByRole('button', { name: '다음 날로' })).toBeVisible()
+  await expect(page.locator('.top .brand')).toBeVisible()
   const rows = await page.evaluate(() => {
     const centers: number[] = []
     document.querySelectorAll('.top .brand, .top .nav a, .top .who label, .top .clock-box, .top .clock-move button, .top .clock-move input').forEach((e) => {
@@ -227,29 +236,14 @@ test('768px: 위쪽 막대는 두 줄 이내', async ({ page, problems }) => {
   expect(rows).toBeLessThanOrEqual(2)
 })
 
-test('1440px: 모드 전환 불가 이유가 펼치면 잘리지 않고 전부 보인다', async ({ page, problems }) => {
+test('정책 화면: 모드 전환 불가 이유가 한 줄로 잘리지 않고 보인다', async ({ page, problems }) => {
   void problems
   await page.setViewportSize({ width: 1440, height: 900 })
-  await page.goto('/')
+  await page.goto('/policy')
   await viewAs(page, '마케팅팀장')
-  const why = page.locator('.mode-why')
-  await expect(why).toBeVisible()
-  await why.locator('summary').click()
-  const p = why.locator('p')
-  await expect(p).toBeVisible()
-  const probe = await p.evaluate((el) => {
-    const r = el.getBoundingClientRect()
-    const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
-    return {
-      fits: el.scrollWidth <= el.clientWidth + 1,
-      visibleOnTop: !!top && el.contains(top),
-      marker: getComputedStyle(el.parentElement!.querySelector('summary')!).listStyleType,
-      floating: getComputedStyle(el).position,
-      textRect: r.width,
-    }
-  })
-  expect(probe.fits, '이유 문장이 한 줄로 잘리지 않아야 해요').toBe(true)
-  expect(probe.visibleOnTop, '이유 문장이 다른 것에 가려지지 않아야 해요').toBe(true)
-  expect(probe.marker).toBe('none')
-  expect(probe.floating).toBe('absolute')
+  const line = page.getByRole('region', { name: '모드' })
+  await expect(line.locator('.muted')).toBeVisible()
+  const fits = await line.locator('.muted').evaluate((el) => el.scrollWidth <= el.clientWidth + 1)
+  expect(fits, '이유 문장이 잘리지 않아야 해요').toBe(true)
+  await expect(line.getByRole('button', { name: '모드 전환' })).toHaveCount(0)
 })

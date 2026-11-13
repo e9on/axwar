@@ -240,7 +240,7 @@ export default function Registry() {
   return (
     <main className="admin">
       <h1>기안·계약 등록</h1>
-      <p className="lead">판정할 기안과 계약을 등록부에 넣어요. 누가 할 수 있는지는 서버가 정해요.</p>
+      <p className="lead">기안과 계약을 등록하거나 고치세요.</p>
 
       {perm && !perm.allowed && <p className="note">{perm.reason ?? '이 사람은 등록부를 바꿀 수 없어요'}</p>}
       {canEdit && <div className="bar-tools">
