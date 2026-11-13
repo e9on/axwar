@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import Badge from './Badge'
 import Fold from './Fold'
-import { signalValue } from './EvidenceList'
+import { signalValue, indicatorValue } from './EvidenceList'
 import { RULE_LABEL, RULE_LABEL_FALLBACK, changeLine, fromTo } from '../copy'
 import type { AiText, ApproverChange, CaseDetailData, CaseEvent, CaseRequest, Escalation, EvidenceData, ReplyJudgment } from '../caseTypes'
 import { koDate } from '../date'
@@ -176,13 +176,17 @@ export function Tasks({ detail }: { detail: CaseDetailData }) {
   )
 }
 
+const JUDGE = '판정' // 서버 신호의 판정 쓰임 값
+const REAL_ROAS = 'real_roas' // 서버 핵심 지표 키
 const FIRST_SENTENCE = /^.*?[.!?。](?=\s|$)/
 
 /** 핵심 세 줄: 왜 이 사람이 결재하나 / 가장 큰 위험 / AI 의견. 이름표와 값만, 원문은 아래 접힌 칸에 있다 */
 export function KeyLines({ detail, evidence, canMake, making, onMake }: { detail: CaseDetailData; evidence: EvidenceData | null; canMake: boolean; making: boolean; onMake: () => void }) {
   const hits = evidence ? [...evidence.rule.approver_hits, ...evidence.rule.phase2_approver_hits].filter((h) => !h.superseded) : []
   const tags = Array.from(new Set(hits.map((h) => RULE_LABEL[h.rule_id] ?? RULE_LABEL_FALLBACK))).slice(0, 2)
-  const reds = evidence ? evidence.signals.filter((s) => s.level === 'red').slice(0, 3) : []
+  // 판정에 쓰는 신호만(참고 신호는 접힌 칸에서만). 실질 ROAS는 순위와 함께 맨 앞에 둔다.
+  const reds = evidence ? evidence.signals.filter((s) => s.level === 'red' && s.judgment === JUDGE).slice(0, 2) : []
+  const roas = evidence?.key_indicators.find((i) => i.key === REAL_ROAS) ?? null
   const b = detail.briefing
   const first = b && b.ok ? (FIRST_SENTENCE.exec(b.text)?.[0] ?? b.text) : ''
   return (
@@ -191,19 +195,21 @@ export function KeyLines({ detail, evidence, canMake, making, onMake }: { detail
         <dt>왜 이 결재선</dt>
         <dd>{tags.length > 0 ? tags.map((t) => <span className="tag" key={t}>{t}</span>) : <span className="muted">{detail.rule.required_roles.join('·')}</span>}</dd>
       </div>
-      <div>
+      <div role="group" aria-label="가장 큰 위험">
         <dt>가장 큰 위험</dt>
         <dd>
           {!evidence ? (
             <span className="muted">불러오는 중…</span>
-          ) : reds.length > 0 ? (
-            reds.map((s) => (
-              <span className="tag red" key={s.key}>
-                {s.label} {signalValue(s)}
-              </span>
-            ))
           ) : (
-            <span className="muted">나쁨으로 나온 신호가 없어요</span>
+            <>
+              {roas && <span className="tag">{roas.label} {indicatorValue(roas)}</span>}
+              {reds.map((s) => (
+                <span className="tag red" key={s.key}>
+                  {s.label} {signalValue(s)}
+                </span>
+              ))}
+              {reds.length === 0 && <span className="muted">나쁨으로 나온 신호가 없어요</span>}
+            </>
           )}
         </dd>
       </div>

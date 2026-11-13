@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import App from './App'
@@ -43,7 +43,7 @@ const EVIDENCE = {
     { key: 'a', label: '예상 ROAS 괴리', value: 10.4, unit: 'multiple', compare: DIRTY, level: 'red', badge: '계산', judgment: '참고', exclude_reason: '', detail: D },
     { key: 'b', label: '쿠폰 중복 비중', value: 0.17, unit: 'ratio', compare: '기준 이하', level: 'green', badge: '계산', judgment: '판정', exclude_reason: '', detail: D },
   ],
-  key_indicators: [{ key: 'k', label: '실질 ROAS', value: 3.7, unit: 'multiple', rank: 1, of: 10, compare_label: null, compare_value: null, badge: '계산', detail: D }],
+  key_indicators: [{ key: 'real_roas', label: '실질 ROAS', value: 3.7, unit: 'multiple', rank: 1, of: 10, compare_label: null, compare_value: null, badge: '계산', detail: D }],
   cost_breakdown: { note: '표본', rows: [{ key: 'g', label: '매출(GMV)', amount: 1000, unit: 'krw', badge: '계산', detail: D }] },
   breakeven: null,
   attribution_note: '',
@@ -80,6 +80,13 @@ function mountCase(viewer: object, who: string, over: Record<string, unknown> = 
 afterEach(() => vi.unstubAllGlobals())
 
 describe('건 상세 개편', () => {
+  it('가장_큰_위험에는_참고_신호를_넣지_않고_실질_ROAS를_보인다', async () => {
+    mountCase(MAY, 'Masil 대표')
+    const core = await screen.findByRole('group', { name: '가장 큰 위험' })
+    await waitFor(() => expect(core).toHaveTextContent('실질 ROAS'))
+    expect(core).not.toHaveTextContent('예상 ROAS 괴리')
+  })
+
   it('건_상세_첫_화면에_지금_할_일과_버튼', async () => {
     mountCase(MAY, 'Masil 대표')
     const now = await screen.findByRole('group', { name: '결정' })

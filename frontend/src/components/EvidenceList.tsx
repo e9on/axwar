@@ -115,7 +115,7 @@ export function signalValue(s: SignalLine): string {
   return s.value === null || s.level === 'unmeasurable' ? '측정 불가' : unitValue(s.value, s.unit)
 }
 
-function indicatorValue(i: IndicatorLine): string {
+export function indicatorValue(i: IndicatorLine): string {
   if (i.value === null) return '측정 불가'
   const v = typeof i.value === 'boolean' ? (i.value ? '있음' : '없음') : unitValue(i.value, i.unit)
   return i.rank !== null && i.of !== null ? `${v} (${i.rank}위/${i.of})` : v
