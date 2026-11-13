@@ -148,7 +148,7 @@ export default function CaseDetailPage() {
               {contract ? (
                 f.annual_fixed_krw !== undefined && (
                   <span>
-                    연 고정 피 <b>{won(f.annual_fixed_krw)}</b>
+                    연 고정 값 <b>{won(f.annual_fixed_krw)}</b>
                   </span>
                 )
               ) : (

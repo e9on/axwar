@@ -11,6 +11,8 @@ export const FORBIDDEN_TERMS: RegExp[] = [
   /참고 신호/,
   /→/,
   /해야 (해요|함)/,
+  /(고정|성과|인플루언서) 피(?![가-힣])/, // 사용자 결정: 수수료는 '피' 대신 '값'
+  /피 뒤/,
 ]
 
 export function findForbidden(text: string): string[] {
