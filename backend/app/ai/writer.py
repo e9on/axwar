@@ -15,9 +15,10 @@ FALLBACK_TEXT = "AI 의견을 만들지 못했어요. 규칙으로 정한 결과
 MIN_CHECKED_DIGITS = 3  # 이 자리수 이상 숫자만 사실과 대조한다(1·2자리는 "3가지" 같은 문장 숫자)
 _NUMBER = re.compile(r"\d[\d,]*\d|\d")
 
-BRIEFING_HEADS = ("권고", "이유", "주의")  # 브리핑은 정확히 이 세 줄
-COUNTER_HEADS = ("반대로 결정하려면", "확인할 것")  # 반대 근거는 이 두 줄
-LINE_MAX = 90  # 머리말 포함 한 줄 상한(프롬프트는 60자 안팎을 요청). 넘으면 정리하지 않고 실패로 본다
+# 머리말과 그 머리말로 쓸 수 있는 줄 수(최소, 최대). 넘치면 앞에서부터 최대까지만 남기고, 모자라면 실패
+BRIEFING_HEADS = (("권고", 1, 1), ("이유", 2, 3), ("주의", 1, 2))
+COUNTER_HEADS = (("반대로 결정하려면", 1, 2), ("확인할 것", 1, 2))
+LINE_MAX = 120  # 머리말 포함 한 줄 상한. 넘으면 정리하지 않고 실패로 본다
 _BULLET = re.compile(r"^(?:[-*•·]+|\d+[.)])\s*")
 _INTERNAL_WORDS = ("covenant", "z=")  # 화면에 보이면 안 되는 내부 용어(대소문자 무시). "판정"은 평범한 낱말이라 막지 않음
 _INTERNAL = re.compile(r"설계\s*\d|[A-Za-z]+_[A-Za-z_]+|[\u2600-\u27bf\U0001f000-\U0001faff]")
@@ -72,37 +73,41 @@ def _write(p: Provider, system: str, user: str) -> AiText:
     return AiText(text, c.model, True, c.ledger_id)
 
 
-def _shape(text: str, heads: tuple[str, ...]) -> str | None:
+def _shape(text: str, heads: tuple[tuple[str, int, int], ...]) -> str | None:
     """응답을 머리말 줄 형식으로 맞춘다. 맞출 수 없으면 None.
 
-    - 머리말이 모두 있으면 순서대로 다시 놓고 남는 줄은 버린다
-    - 머리말이 하나도 없으면 앞에서부터 줄 수만큼 골라 머리말을 붙인다(줄이 모자라면 None)
-    - 머리말이 일부만 있거나, 빈 내용·너무 긴 줄·내부 용어가 있으면 None
+    - 머리말마다 (최소, 최대) 줄 수가 있다. 같은 머리말이 여러 줄이어도 된다
+    - 머리말이 하나라도 있으면: 머리말 순서대로 다시 놓고, 최대를 넘는 줄은 앞에서부터 최대까지만 남기고, 최소에 못 미치면 None
+    - 머리말이 하나도 없으면 앞에서부터 최소 줄 수만큼 골라 머리말을 붙인다(줄이 모자라면 None)
+    - 빈 내용·너무 긴 줄·내부 용어가 있으면 None
     """
     lines = [_BULLET.sub("", l.strip()).replace("：", ":") for l in text.splitlines()]
     lines = [l for l in lines if l]
-    found: dict[str, str] = {}
+    found: dict[str, list[str]] = {h: [] for h, _, _ in heads}
     for l in lines:
-        for h in heads:
+        for h, _, _ in heads:
             m = re.match(rf"{re.escape(h)}\s*:\s*(.*)$", l)
-            if m and h not in found:
-                found[h] = m.group(1).strip()
-    if found:
-        if set(found) != set(heads):
+            if m:
+                found[h].append(m.group(1).strip())
+                break
+    if any(found.values()):
+        if any(len(found[h]) < lo for h, lo, _ in heads):
             return None
-        bodies = [found[h] for h in heads]
+        picked = {h: found[h][:hi] for h, _, hi in heads}
     else:
-        if len(lines) < len(heads):
+        if len(lines) < sum(lo for _, lo, _ in heads):
             return None
-        bodies = [l.strip() for l in lines[:len(heads)]]
-    out = [f"{h}: {b}" for h, b in zip(heads, bodies)]
-    for h, b, l in zip(heads, bodies, out):
+        it = iter(lines)
+        picked = {h: [next(it).strip() for _ in range(lo)] for h, lo, _ in heads}
+    out = [(h, b) for h, _, _ in heads for b in picked[h]]
+    texts = [f"{h}: {b}" for h, b in out]
+    for (_, b), l in zip(out, texts):
         if not b or len(l) > LINE_MAX or _INTERNAL.search(l) or any(w in l.lower() for w in _INTERNAL_WORDS):
             return None
-    return "\n".join(out)
+    return "\n".join(texts)
 
 
-def _write_shaped(p: Provider, system: str, user: str, heads: tuple[str, ...]) -> AiText:
+def _write_shaped(p: Provider, system: str, user: str, heads: tuple[tuple[str, int, int], ...]) -> AiText:
     r = _write(p, system, user)
     if not r.ok:
         return r

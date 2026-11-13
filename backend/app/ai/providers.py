@@ -238,8 +238,74 @@ def _facts_of(user: str) -> dict[str, str]:
     return out
 
 
+def _md_of(iso: str) -> str:
+    """'2026-07-27' -> '7/27'. 날짜 모양이 아니면 그대로."""
+    m = re.match(r"^\d{4}-(\d{2})-(\d{2})$", iso or "")
+    return f"{int(m.group(1))}/{int(m.group(2))}" if m else (iso or "")
+
+
+def _num(f: dict[str, str], key: str) -> float | None:
+    try:
+        return float(f[key].replace(",", ""))
+    except (KeyError, ValueError):
+        return None
+
+
+def _rank_text(f: dict[str, str], rank_key: str, of_key: str) -> str | None:
+    rank, of = _num(f, rank_key), _num(f, of_key)
+    return None if rank is None or of is None else f"{int(of)}명 중 {int(rank)}위"
+
+
+def _fake_reasons(f: dict[str, str], rule: str, bad: bool, contract: bool) -> list[str]:
+    """이유 줄 후보를 중요한 순서로 만든다. 숫자는 사실에 있는 값만 쓴다. 2줄 미만이면 일반 줄로 채우고 3줄까지만 돌려준다."""
+    out: list[str] = []
+    window = f.get("하회 구간")
+    if window and f.get("집행일"):
+        out.append(f"집행일 {_md_of(f['집행일'])}이 현금이 모자란 기간({window}) 안이에요.")
+    elif "하회 구간" in rule:
+        out.append("집행일이 현금이 모자란 기간 안이에요.")
+    roas, place = _num(f, "실질 ROAS"), _rank_text(f, "실질 ROAS 순위", "순위 대상 수")
+    if roas is not None and place:
+        out.append(f"실질 ROAS는 광고비 1원당 {abs(roas):.2f}원씩 손해이고 {place}예요." if roas < 0
+                   else f"실질 ROAS는 광고비 1원당 {roas:.2f}원을 남기고 {place}예요.")
+    share, req = _num(f, "요청 비중(%)"), _rank_text(f, "요청 비중 순위", "요청 비중 대상 수")
+    if share is not None and req and not contract:
+        out.append(f"이 인플루언서의 요청액이 기안 전체의 {share:.2f}%로 {req}예요.")
+    if "초과" in rule and f.get("기안 총액"):
+        out.append(f"기안 총액 {f['기안 총액']}원이 커서 높은 결재선이 필요해요.")
+    mine, rest = _num(f, "단순변심 반품률"), _num(f, "그 외 단순변심 반품률")
+    if mine is not None and rest is not None and (contract or mine > rest):
+        out.append(f"단순변심 반품률이 {mine:.1%}로 다른 인플루언서({rest:.1%})보다 {'높아요' if mine > rest else '낮아요'}.")
+    if contract and f.get("연 고정 피"):
+        out.append(f"연 고정 피는 {f['연 고정 피']}원이고 계약은 {_md_of(f.get('계약 만료', ''))}에 끝나요.")
+    if bad and roas is None:
+        out.append("성과가 낮은데 계약 금액이 커요." if contract else "성과가 하위인데 예산 비중이 커요.")
+    if len(out) < 2 and not out:
+        out.append("규칙상 승인권자가 확인할 건이에요.")
+    if len(out) < 2:
+        out.append(f"결재할 사람은 {f.get('승인권자', '승인권자')}이에요.")
+    return out[:3]
+
+
+def _fake_cares(f: dict[str, str], split) -> list[str]:
+    """주의 줄: 분할안·회신 대기를 먼저, 그다음 기한. 1~2줄."""
+    out: list[str] = []
+    if split:
+        first, second = split.group(1), split.group(2)
+        out.append(f"먼저 {first}개만 집행하고 나머지는 재고 회신 뒤에 정해요." if second.replace(",", "") == "0"
+                   else f"{first}개를 먼저, {second}개를 나중에 집행하는 안이에요.")
+    elif f.get("상태") == "회신 대기":
+        out.append("부서 회신을 기다리는 중이라 내용이 바뀔 수 있어요.")
+    if f.get("기한"):
+        what = "통보 기한" if f.get("종류") == "계약" else "확정 기한"
+        out.append(f"{what} {_md_of(f['기한'])}까지 결재하지 않으면 기본 거부돼요.")
+    elif not out:
+        out.append("결재가 늦으면 기한 전에 기본 거부될 수 있어요.")
+    return out[:2]
+
+
 def _fake_briefing(f: dict[str, str]) -> str:
-    """사실의 지표 판정·분할안·규칙 근거에서 세 줄(권고·이유·주의)을 규칙으로 만든다(시연용, 모델이 아니다)."""
+    """사실의 지표 판정·분할안·규칙 근거·계산값에서 브리핑(권고 1줄·이유 2~3줄·주의 1~2줄)을 규칙으로 만든다(시연용, 모델이 아니다)."""
     rule, bad = f.get("규칙 근거", ""), f.get("지표 판정") == "반대 근거 있음"
     split = re.search(r"1차 수량 ([\d,]+); .*2차 수량 ([\d,]+)", f.get("분할안", ""))
     contract = f.get("종류") == "계약"
@@ -249,37 +315,33 @@ def _fake_briefing(f: dict[str, str]) -> str:
         rec = "거절하는 쪽을 먼저 검토하길 권해요."
     else:
         rec = "승인하길 권해요."
-    window = "하회 구간" in rule
-    if window and bad:
-        why = "집행일이 현금이 모자란 기간 안이고 성과도 나빠요."
-    elif window:
-        why = "집행일이 현금이 모자란 기간 안이에요."
-    elif bad:
-        why = "성과가 하위인데 예산 비중이 커요." if not contract else "성과가 낮은데 계약 금액이 커요."
-    elif "초과" in rule:
-        why = "금액이 커서 높은 결재선이 필요해요."
-    else:
-        why = "규칙상 승인권자가 확인할 건이에요."
-    if split:
-        first, second = split.group(1), split.group(2)
-        care = (f"먼저 {first}개만 집행하고 나머지는 재고 회신 뒤에 정해요." if second.replace(",", "") == "0"
-                else f"{first}개를 먼저, {second}개를 나중에 집행하는 안이에요.")
-    elif f.get("상태") == "회신 대기":
-        care = "부서 회신을 기다리는 중이라 내용이 바뀔 수 있어요."
-    else:
-        care = "결재가 늦으면 기한 전에 기본 거부될 수 있어요."
-    return f"권고: {rec}\n이유: {why}\n주의: {care}"
+    lines = [f"권고: {rec}"]
+    lines += [f"이유: {w}" for w in _fake_reasons(f, rule, bad, contract)]
+    lines += [f"주의: {c}" for c in _fake_cares(f, split)]
+    return "\n".join(lines)
 
 
 def _fake_counterpoints(f: dict[str, str]) -> str:
     bad = f.get("지표 판정") == "반대 근거 있음"
+    place = _rank_text(f, "실질 ROAS 순위", "순위 대상 수")
+    conds: list[str]
     if f.get("분할안"):
-        cond, check = "한 번에 승인하려면 재고가 충분하다는 확인이 있어야 해요.", "재고 부서 회신으로 수량이 바뀌었는지 보세요."
+        conds = ["한 번에 승인하려면 재고가 충분하다는 확인이 있어야 해요."]
+        check = "재고 부서 회신으로 수량이 바뀌었는지 보세요."
     elif bad:
-        cond, check = "승인하려면 성과가 나쁜 이유를 설명할 근거가 있어야 해요.", "지표 근거에 적힌 위험이 풀렸는지 보세요."
+        conds = ["승인하려면 성과가 나쁜 이유를 설명할 근거가 있어야 해요."]
+        check = "지표 근거에 적힌 위험이 풀렸는지 보세요."
     else:
-        cond, check = "거절하려면 지표에 안 잡힌 다른 위험이 있어야 해요.", "그 위험이 실제 자료로 확인되는지 보세요."
-    return f"반대로 결정하려면: {cond}\n확인할 것: {check}"
+        conds = ["거절하려면 지표에 안 잡힌 다른 위험이 있어야 해요."]
+        check = "그 위험이 실제 자료로 확인되는지 보세요."
+    if place and (bad or f.get("분할안")):
+        conds.append(f"승인하려면 실질 ROAS가 {place}인 점을 설명할 근거도 있어야 해요.")
+    elif place:
+        conds.append(f"거절하려면 실질 ROAS {place}와 다른 방향의 새 자료가 있어야 해요.")
+    checks = [check]
+    if f.get("기한"):
+        checks.append(f"결재 기한 {_md_of(f['기한'])}까지 시간이 있는지도 보세요.")
+    return "\n".join([f"반대로 결정하려면: {c}" for c in conds[:2]] + [f"확인할 것: {c}" for c in checks[:2]])
 
 
 def _fake_notice(f: dict[str, str]) -> str:

@@ -14,9 +14,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 from test_flow_11b import ACCEPT, REVIEWS, SCM_PART, make, scene2  # noqa: E402
 
 FACTS = {"건": "PLAN-001", "요청액": 18962703, "기한": "7/17"}
-GOOD = "권고: 분할 승인을 권해요.\n이유: 집행일이 현금이 모자란 기간 안이에요.\n주의: 재고 회신을 기다리는 중이에요."
+GOOD = "권고: 분할 승인을 권해요.\n이유: 집행일이 현금이 모자란 기간 안이에요.\n이유: 성과 순위가 낮아요.\n주의: 재고 회신을 기다리는 중이에요."
 GOOD2 = "반대로 결정하려면: 재고가 충분하다는 확인이 있어야 해요.\n확인할 것: 부서 회신이 바뀌었는지 보세요."
-BANNED = ("covenant", "z=", "판정", "설계 4", "🔴")
+BANNED = ("covenant", "z=", "설계 4", "🔴")
 
 
 @pytest.fixture
@@ -37,7 +37,7 @@ def test_지시문이_세_줄_머리말을_정한다():
         assert head in prompts.BRIEFING_SYSTEM
     for head in ("반대로 결정하려면:", "확인할 것:"):
         assert head in prompts.COUNTERPOINTS_SYSTEM
-    for w in ("승인", "분할 승인", "거절", "위로 올리기", "60자"):
+    for w in ("승인", "분할 승인", "거절", "위로 올리기", "120자"):
         assert w in prompts.BRIEFING_SYSTEM
     assert "내부 용어" in prompts.BRIEFING_SYSTEM
 
@@ -52,25 +52,25 @@ def test_형식이_맞으면_그대로():
 
 
 def test_순서가_뒤섞이면_순서대로_고친다():
-    a, b, c = GOOD.split("\n")
-    assert ask(briefing, "\n".join([c, a, b])).text == GOOD
+    a, b, b2, c = GOOD.split("\n")
+    assert ask(briefing, "\n".join([c, a, b, b2])).text == GOOD
     x, y = GOOD2.split("\n")
     assert ask(counterpoints, "\n".join([y, x])).text == GOOD2
 
 
 def test_빈_줄과_목록_기호와_전각_쌍점은_정리한다():
-    a, b, c = GOOD.split("\n")
-    messy = f"\n- {a}\n\n* {b.replace(':', '：')}\n{c}\n"
+    a, b, b2, c = GOOD.split("\n")
+    messy = f"\n- {a}\n\n* {b.replace(':', '：')}\n{b2}\n{c}\n"
     assert ask(briefing, messy).text == GOOD
 
 
-def test_넘치는_줄은_앞_세_줄만_남긴다():
+def test_머리말_없는_덧붙임_줄은_버린다():
     assert ask(briefing, GOOD + "\n덧붙임: 더 있어요.\n그리고 이 줄도요.").text == GOOD
     assert ask(counterpoints, GOOD2 + "\n하나 더요.").text == GOOD2
 
 
-def test_머리말이_없으면_앞_세_줄에_붙인다():
-    body = ["분할 승인을 권해요.", "집행일이 현금이 모자란 기간 안이에요.", "재고 회신을 기다리는 중이에요.", "넷째 줄"]
+def test_머리말이_없으면_앞_네_줄에_붙인다():
+    body = ["분할 승인을 권해요.", "집행일이 현금이 모자란 기간 안이에요.", "성과 순위가 낮아요.", "재고 회신을 기다리는 중이에요.", "다섯째 줄"]
     r = ask(briefing, "\n".join(body))
     assert r.ok and r.text == GOOD
     assert ask(counterpoints, "재고가 충분해야 해요.\n회신을 보세요.").text.startswith("반대로 결정하려면: 재고")
@@ -96,15 +96,15 @@ def test_머리말_뒤가_비면_실패():
 
 
 def test_내부_용어가_있으면_실패():
-    a, b, c = GOOD.split("\n")
+    a, b, b2, c = GOOD.split("\n")
     for bad in ("covenant 규정이에요.", "z=34.00이에요.", "설계 4장이에요.", "🔴 신호예요.",
                 "coupon_stacking 신호예요."):
-        assert ask(briefing, "\n".join([a, "이유: " + bad, c])).ok is False, bad
+        assert ask(briefing, "\n".join([a, b, "이유: " + bad, c])).ok is False, bad
 
 
 def test_평범한_낱말_판정은_막지_않는다():
-    a, b, c = GOOD.split("\n")
-    assert ask(briefing, "\n".join([a, "이유: 규칙 판정과 지표가 같은 방향이에요.", c])).ok is True
+    a, b, b2, c = GOOD.split("\n")
+    assert ask(briefing, "\n".join([a, b, "이유: 규칙 판정과 지표가 같은 방향이에요.", c])).ok is True
 
 
 def test_줄이_너무_길면_실패():
@@ -117,68 +117,7 @@ def test_정리해도_실패하면_모델_이름은_남긴다():
     assert (r.ok, r.model) == (False, "m1")
 
 
-# ---- 가짜 모드: 같은 형식을 규칙으로 만든다
-
-def check_three(text):
-    lines = text.split("\n")
-    assert len(lines) == 3 and [l.split(":")[0] for l in lines] == ["권고", "이유", "주의"]
-    assert not text.startswith("[시연용")
-    for l in lines:
-        assert len(l.split(": ", 1)[1]) <= 60, l
-        assert not any(w in l for w in BANNED), l
-        assert not re.search(r"[A-Za-z]+_[A-Za-z_]+", l)
-    assert text.count("\n") == 2
-
-
-def check_two(text):
-    lines = text.split("\n")
-    assert len(lines) == 2 and [l.split(":")[0] for l in lines] == ["반대로 결정하려면", "확인할 것"]
-    for l in lines:
-        assert len(l.split(": ", 1)[1]) <= 60, l
-        assert not any(w in l for w in BANNED), l
-
-
-def test_가짜_모드_혜인_분할_상황(store, monkeypatch):
-    monkeypatch.delenv("AXWAR_AI", raising=False)
-    eng, fake, cid, st = scene2(store, ACCEPT, SCM_PART, *REVIEWS)
-    eng.play(st[0]); eng.play(st[1]); eng.play(st[2])
-    basis = eng._brief_basis(store.get_case(cid))
-    assert basis["분할안"]
-    p = make_provider("writer")
-    r = briefing(p, basis)
-    assert r.ok and r.model == "fake"
-    check_three(r.text)
-    assert r.text.splitlines()[0].startswith("권고: 분할 승인")
-    assert "현금" in r.text.splitlines()[1] and "성과" in r.text.splitlines()[1]
-    assert "15,996" in r.text.splitlines()[2]
-    c = counterpoints(p, basis)
-    assert c.ok
-    check_two(c.text)
-
-
-def test_가짜_모드_정상_기안(store, monkeypatch):
-    monkeypatch.delenv("AXWAR_AI", raising=False)
-    eng, fake = make(store, ACCEPT, ACCEPT)
-    cid = eng.seed("scenario_1")[0]
-    basis = eng._brief_basis(store.get_case(cid))
-    p = make_provider("writer")
-    r = briefing(p, basis)
-    assert r.ok
-    check_three(r.text)
-    assert r.text.splitlines()[0].startswith("권고: 승인")
-    check_two(counterpoints(p, basis).text)
-
-
-def test_가짜_모드_계약_건(store, monkeypatch):
-    monkeypatch.delenv("AXWAR_AI", raising=False)
-    eng, fake, cid, st = scene2(store, name="scenario_3")
-    contract_case = [c for c in store.list_cases("계약")][0]
-    basis = eng._brief_basis(contract_case)
-    r = briefing(make_provider("writer"), basis)
-    assert r.ok
-    check_three(r.text)
-    assert r.text.splitlines()[0].startswith("권고: 거절")
-
+# ---- 가짜 모드의 브리핑·반대 근거는 늘어난 형식으로 test_task37.py에서 확인한다
 
 def test_가짜_모드_통보_초안은_짧은_통보문(monkeypatch):
     monkeypatch.delenv("AXWAR_AI", raising=False)
