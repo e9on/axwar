@@ -4,6 +4,7 @@ from datetime import date, timedelta
 
 from app import policy
 from app.calc.cash import Window
+from app.rules.josa import josa
 from app.rules.models import (
     ApproverChange,
     ApproverDecision,
@@ -79,7 +80,7 @@ def _opposite_extra(approvers: tuple[str, ...], opposite: bool, text: str):
     else:
         return approvers, []
     hit = RuleHit("indicator_opposite", f"{text}라 {extra} 추가", "계산", "계산", make_detail(
-        f"결정 방향이 지표와 반대이고 최상위 승인권자가 {top}이면 {extra}를 추가 "
+        f"결정 방향이 지표와 반대이고 최상위 승인권자가 {josa(top, '이면')} {josa(extra, '을를')} 추가 "
         "(확대·갱신인데 지표가 나쁘거나, 축소·해지인데 지표가 좋은 경우)"))
     return approvers + (extra,), [hit]
 

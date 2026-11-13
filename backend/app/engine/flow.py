@@ -37,7 +37,7 @@ from app.ai.providers import FakeProvider, Provider, make_provider
 from app.calc import evidence as evidence_calc
 from app.calc import inventory
 from app.calc import volume as volume_calc
-from app.calc.campaign import return_count_rate
+from app.calc.campaign import RETURN_RATE_SOURCES, return_count_rate
 from app.calc.cash import Window, breach_windows, forecast_window, simulate_cash
 from app.calc.indicators import contract_indicators, plan_indicators
 from app.data import loader
@@ -47,7 +47,17 @@ from app.rules.approver import decide_contract, decide_plan, diff_approver
 from app.rules.capacity import parse_capacity
 from app.rules.deadline import approval_deadline, deadline_actions, deny_date, is_lapsed
 from app.rules.models import ApproverChange, ApproverDecision, ContractFacts, PlanFacts, RuleHit, make_detail
-from app.rules.split import GateResult, make_split, phase2_gate, return_check
+from app.rules.josa import josa, pick
+from app.rules.split import (
+    CHANGE_OF_MIND,
+    COLOR_RETURN,
+    RETURN_KEYS,
+    GateResult,
+    make_split,
+    observation_done,
+    phase2_gate,
+    return_check,
+)
 from app.store.db import CASE_DEMO, CASE_OPERATION, CLOCK_LOCKED, MODE_OPERATION, Store
 
 KIND_PLAN, KIND_CONTRACT = "기안", "계약"
@@ -102,11 +112,11 @@ REPORT_ONLY = {"그룹 보고": "그룹"}
 
 DECISIONS = scenarios.DECISIONS
 D_APPROVE, D_SPLIT, D_REJECT = DECISIONS
-CHANGE_OF_MIND, COLOR_RETURN = "단순변심", "색상불만"  # 원본 반품 사유 값
 COLOR_REVIEW = "색상불일치"  # 리뷰 해석 사유 값
 NO_VOLUME = "추정 불가 — 담당자 입력 필요"
 ALLOC_HOLD, ALLOC_FULL, ALLOC_PARTIAL = "보류", "전량", "조건부"
 TASK_VOLUME = "물량 입력"  # 원본 표본이 없는 기안의 물량을 담당자가 넣는 작업(제목)
+EV_REVIEW_FAILED = "리뷰해석실패"
 EV_WARN, EV_REPORT, EV_REAPPROVE, EV_DRIFT = "조기경고", "그룹보고", "재승인알림", "등록부변경경고"
 EV_SPLIT, EV_STOCK, EV_ANNOUNCE, EV_BLOCK = "분할안변경", "재고부족", "공지", "1차차단"
 EV_UNBLOCK = "차단해제"  # 등록부 집행일을 고쳐 1차 차단이 풀림(사용자 결정 2026-11-11)
@@ -477,6 +487,7 @@ class Engine:
             self.store.add_request(cid, r["dept"], r["text"], r.get("attach_required", False),
                                    purpose=r.get("purpose", ""))
         self.store.add_event(None, "시연불러오기", scenarios.SEED_ACTOR, {"scenario": scenario, "cases": ids})
+        self.store.set_demo_progress(scenario, 0)  # 새로 불러왔으니 대본은 처음 위치
         return ids
 
     def _case_for(self, item: dict) -> int:
@@ -497,6 +508,21 @@ class Engine:
     @_locked
     def play(self, step: dict) -> dict:
         """대본 한 단계를 실행한다(시연 조작판과 테스트가 같이 쓴다). 시연 모드에서만.
+        진행 중인 장면의 다음 단계와 같은 단계면 진행 위치(demo_state.done)를 한 칸 옮긴다. 다른 단계면 위치는 그대로."""
+        out = self._play_step(step)
+        prog = self.store.get_demo_progress()
+        if prog:
+            try:
+                script = scenarios.load(prog["scenario"], self.demo_dir).script
+            except (ValueError, FileNotFoundError):
+                return out  # 장면 파일이 사라졌으면 위치를 못 옮김
+            if prog["done"] < len(script) and script[prog["done"]] == step:
+                self.store.set_demo_progress(prog["scenario"], prog["done"] + 1)
+        return out
+
+    @_locked
+    def _play_step(self, step: dict) -> dict:
+        """대본 한 단계 실행(진행 위치는 건드리지 않음).
         대본이 준 회신 해석 공급자는 이 호출이 잠금을 쥔 동안에만 공유 상태에 둔다(다른 요청이 가져다 쓰지 못하게)."""
         self._demo_only("대본 재생")
         moved: list[dict] = []
@@ -543,20 +569,68 @@ class Engine:
 
     def _demo_only(self, what: str) -> None:
         if self.store.get_mode() == MODE_OPERATION:
-            raise PermissionError(f"운영 모드에서는 {what}을(를) 할 수 없음")
+            raise PermissionError(f"운영 모드에서는 {josa(what, '을를')} 할 수 없음")
 
-    def run_script(self, scenario: str, upto: int | None = None) -> list[dict]:
+    def run_script(self, scenario: str, upto: int | None = None, from_step: int | None = None) -> list[dict]:
+        """대본을 돌린다. from_step이 없으면 대본 처음부터(이미 한 단계도 다시 함). from_step이 있으면 진행 위치(demo_state.done)가
+        같은 장면의 그 단계일 때만 거기서부터 남은 단계만 돈다. upto는 이 단계 번호 앞까지(script[:upto]). 한 단계마다 진행 위치를 저장."""
         self._demo_only("대본 재생")
         sc = scenarios.load(scenario, self.demo_dir)
-        return [self.play(s) for s in sc.script[:upto]]
+        if from_step is not None:
+            prog = self.store.get_demo_progress()
+            if not prog:
+                raise ValueError("진행 중인 시연 장면이 없음 — 먼저 장면을 초기화할 것")
+            if prog["scenario"] != scenario:
+                raise ValueError(f"진행 중인 장면은 {prog['scenario']}라 {josa(scenario, '을를')} 이어 돌릴 수 없음 — 먼저 초기화할 것")
+            if prog["done"] != from_step:
+                raise ValueError(f"현재 위치는 {prog['done']}단계라 {from_step}단계부터 돌릴 수 없음")
+        out = []
+        for i in range(len(sc.script))[(from_step or 0):upto]:
+            out.append(self._play_step(sc.script[i]))
+            self.store.set_demo_progress(scenario, i + 1)
+        return out
+
+    def demo_state(self) -> dict:
+        """시연 대본 진행 상태: 어느 장면(scenario·title)을 몇 단계(done)까지 돌렸는지, 전체 단계 수(total), 다음 단계(next_step), 끝났는지,
+        지금 기준일. 서버가 저장해 새로고침·재시작 뒤에도 남는다. 초기화(seed)하면 0단계로 돌아간다. 시연 모드에서만."""
+        self._demo_only("시연 진행 상태 조회")
+        prog = self.store.get_demo_progress()
+        out = {"scenario": None, "title": None, "done": 0, "total": 0, "finished": False, "next_step": None,
+               "date": self.store.get_clock().isoformat()}
+        if not prog:
+            return out
+        out |= {"scenario": prog["scenario"], "done": prog["done"]}
+        try:
+            sc = scenarios.load(prog["scenario"], self.demo_dir)
+        except (ValueError, FileNotFoundError):
+            return out | {"total": None}  # 장면 파일이 사라짐: 위치만 알려 줌
+        total = len(sc.script)
+        return out | {"title": sc.title, "total": total, "finished": prog["done"] >= total,
+                      "next_step": sc.script[prog["done"]] if prog["done"] < total else None}
 
     # ---------------------------------------------------------------- 정책·모드 (바꿀 수 있는 역할은 정책 admin.policy_editors)
 
-    def _require_policy_editor(self, actor: str, what: str) -> None:
+    def _policy_editor_block(self, actor: str, what: str) -> str | None:
+        """정책·모드를 바꿀 수 없으면 그 이유, 아니면 None. 변경 메서드와 권한 읽기(admin_permissions)가 같이 씀."""
         role = self.role_of(actor)
         editors = [r.strip() for r in policy.get("admin.policy_editors").split(",") if r.strip()]
         if role not in editors:
-            raise PermissionError(f"{actor}({role})는 {what}을(를) 바꿀 수 없음 — {'·'.join(editors)}만")
+            return f"{actor}({role}){pick(role, '은는')} {josa(what, '을를')} 바꿀 수 없음 — {'·'.join(editors)}만"
+        return None
+
+    def _require_policy_editor(self, actor: str, what: str) -> None:
+        why = self._policy_editor_block(actor, what)
+        if why:
+            raise PermissionError(why)
+
+    def admin_permissions(self, person: str) -> dict:
+        """그 사람이 지금 할 수 있는 관리 작업과 못 하는 이유. 판정은 각 엔진 메서드가 쓰는 같은 검사 함수 그대로, 저장하지 않는다.
+        registry(등록부 등록·수정·가져오기), policy(정책 값 변경), mode(실행 모드 전환), review(리뷰 입력), return(반품 입력)."""
+        why = {"registry": self._registry_block(person), "policy": self._policy_editor_block(person, "정책"),
+               "mode": self._policy_editor_block(person, "실행 모드"),
+               "review": self._inputter_block(person, "admin.review_inputters", "리뷰"),
+               "return": self._inputter_block(person, "admin.return_inputters", "반품")}
+        return {k: {"allowed": r is None, "reason": r} for k, r in why.items()}
 
     def _inputter_block(self, actor: str | None, key: str, what: str) -> str | None:
         """리뷰·반품 입력이 막혀 있으면 그 이유, 아니면 None(수정 회차 1 판정 2). actor가 없으면 시연 대본 재생(시스템)이라 시연 모드에서만.
@@ -567,7 +641,7 @@ class Engine:
         role = self.role_of(actor)
         allowed = [r.strip() for r in policy.get(key).split(",") if r.strip()]
         if operation and role not in allowed:
-            return f"{actor}({role})는 {what}을(를) 입력할 수 없음 — {'·'.join(allowed)}만"
+            return f"{actor}({role}){pick(role, '은는')} {josa(what, '을를')} 입력할 수 없음 — {'·'.join(allowed)}만"
         return None
 
     def _require_inputter(self, actor: str | None, key: str, what: str) -> None:
@@ -679,13 +753,19 @@ class Engine:
 
     # ---------------------------------------------------------------- 등록부 반영·재판정·확정 (한 경로)
 
-    def require_registry_editor(self, actor: str) -> str:
-        """기안·계약 등록부를 쓸 수 있는 역할인지(정책 admin.registry_editors). 아니면 PermissionError. 역할을 돌려준다."""
+    def _registry_block(self, actor: str) -> str | None:
         role = self.role_of(actor)
         editors = [r.strip() for r in policy.get("admin.registry_editors").split(",") if r.strip()]
         if role not in editors:
-            raise PermissionError(f"{actor}({role})는 등록부를 바꿀 수 없음 — {'·'.join(editors)}만")
-        return role
+            return f"{actor}({role}){pick(role, '은는')} 등록부를 바꿀 수 없음 — {'·'.join(editors)}만"
+        return None
+
+    def require_registry_editor(self, actor: str) -> str:
+        """기안·계약 등록부를 쓸 수 있는 역할인지(정책 admin.registry_editors). 아니면 PermissionError. 역할을 돌려준다."""
+        why = self._registry_block(actor)
+        if why:
+            raise PermissionError(why)
+        return self.role_of(actor)
 
     def _row_origin_for_new(self) -> str:
         """지금 화면에서 등록하는 등록부 행의 출처: 시연 모드는 시연(초기화 때 지워짐), 운영 모드는 화면."""
@@ -1004,7 +1084,7 @@ class Engine:
         if key in f.get("escalated", {}) or days < policy.get("escalation.after_days"):
             return None
         target = self._escalation_target(roles)
-        text = (f"{case['ref_id']} {what} — 방치 올림({since_label} 후 {days}일): {owner}가 처리하지 않아 "
+        text = (f"{case['ref_id']} {what} — 방치 올림({since_label} 후 {days}일): {josa(owner, '이가')} 처리하지 않아 "
                 f"{target}에게 올림")
         self.store.add_event(case["id"], EV_STALE, "시스템", {"target": target, "key": key, "owner": owner,
                                                            "since": since.isoformat(), "days": days, "text": text})
@@ -1071,7 +1151,7 @@ class Engine:
         role = self.role_of(actor)
         key = self._human_key(request_id) if req["purpose"] == P_STOCK else req["purpose"]
         if not self._can_handle(case["facts"], key, role, self._owner(case["kind"])):
-            raise PermissionError(f"{actor}({role})는 이 사람 확인을 처리할 수 없음 — {self._owner(case['kind'])}"
+            raise PermissionError(f"{actor}({role}){pick(role, '은는')} 이 사람 확인을 처리할 수 없음 — {self._owner(case['kind'])}"
                                   "(또는 방치로 올려 받은 사람)만")
         return self.reply(request_id, text, attachments, resolved_by=actor)
 
@@ -1082,7 +1162,7 @@ class Engine:
         req = self.store.get_request(request_id)
         role = self.role_of(actor)
         if role != req["dept"]:
-            raise PermissionError(f"{actor}({role})는 이 요청에 회신할 수 없음 — 회신 대상: {req['dept']}")
+            raise PermissionError(f"{actor}({role}){pick(role, '은는')} 이 요청에 회신할 수 없음 — 회신 대상: {req['dept']}")
         if req["status"] == R_HUMAN:
             raise ValueError("사람 확인 상태인 요청은 회신이 아니라 사람 확인 처리로만 받을 수 있음")
         return self.reply(request_id, text, attachments)
@@ -1473,7 +1553,7 @@ class Engine:
         """캠페인 담당이 승인 전 분할안의 1차 수량을 줄인다. SCM이 거절한 건은 수량만 줄여 진행할 수 없다(PermissionError)."""
         role = self.role_of(actor)
         if role != self.campaign:
-            raise PermissionError(f"{actor}({role})는 1차 수량을 조정할 수 없음 — {self.campaign}만")
+            raise PermissionError(f"{actor}({role}){pick(role, '은는')} 1차 수량을 조정할 수 없음 — {self.campaign}만")
         case = self.store.get_case(case_id)
         f = case["facts"]
         if (f.get("scm") or {}).get("state") == SCM_REFUSED:
@@ -1492,7 +1572,7 @@ class Engine:
                         self._split_end(f))
         f["split"] = self._split_dict(sp)
         self.store.update_facts(case_id, f, actor, f"1차 수량 조정 {old['phase1_qty']:,}→{qty:,}")
-        self._reapprove_if_changed(case_id, old, f"{actor}가 1차 수량을 {qty:,}개로 줄임", actor)
+        self._reapprove_if_changed(case_id, old, f"{josa(actor, '이가')} 1차 수량을 {qty:,}개로 줄임", actor)
         return {"case_id": case_id, "changed": True, "status": self.store.get_case(case_id)["status"]}
 
     @_locked
@@ -1501,7 +1581,7 @@ class Engine:
         재고·물류에서 먼저 떼어 잠근다(공지 수량 고정). 모자라면 공지를 막는다(공지 후 미배송은 소비자 피해)."""
         role = self.role_of(actor)
         if role != self.campaign:
-            raise PermissionError(f"{actor}({role})는 공지할 수 없음 — 공지는 {self.campaign}가 한다")
+            raise PermissionError(f"{actor}({role}){pick(role, '은는')} 공지할 수 없음 — 공지는 {josa(self.campaign, '이가')} 한다")
         case = self.store.get_case(case_id)
         f = case["facts"]
         if case["kind"] != KIND_PLAN or not f.get("phase1"):
@@ -1565,7 +1645,7 @@ class Engine:
         case = self.store.get_case(case_id)
         f = case["facts"]
         if not self._can_handle(f, STALE_NOTICE, role, self.contract_owner):
-            raise PermissionError(f"{actor}({role})는 통보를 발송할 수 없음 — {self.contract_owner}(또는 방치로 올려 받은 사람)만")
+            raise PermissionError(f"{actor}({role}){pick(role, '은는')} 통보를 발송할 수 없음 — {self.contract_owner}(또는 방치로 올려 받은 사람)만")
         base = {"case_id": case_id, "actor": actor}
         if case["kind"] != KIND_CONTRACT:
             raise ValueError("전속계약 건이 아님")
@@ -1679,7 +1759,7 @@ class Engine:
         f = case["facts"]
         required = _required_roles(f)
         if role not in required:
-            raise PermissionError(f"{actor}({role})는 이 건의 승인권자가 아님 — 승인권자: {'·'.join(required)}")
+            raise PermissionError(f"{actor}({role}){pick(role, '은는')} 이 건의 승인권자가 아님 — 승인권자: {'·'.join(required)}")
         base = {"case_id": case_id, "actor": actor, "role": role, "action": action}
         if case["status"] not in OPEN[case["kind"]]:
             return {**base, "changed": False, "status": case["status"], "message": "결정 단계가 지난 건이라 상태 그대로"}
@@ -1695,7 +1775,7 @@ class Engine:
             self.store.set_status(case_id, S_REJECTED, actor, comment or "승인권자 거절")
             self._close_volume_tasks(case_id)
             self._task_once(case_id, self.campaign, "확정 보류(철회) 처리", self._today(),
-                            f"{case['ref_id']}: 승인권자({role})가 거절해 확정하지 않음. 상대측에 보류·철회를 알림")
+                            f"{case['ref_id']}: 승인권자({role}){pick(role, '이가')} 거절해 확정하지 않음. 상대측에 보류·철회를 알림")
             return {**base, "changed": True, "status": S_REJECTED}
         why = self._approve_block(f, case["status"], action)
         if why:
@@ -1777,10 +1857,16 @@ class Engine:
         color = human = 0
         for product, text in reviews:
             review_id = self.store.add_review(case_id, product, text)
-            j = judge.interpret_review(self._provider("review"), product, text)
-            self.store.add_judgment(case_id, "리뷰해석", j.model, f"{product} 리뷰: {text}",
-                                    {**asdict(j), "raw": j.raw[:RAW_KEEP], "review_id": review_id}, j.needs_human, j.confidence,
-                                    j.ledger_id)
+            try:
+                j = judge.interpret_review(self._provider("review"), product, text)
+                self.store.add_judgment(case_id, "리뷰해석", j.model, f"{product} 리뷰: {text}",
+                                        {**asdict(j), "raw": j.raw[:RAW_KEEP], "review_id": review_id}, j.needs_human,
+                                        j.confidence, j.ledger_id)
+            except Exception as e:  # 해석을 못 했거나 저장하지 못한 리뷰: 리뷰는 남기고 실패를 기록해 옛 리뷰와 구분, 사람이 확인
+                logger.exception("리뷰 해석 실패")
+                self.store.add_event(case_id, EV_REVIEW_FAILED, "시스템", {"review_id": review_id, "error": str(e)[:RAW_KEEP]})
+                human += 1
+                continue
             color += int(j.reason == COLOR_REVIEW or j.content_gap)
             human += int(j.needs_human)
         f = self.store.get_case(case_id)["facts"]
@@ -2033,9 +2119,9 @@ class Engine:
         f = case["facts"]
         req, pending = _required_roles(f, stage), _pending_roles(f, stage)
         if role not in req:
-            raise PermissionError(f"{actor}({role})는 이 건의 {stage} 승인권자가 아님 — 승인권자: {'·'.join(req)}")
+            raise PermissionError(f"{actor}({role}){pick(role, '은는')} 이 건의 {stage} 승인권자가 아님 — 승인권자: {'·'.join(req)}")
         if role not in pending:
-            raise ValueError(f"{actor}({role})는 이미 결정한 승인권자라 상신할 수 없음")
+            raise ValueError(f"{actor}({role}){pick(role, '은는')} 이미 결정한 승인권자라 상신할 수 없음")
         today = self._today()
         if first:
             lapsed = self._lapsed_deny(case, {"case_id": case_id, "actor": actor, "role": role, "stage": stage})
@@ -2048,7 +2134,7 @@ class Engine:
         to = self._up_role(role)
         if to is None:
             where = "보고 체계 밖의 역할이라" if role not in self.people.escalation else "보고 체계의 맨 위라"
-            raise ValueError(f"{role}는 {where} 상신할 곳이 없음")
+            raise ValueError(f"{josa(role, '은는')} {where} 상신할 곳이 없음")
         a_key, h_key, _, _ = STAGES[stage]
         before, kept = tuple(f[a_key]), [x for x in f[a_key]]
         to_label = UP_LABEL.get(to, to)
@@ -2074,11 +2160,11 @@ class Engine:
         f[a_key] = new
         self.store.update_facts(case_id, f, actor, f"{stage} 상신: {role}→{to}")
         ref = case["ref_id"]
-        text = f"{ref} {stage} 상신: {role}({actor})가 {to}에게 올림 — {opinion}: {rec['reason']}"
+        text = f"{ref} {stage} 상신: {role}({actor}){pick(actor, '이가')} {to}에게 올림 — {opinion}: {rec['reason']}"
         if voided:
-            text += f" (상신으로 이전 결정 무효: {to}가 이미 한 승인을 무효로 하고 다시 결재)"
+            text += f" (상신으로 이전 결정 무효: {josa(to, '이가')} 이미 한 승인을 무효로 하고 다시 결재)"
         self.store.add_approver_change(case_id, ApproverChange(
-            before, tuple(new), f"상신: {role}({actor})가 {to}에게 올림 — {opinion}: {rec['reason']}",
+            before, tuple(new), f"상신: {role}({actor}){pick(actor, '이가')} {to}에게 올림 — {opinion}: {rec['reason']}",
             tuple(RuleHit(**h) for h in f.get(h_key, [])), today))
         self.store.add_event(case_id, EV_UP, actor, {"stage": stage, "from": role, "to": to, "target": to,
                                                     "opinion": opinion, "reason": rec["reason"], "text": text})
@@ -2104,7 +2190,7 @@ class Engine:
         return f["amount_krw"] * qty // units if units else 0
 
     def _sales_role_block(self, actor: str, role: str) -> str | None:
-        return None if role == self.campaign else f"{actor}({role})는 1차 판매 실적을 입력할 수 없음 — {self.campaign}만"
+        return None if role == self.campaign else f"{actor}({role}){pick(role, '은는')} 1차 판매 실적을 입력할 수 없음 — {self.campaign}만"
 
     @staticmethod
     def _sales_case_block(case: dict) -> str | None:
@@ -2172,7 +2258,7 @@ class Engine:
             return ValueError, "이미 판단한 건 — 판단은 한 번만"
         role = self.role_of(actor)
         if not self._can_handle(f, STALE_PHASE2_HOLD, role, self.campaign):
-            return PermissionError, f"{actor}({role})는 2차 보류를 판단할 수 없음 — {self.campaign}(또는 방치로 올려 받은 사람)만"
+            return PermissionError, f"{actor}({role}){pick(role, '은는')} 2차 보류를 판단할 수 없음 — {self.campaign}(또는 방치로 올려 받은 사람)만"
         return None
 
     def _hold_guard(self, case_id: int, actor: str, reason, sell_only: bool = True) -> tuple[dict, dict, dict]:
@@ -2209,7 +2295,7 @@ class Engine:
         task = self._hold_task(case_id)
         if task:
             self.store.set_task_status(task["id"], "완료", actor)
-        text = (f"{ref} {basis}을 {choice}으로 판단: 2차 {qty_b:,}→{qty_a:,}개, "
+        text = (f"{ref} {josa(basis, '을를')} {josa(choice, '으로')} 판단: 2차 {qty_b:,}→{qty_a:,}개, "
                 f"금액 {amt_b:,}→{amt_a:,}원 — 이유: {reason.strip()}")
         self.store.add_event(case_id, EV_DECIDE, actor, {
             "choice": choice, "rate": rec.get("rate"), "reason": reason.strip(), "qty_before": qty_b, "qty_after": qty_a,
@@ -2248,7 +2334,7 @@ class Engine:
                    "rate": None}
         f["phase2"] = None
         out = self._finish_hold(case, f, rec, actor, CHOICE_CANCEL, reason, 0, 0, S_PHASE1)
-        acts = self._close_without_phase2(case_id, actor, f"{actor}가 2차 취소({reason.strip()})")
+        acts = self._close_without_phase2(case_id, actor, f"{josa(actor, '이가')} 2차 취소({reason.strip()})")
         if acts:
             out |= {"status": self.store.get_case(case_id)["status"], "actions": acts}
         return out
@@ -2271,7 +2357,7 @@ class Engine:
             return ValueError, "이미 판단한 건 — 판단은 한 번만"
         role, top = self.role_of(actor), self._exception_role(f)
         if top is None or role != top:
-            return PermissionError, (f"{actor}({role})는 예외 승인할 수 없음 — 이 건 2차 승인권자 중 최고 역할"
+            return PermissionError, (f"{actor}({role}){pick(role, '은는')} 예외 승인할 수 없음 — 이 건 2차 승인권자 중 최고 역할"
                                      f"({top or '없음'})만")
         return None
 
@@ -2295,7 +2381,7 @@ class Engine:
         amt_a = amt_b * qty // qty_b
         f["phase2_exception"] = {"actor": actor, "role": role, "reason": reason.strip(), "qty_before": qty_b,
                                  "qty_after": qty, "at": self._today().isoformat()}
-        core = (f"반품 보류 건을 {role}({actor})가 예외 승인: 2차 {qty_b:,}→{qty:,}개, 금액 {amt_b:,}→{amt_a:,}원"
+        core = (f"반품 보류 건을 {role}({actor}){pick(actor, '이가')} 예외 승인: 2차 {qty_b:,}→{qty:,}개, 금액 {amt_b:,}→{amt_a:,}원"
                 f" — 이유: {reason.strip()}")
         self._resize_phase2(f, case_id, amt_b, qty, amt_a, "반품 보류 예외 승인으로", core)
         out = self._finish_hold(case, f, {"qty_before": qty_b, "amount_before": amt_b, "rate": None}, actor,
@@ -2450,7 +2536,7 @@ class Engine:
         required, pending = _required_roles(f, "2차"), _pending_roles(f, "2차")
         stand = self._phase2_stand_in(f, role, pending)
         if not stand and role not in required:
-            raise PermissionError(f"{actor}({role})는 이 건의 2차 승인권자가 아님 — 2차 승인권자: {'·'.join(required)}")
+            raise PermissionError(f"{actor}({role}){pick(role, '은는')} 이 건의 2차 승인권자가 아님 — 2차 승인권자: {'·'.join(required)}")
         base = {"case_id": case_id, "actor": actor, "role": role, "action": action, "stage": "2차"}
         today = self._today()
         if is_lapsed(_d(f["phase2_deadline"]), today):  # 승인은 2차 기본 거부 실행일 전날까지
@@ -2459,7 +2545,7 @@ class Engine:
         ref, qty = case["ref_id"], f["phase2"]["qty"]
         if action == D_REJECT:
             self.store.add_approval(case_id, (role,), "2차 거절", actor, comment)
-            text = f"{ref} 2차 {qty:,}개를 {role}({actor})가 거절{': ' + comment if comment else ''} — 2차 집행 없음, 완료"
+            text = f"{ref} 2차 {qty:,}개를 {role}({actor}){pick(actor, '이가')} 거절{': ' + comment if comment else ''} — 2차 집행 없음, 완료"
             return {**base, "changed": True, "status": self._phase2_end(case_id, actor, P2_REJECT, text)}
         if not stand:
             return {**base, "changed": False, "status": case["status"], "message": "이미 승인함"}
@@ -2692,8 +2778,13 @@ class Engine:
 
     def _phase2_viewer(self, case: dict, viewer: str) -> dict:
         """보는 사람이 2차 관찰에서 지금 보낼 수 있는 동작(actions)과 막힌 동작과 이유(blocked). 판정은 각 엔진 메서드가 쓰는 검사 함수 그대로,
-        저장하지 않는다. 동작: 2차 계속·2차 취소·예외 승인·판매 실적 입력·리뷰 입력·반품 입력."""
-        role = self.role_of(viewer)
+        저장하지 않는다. 동작: 2차 계속·2차 취소·예외 승인·판매 실적 입력·리뷰 입력·반품 입력. 2차 승인·거절 가능 여부는 건 상세의
+        viewer와 같은 값(actions_phase2·blocked_phase2·can_decide_phase2). 등록되지 않은 사람이면 viewer 부분만 error 문장으로 알린다."""
+        try:
+            role = self.role_of(viewer)
+        except PermissionError as e:
+            return {"person": viewer, "role": None, "error": str(e), "actions": [], "blocked": [], "actions_phase2": [],
+                    "blocked_phase2": [], "can_decide_phase2": False}
         why: dict[str, str | None] = {}
         hold = self._hold_block(case, viewer, True)
         why[CHOICE_CONTINUE] = hold[1] if hold else self._continue_error(case)
@@ -2704,11 +2795,14 @@ class Engine:
         why[A_SALES] = self._sales_role_block(viewer, role) or self._sales_case_block(case)
         why[A_REVIEW] = self._inputter_block(viewer, "admin.review_inputters", "리뷰")
         why[A_RETURN] = self._inputter_block(viewer, "admin.return_inputters", "반품")
+        acts2, blocked2 = self._phase2_decide_view(self._preview_case(case["id"]), role)
         return {"person": viewer, "role": role, "actions": [a for a, r in why.items() if not r],
-                "blocked": [{"action": a, "reason": r} for a, r in why.items() if r]}
+                "blocked": [{"action": a, "reason": r} for a, r in why.items() if r],
+                "actions_phase2": acts2, "blocked_phase2": blocked2, "can_decide_phase2": bool(acts2)}
 
     def _reviews_view(self, case_id: int) -> list[dict]:
         """리뷰마다 그 리뷰의 AI 해석(사유·감정·영상과 색 차이·확신도·모델)을 review_id로 연결한다. 해석 기록에 review_id가 없는 옛 리뷰는 None."""
+        failed = {e["detail"].get("review_id"): e["detail"].get("error") for e in self.store.events(case_id, kind=EV_REVIEW_FAILED)}
         by_review = {}
         for j in self.store.list_judgments(case_id):
             rid = j["result"].get("review_id") if j["kind"] == "리뷰해석" else None
@@ -2718,9 +2812,11 @@ class Engine:
         for r in self.store.list_reviews(case_id):
             j = by_review.get(r["id"])
             judgment = None
+            if r["id"] in failed and not j:  # 해석 실패: 해석 기록 없이 실패 기록만 있음. 둘 다 없으면 옛 리뷰라 null
+                judgment = {"ok": False, "error": failed[r["id"]] or "해석 실패"}
             if j:
                 res = j["result"]
-                judgment = {"id": j["id"], "reason": res.get("reason"), "sentiment": res.get("sentiment"),
+                judgment = {"ok": True, "id": j["id"], "reason": res.get("reason"), "sentiment": res.get("sentiment"),
                             "content_gap": res.get("content_gap"), "confidence": j["confidence"],
                             "needs_human": j["needs_human"], "model": j["model"]}
             out.append({**r, "judgment": judgment})
@@ -2728,7 +2824,8 @@ class Engine:
 
     def _returns_check(self, case: dict) -> dict:
         """반품 관찰 기준 숫자: 단순변심·색상불만마다 기준선, 통계 한계값(2차 게이트와 같은 return_check), 지금 반품 건수·비율, 초과 여부.
-        1차 주문 수·관찰 일수·보정 방식과 계산 근거(detail)도 준다. 읽기 전용."""
+        반품률의 분모는 1차 집행 수량(phase1_qty, 게이트와 같음)이고 판매 실적으로 들어온 실제 주문 수는 sales_orders로 따로 준다.
+        관찰 일수·보정 방식과 계산 근거(detail)도 준다. 읽기 전용."""
         f = case["facts"]
         n = (f.get("phase1") or {}).get("qty") or 0
         inf = f.get("influencer_id") or ""
@@ -2737,24 +2834,26 @@ class Engine:
         required = policy.get("split.return_observe_days")
         elapsed = self._elapsed_days(f)
         items = []
-        for label, key, reason in (("단순변심", "change_of_mind", CHANGE_OF_MIND), ("색상불만", "color", COLOR_RETURN)):
-            base = return_count_rate(inf, reason)
+        for label, key in RETURN_KEYS.items():
+            base = return_count_rate(inf, label)
             count = ret.get(key, 0)
             chk = return_check(count, n, base, z) if n > 0 else {"rate": None, "limit": None, "over": False}
             detail = make_detail(
-                "한계값 = 기준선 + z × √(기준선 × (1 − 기준선) ÷ 1차 주문 수), 반품률 = 반품 건수 ÷ 1차 주문 수, 반품률이 한계값을 넘으면 2차 자동 보류",
-                (("기준선(평소 반품률)", base, "ratio"), ("1차 주문 수", n), ("z", z), ("한계값", chk["limit"], "ratio"),
-                 ("반품 건수", count), ("반품률", chk["rate"], "ratio")),
-                ("02_masil/marketing/mkt_orders_ms.csv", "02_masil/marketing/mkt_returns_ms.csv"),
+                "한계값 = 기준선 + z × √(기준선 × (1 − 기준선) ÷ 1차 집행 수량), 반품률 = 반품 건수 ÷ 1차 집행 수량"
+                "(판매 실적의 실제 주문 수가 아니라 2차 게이트와 같은 분모), 반품률이 한계값을 넘으면 2차 자동 보류",
+                (("기준선(평소 반품률)", base, "ratio"), ("1차 집행 수량(건 기록)", n), ("z", z), ("한계값", chk["limit"], "ratio"),
+                 ("반품 건수(건 기록)", count), ("반품률", chk["rate"], "ratio")),
+                RETURN_RATE_SOURCES,  # 기준선 계산이 읽는 원본 파일. 집행 수량·반품 건수는 원본이 아니라 건에 저장된 값
                 ("split.stop_z", "split.return_observe_days"))
-            items.append({"label": label, "baseline": base, "orders": n, "limit": chk["limit"], "count": count,
+            items.append({"label": label, "baseline": base, "phase1_qty": n, "limit": chk["limit"], "count": count,
                           "rate": chk["rate"], "over": chk["over"], "unit": "ratio",
                           "detail": evidence_calc.resolve_detail(detail)})
-        return {"entered": bool(f.get("returns")), "orders": n, "z": z,
+        return {"entered": bool(f.get("returns")), "phase1_qty": n, "sales_orders": (f.get("sales") or {}).get("orders"), "z": z,
                 "exception_applied": bool(f.get("phase2_exception")),
-                "observation": {"required_days": required, "elapsed_days": elapsed, "done": elapsed >= required,
-                                "adjustment": "보정 없음 — 관찰 일수가 모자라면 비율을 늘려 잡지 않고 2차를 열지 않으며, "
-                                              "입력한 반품 건수를 1차 주문 수로 그대로 나눔"},
+                "observation": {"required_days": required, "elapsed_days": elapsed,
+                                "done": observation_done(elapsed, required),
+                                "adjustment": "보정 없음 — 관찰 기간이 끝날 때까지 2차를 열지 않고 판정을 미룸(비율을 늘려 잡지 않음). "
+                                              "비율은 입력한 반품 건수를 1차 집행 수량으로 그대로 나눈 값이며, 기간 안이라도 기준을 넘으면 자동 보류"},
                 "items": items}
 
     def phase2_view(self, case_id: int, viewer: str | None = None) -> dict:
@@ -2764,7 +2863,8 @@ class Engine:
         f = case["facts"]
         has = bool(f.get(STAGES["2차"][0]))
         return {"viewer": self._phase2_viewer(case, viewer) if viewer is not None else None,
-                "returns_check": self._returns_check(case), "reviews": self._reviews_view(case_id), "plan": f.get("phase2"), "approvers": f.get(STAGES["2차"][0]), "hits": _plain(self._approver_view(f, "2차")),
+                "returns_check": self._returns_check(case), "reviews": self._reviews_view(case_id),
+                "plan": f.get("phase2"), "approvers": f.get(STAGES["2차"][0]), "hits": _plain(self._approver_view(f, "2차")),
                 "required_roles": _required_roles(f, "2차") if has else [],
                 "pending_roles": _pending_roles(f, "2차") if has else [],
                 "gate": asdict(self._gate(case)), "sales": f.get("sales"), "returns": f.get("returns"),
@@ -2837,7 +2937,7 @@ class Engine:
             if e["stage"] != stage or not e["active"]:
                 continue
             day = _md(_d(e["at"]))
-            text = f"{day} {e['from']}({e['actor']})가 {e['to']}에게 {stage} 상신 — 의견 {e['opinion']}: {e['reason']}"
+            text = f"{day} {e['from']}({e['actor']}){pick(e['actor'], '이가')} {e['to']}에게 {stage} 상신 — 의견 {e['opinion']}: {e['reason']}"
             detail = make_detail(
                 "상신 기록: 승인권자가 자기 권한을 넘는다고 판단해 보고 체계의 바로 위 역할에게 올리면 올린 역할이 결재선에서 빠지고 상급자가 들어감",
                 (("올린 사람", e["actor"]), ("올린 역할", e["from"]), ("받는 역할", e["to"]), ("의견", e["opinion"]),
@@ -2948,22 +3048,26 @@ class Engine:
             if open_ and role in pending and lapsed:
                 blocked = [{"action": a, "reason": self._lapsed_reason(f["deadline"])} for a in applicable]
             acts = [a for a in why if not why[a]]
-            stand2, p2_wait = [], case["status"] == S_PHASE2_WAIT
-            if p2_wait:
-                stand2 = self._phase2_stand_in(f, role, _pending_roles(f, "2차"))
-            # decide_phase2와 같게: 아직 승인 안 한 2차 승인권자는 승인·거절, 이미 승인한 2차 승인권자는 거절만
-            can2 = p2_wait and bool(stand2 or role in _required_roles(f, "2차"))
-            lapsed2 = can2 and is_lapsed(_d(f["phase2_deadline"]), self._today())
-            acts2 = [] if not can2 or lapsed2 else (list(P2_DECISIONS) if stand2 else [D_REJECT])
+            acts2, blocked2 = self._phase2_decide_view(case, role)
             out["viewer"] = {"person": viewer, "role": role, "can_decide": can, "actions": acts, "blocked": blocked,
-                             "actions_phase2": acts2,
-                             "blocked_phase2": ([{"action": a, "reason": self._lapsed_reason(f["phase2_deadline"])}
-                                                 for a in P2_DECISIONS] if lapsed2 else []),
+                             "actions_phase2": acts2, "blocked_phase2": blocked2,
                              "split_preview": self._split_outcome(f) if D_SPLIT in acts else None,
                              "can_escalate": self._can_escalate(case, role, "1차") and not lapsed,
                              "can_escalate_phase2": self._can_escalate(case, role, "2차"),
                              "can_decide_phase2": bool(acts2)}
         return out
+
+    def _phase2_decide_view(self, case: dict, role: str) -> tuple[list[str], list[dict]]:
+        """2차 승인·거절을 지금 보낼 수 있는지(actions_phase2)와 기한이 지나 막힌 이유(blocked_phase2). decide_phase2와 같게: 아직 승인 안 한
+        2차 승인권자는 승인·거절, 이미 승인한 2차 승인권자는 거절만. 건 상세와 2차 관찰의 viewer가 같이 쓴다. case는 _preview_case 결과."""
+        f = case["facts"]
+        stand2, p2_wait = [], case["status"] == S_PHASE2_WAIT
+        if p2_wait:
+            stand2 = self._phase2_stand_in(f, role, _pending_roles(f, "2차"))
+        can2 = p2_wait and bool(stand2 or role in _required_roles(f, "2차"))
+        lapsed2 = can2 and is_lapsed(_d(f["phase2_deadline"]), self._today())
+        acts2 = [] if not can2 or lapsed2 else (list(P2_DECISIONS) if stand2 else [D_REJECT])
+        return acts2, ([{"action": a, "reason": self._lapsed_reason(f["phase2_deadline"])} for a in P2_DECISIONS] if lapsed2 else [])
 
     def case_evidence(self, case_id: int) -> dict:
         """건 근거 상세(펼침 화면용, 읽기 전용·AI 없음): 지표 신호 전체, 핵심 지표, 비용 분해, 본전 조건, 측정 한계, 결재선 이유.

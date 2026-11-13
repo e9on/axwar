@@ -10,6 +10,9 @@ from dataclasses import dataclass
 from app.data.loader import read_table
 
 _MKT = "02_masil/marketing/"
+_CAMPAIGN_MASTER = "02_masil/master/m_campaign_ms.csv"
+# 인플루언서 반품률 기준선(return_count_rate)이 읽는 원본 파일. 근거 화면이 출처로 이 목록을 그대로 쓴다.
+RETURN_RATE_SOURCES = (_MKT + "mkt_orders_ms.csv", _MKT + "mkt_returns_ms.csv", _CAMPAIGN_MASTER)
 
 
 @dataclass(frozen=True)
@@ -22,7 +25,7 @@ class InfluencerPerf:
 
 
 def _campaign_influencer() -> dict[str, str]:
-    return {r["campaign_id"]: r["influencer_id"] for r in read_table("02_masil/master/m_campaign_ms.csv")}
+    return {r["campaign_id"]: r["influencer_id"] for r in read_table(_CAMPAIGN_MASTER)}
 
 
 def _returns_by_order() -> dict[str, list[dict]]:

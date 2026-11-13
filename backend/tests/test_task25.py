@@ -150,7 +150,7 @@ def test_반품_기준_숫자는_계산_함수와_2차_보류_사유와_일치(s
     f = store.get_case(cid)["facts"]
     n = f["phase1"]["qty"]
     items = {i["label"]: i for i in rc["items"]}
-    assert set(items) == {"단순변심", "색상불만"} and rc["orders"] == n and rc["entered"] is True
+    assert set(items) == {"단순변심", "색상불만"} and rc["phase1_qty"] == n and rc["entered"] is True
     inf = f["influencer_id"]
     for label, key, reason in (("단순변심", "change_of_mind", CHANGE_OF_MIND), ("색상불만", "color", COLOR_RETURN)):
         i = items[label]
@@ -206,7 +206,7 @@ def test_같은_글_리뷰_둘이_각자_해석에_연결된다(store):
     a, b = rv[0]["judgment"], rv[1]["judgment"]
     assert a["id"] != b["id"] and a["reason"] == "색상불일치" and a["sentiment"] == "부정" and a["content_gap"] is True
     assert b["reason"] != a["reason"] and b["confidence"] == 0.7 and a["model"] and a["needs_human"] is False
-    assert set(a) == {"id", "reason", "sentiment", "content_gap", "confidence", "needs_human", "model"}
+    assert set(a) == {"ok", "id", "reason", "sentiment", "content_gap", "confidence", "needs_human", "model"} and a["ok"] is True
     assert [r["judgment"]["id"] for r in eng.case_detail(cid)["reviews"]] == [a["id"], b["id"]]
 
 
