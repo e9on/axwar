@@ -182,6 +182,7 @@ def test_원본에_없는_기안은_묶음을_비우고_이유를_준다(store):
     assert ev["rule"]["approver_hits"]
 
 
+@pytest.mark.usefixtures("legacy_scenes")
 def test_시연_기안은_base_원본_기안으로_계산된다(store):
     eng = Engine(store, provider=FakeProvider([ACCEPT, ACCEPT]))
     (cid,) = eng.seed("scenario_1_escalate")

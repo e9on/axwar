@@ -35,6 +35,7 @@ from app import config, policy
 from app.ai import judge, writer
 from app.ai.providers import FakeProvider, Provider, make_provider
 from app.calc import evidence as evidence_calc
+from app.calc import explain
 from app.calc import inventory
 from app.calc import volume as volume_calc
 from app.calc.campaign import RETURN_RATE_SOURCES, return_count_rate
@@ -508,7 +509,7 @@ class Engine:
     @_locked
     def play(self, step: dict) -> dict:
         """대본 한 단계를 실행한다(시연 조작판과 테스트가 같이 쓴다). 시연 모드에서만.
-        진행 중인 장면의 다음 단계와 같은 단계면 진행 위치(demo_state.done)를 한 칸 옮긴다. 다른 단계면 위치는 그대로."""
+        진행 중인 장면에서 아직 적용하지 않은 단계와 같은 단계면 그 단계를 적용한 것으로 기록한다(다른 단계면 기록 그대로)."""
         out = self._play_step(step)
         prog = self.store.get_demo_progress()
         if prog:
@@ -516,9 +517,18 @@ class Engine:
                 script = scenarios.load(prog["scenario"], self.demo_dir).script
             except (ValueError, FileNotFoundError):
                 return out  # 장면 파일이 사라졌으면 위치를 못 옮김
-            if prog["done"] < len(script) and script[prog["done"]] == step:
-                self.store.set_demo_progress(prog["scenario"], prog["done"] + 1)
+            applied = set(prog["applied"])
+            idx = next((i for i, s in enumerate(script) if i not in applied and s == step), None)
+            if idx is not None:
+                self._save_progress(prog["scenario"], applied | {idx})
         return out
+
+    def _save_progress(self, scenario: str, applied: set[int]) -> None:
+        """적용한 단계 번호를 저장한다. done = 앞에서부터 빠짐없이 적용한 단계 수."""
+        done = 0
+        while done in applied:
+            done += 1
+        self.store.set_demo_progress(scenario, done, sorted(applied))
 
     @_locked
     def _play_step(self, step: dict) -> dict:
@@ -526,7 +536,7 @@ class Engine:
         대본이 준 회신 해석 공급자는 이 호출이 잠금을 쥔 동안에만 공유 상태에 둔다(다른 요청이 가져다 쓰지 못하게)."""
         self._demo_only("대본 재생")
         moved: list[dict] = []
-        if "date" in step:
+        if "date" in step and _d(step["date"]) >= self._today():  # 날짜로 진행이 이미 지나온 날이면 시계는 그대로 두고 행동만
             moved = self.advance(_d(step["date"]))
         action = step["action"]
         if action == "기준일":
@@ -585,18 +595,22 @@ class Engine:
             if prog["done"] != from_step:
                 raise ValueError(f"현재 위치는 {prog['done']}단계라 {from_step}단계부터 돌릴 수 없음")
         out = []
-        for i in range(len(sc.script))[(from_step or 0):upto]:
+        rng = range(len(sc.script))[(from_step or 0):upto]
+        applied = set(self.store.get_demo_progress()["applied"]) if from_step is not None else set()
+        for i in rng:
             out.append(self._play_step(sc.script[i]))
-            self.store.set_demo_progress(scenario, i + 1)
+            applied.add(i)
+            self._save_progress(scenario, applied)
         return out
 
     def demo_state(self) -> dict:
         """시연 대본 진행 상태: 어느 장면(scenario·title)을 몇 단계(done)까지 돌렸는지, 전체 단계 수(total), 다음 단계(next_step), 끝났는지,
-        지금 기준일. 서버가 저장해 새로고침·재시작 뒤에도 남는다. 초기화(seed)하면 0단계로 돌아간다. 시연 모드에서만."""
+        지금 기준일. 날짜로 진행하는 화면용으로 waiting(지금 시연자가 할 결정), next_date(다음 바깥 사건의 도착일),
+        arrived(지금까지 도착한 바깥 사건 문장)도 준다. 서버가 저장해 새로고침·재시작 뒤에도 남는다. 초기화(seed)하면 0단계로 돌아간다. 시연 모드에서만."""
         self._demo_only("시연 진행 상태 조회")
         prog = self.store.get_demo_progress()
-        out = {"scenario": None, "title": None, "done": 0, "total": 0, "finished": False, "next_step": None,
-               "date": self.store.get_clock().isoformat()}
+        out = {"scenario": None, "title": None, "summary": "", "done": 0, "total": 0, "finished": False, "next_step": None,
+               "date": self.store.get_clock().isoformat(), "waiting": None, "next_date": None, "arrived": []}
         if not prog:
             return out
         out |= {"scenario": prog["scenario"], "done": prog["done"]}
@@ -605,8 +619,75 @@ class Engine:
         except (ValueError, FileNotFoundError):
             return out | {"total": None}  # 장면 파일이 사라짐: 위치만 알려 줌
         total = len(sc.script)
-        return out | {"title": sc.title, "total": total, "finished": prog["done"] >= total,
-                      "next_step": sc.script[prog["done"]] if prog["done"] < total else None}
+        applied = set(prog["applied"])
+        arrived = sorted(((s["date"], i) for i, s in enumerate(sc.script)
+                          if i in applied and scenarios.is_outside(s) and s["action"] != "기준일" and "date" in s))
+        later = [s["date"] for i, s in enumerate(sc.script) if i not in applied and scenarios.is_outside(s) and "date" in s]
+        return out | {"title": sc.title, "summary": sc.summary, "total": total, "finished": prog["done"] >= total,
+                      "next_step": sc.script[prog["done"]] if prog["done"] < total else None,
+                      "waiting": self._demo_waiting(sc, applied), "next_date": min(later) if later else None,
+                      "arrived": [scenarios.arrival_text(sc.script[i]) for _, i in arrived]}
+
+    def _demo_waiting(self, sc: scenarios.Scenario, applied: set[int]) -> dict | None:
+        """지금 시연자가 할 일: 아직 적용하지 않은 첫 사람 단계(결정·공지·발송·상신·예외 승인). ready는 그 앞의 바깥 사건이 모두 도착했는지.
+        앞의 바깥 사건이 모두 도착한 상태에서 1차 결정을 이미 화면으로 눌러 끝낸 것(그 역할이 승인했거나 사건이 끝남)은 건너뛴다."""
+        for i, s in enumerate(sc.script):
+            if i in applied or scenarios.is_outside(s):
+                continue
+            ready = all(j in applied for j, o in enumerate(sc.script[:i]) if scenarios.is_outside(o))
+            if ready and self._decision_already_made(s):
+                continue
+            return {"index": i, "action": s["action"], "actor": s.get("actor"), "target": s.get("plan") or s.get("contract"),
+                    "text": scenarios.decision_text(s), "ready": ready, "step": s}
+        return None
+
+    def _decision_already_made(self, s: dict) -> bool:
+        if s["action"] != "결정" or s.get("stage") == "2차":
+            return False
+        found = self._find_case(*((KIND_PLAN, s["plan"]) if "plan" in s else (KIND_CONTRACT, s["contract"])))
+        if found is None:
+            return False
+        try:
+            role = self.role_of(s["actor"])
+        except PermissionError:
+            return False
+        return role in found["facts"].get("approved_roles", []) or found["status"] not in OPEN[found["kind"]]
+
+    @_locked
+    def advance_demo(self, to: date) -> dict:
+        """날짜로 진행: 기준일을 to로 옮기고(기한 점검·경고·기본 거부는 advance 그대로) to까지 도착일이 된 바깥 사건을 도착일 순서(같은 날은
+        대본 순서)로 적용한다. 사람이 누르는 결정 단계는 적용하지 않는다. 지금 받을 수 없는 사건(예: 요청이 아직 없는 회신)은 건너뛰고
+        skipped에 이유를 남기며 다음 진행에서 다시 시도한다. 응답: applied(이번에 도착한 사건 문장)·skipped·actions(엔진 조치)와 demo_state 항목."""
+        self._demo_only("날짜로 진행")
+        prog = self.store.get_demo_progress()
+        if not prog:
+            raise ValueError("진행 중인 시연 장면이 없음 — 먼저 장면을 초기화할 것")
+        sc = scenarios.load(prog["scenario"], self.demo_dir)
+        today = self._today()
+        if to < today:
+            raise ValueError(f"기준일은 뒤로 돌릴 수 없음: {today} → {to}")
+        applied = set(prog["applied"])
+        due = sorted((s["date"], i) for i, s in enumerate(sc.script)
+                     if i not in applied and scenarios.is_outside(s) and "date" in s and _d(s["date"]) <= to)
+        arrived: list[str] = []
+        skipped: list[str] = []
+        actions: list[dict] = []
+        for when, i in due:
+            step = dict(sc.script[i])
+            if _d(when) <= self._today():
+                step.pop("date")  # 이미 그 날을 지났거나 오늘이면 시계는 그대로 두고 사건만 넣는다
+            try:
+                res = self._play_step(step)
+            except (ValueError, KeyError, PermissionError) as e:
+                skipped.append(f"{scenarios.arrival_text(sc.script[i])} — 아직 넣을 수 없음: {e.args[0] if e.args else e}")
+                continue
+            applied.add(i)
+            actions += res["actions"]
+            if step["action"] != "기준일":
+                arrived.append(scenarios.arrival_text(sc.script[i]))
+        actions += self.advance(to)
+        self._save_progress(prog["scenario"], applied)
+        return {**self.demo_state(), "applied": arrived, "skipped": skipped, "actions": actions}
 
     # ---------------------------------------------------------------- 정책·모드 (바꿀 수 있는 역할은 정책 admin.policy_editors)
 
@@ -2847,7 +2928,8 @@ class Engine:
                 ("split.stop_z", "split.return_observe_days"))
             items.append({"label": label, "baseline": base, "phase1_qty": n, "limit": chk["limit"], "count": count,
                           "rate": chk["rate"], "over": chk["over"], "unit": "ratio",
-                          "detail": evidence_calc.resolve_detail(detail)})
+                          "detail": evidence_calc.resolve_detail(detail),
+                          "explain": explain.returns_item(label, base, n, chk["limit"], count, chk["rate"], chk["over"])})
         return {"entered": bool(f.get("returns")), "phase1_qty": n, "sales_orders": (f.get("sales") or {}).get("orders"), "z": z,
                 "exception_applied": bool(f.get("phase2_exception")),
                 "observation": {"required_days": required, "elapsed_days": elapsed,
@@ -3078,13 +3160,19 @@ class Engine:
         out = evidence_calc.evidence(kind, case["ref_id"], f.get("source_plan_id"))
         by_key = {s["key"]: s for s in out["signals"]}
 
+        delegate = (f.get("approvers") or [None])[0]
+
         def line(h: dict, from_signal: bool, stage: str | None = None) -> dict:
             if h.get("detail") is None and from_signal and h["rule_id"] in by_key:
                 resolved = by_key[h["rule_id"]]["detail"]  # 옛 저장 행: 같은 이름의 지금 신호 줄을 따른다
             else:
                 resolved = evidence_calc.resolve_detail(h.get("detail"), h["text"])
+            if from_signal:  # 지표 근거 줄: 신호 줄과 같은 풀이(신호가 아니면 지표 좋음·근거 없음 줄)
+                why = by_key[h["rule_id"]]["explain"] if h["rule_id"] in by_key else explain.indicator_hit(h)
+            else:
+                why = explain.approver_hit(h, {i["label"]: i["value"] for i in resolved["inputs"]}, delegate)
             return {**{k: h[k] for k in ("rule_id", "text", "source", "badge")}, **({"stage": stage} if stage else {}),
-                    "detail": resolved}
+                    "detail": resolved, "explain": why}
 
         out["rule"] = {"approver_hits": [{**line(h, False), **({"superseded": True} if h.get("superseded") else {})}
                                          for h in self._approver_view(f, "1차")],

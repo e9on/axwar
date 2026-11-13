@@ -493,13 +493,18 @@ def create_app(store: Store, engine: Engine, static_dir: str | Path | None = Non
         out = []
         for n in names:
             sc = scenarios.load(n, demo_dir)
-            out.append({"name": n, "title": sc.title, "description": sc.description, "plans": list(sc.plans),
+            out.append({"name": n, "title": sc.title, "description": sc.description, "summary": sc.summary, "plans": list(sc.plans),
                         "contracts": list(sc.contracts), "script": list(sc.script)})
         return out
 
     @app.get("/api/demo/state")
     def demo_state():
         return engine.demo_state()
+
+    @app.post("/api/demo/advance")
+    def demo_advance(body: Clock):
+        """날짜로 진행: 기준일을 옮기고 그날까지 도착한 회신·리뷰·반품·판매를 저절로 넣는다(결정은 시연자 몫)."""
+        return engine.advance_demo(body.date)
 
     @app.post("/api/demo/reset")
     def demo_reset(body: Seed):

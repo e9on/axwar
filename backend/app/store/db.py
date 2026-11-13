@@ -301,15 +301,25 @@ class Store:
                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (d.isoformat(),))
 
     def get_demo_progress(self) -> dict | None:
-        """시연 대본 진행 위치 {scenario, done}(없으면 None). 초기화(reset)하면 지워진다."""
+        """시연 대본 진행 위치 {scenario, done, applied}(없으면 None). applied는 이미 적용한 단계 번호 목록(날짜로 진행하면
+        결정보다 바깥 사건이 먼저 들어올 수 있어 순서대로가 아님), done은 앞에서부터 빠짐없이 적용한 단계 수. 초기화(reset)하면 지워진다."""
         with self._lock:
             saved = self._setting(self._db, "demo_progress")
-        return json.loads(saved) if saved else None
+        if not saved:
+            return None
+        prog = json.loads(saved)
+        prog.setdefault("applied", list(range(prog["done"])))
+        return prog
 
-    def set_demo_progress(self, scenario: str, done: int) -> None:
+    def set_demo_progress(self, scenario: str, done: int, applied: list[int] | None = None) -> None:
+        """applied를 안 주면 같은 장면의 기존 적용 목록을 그대로 두고 done만 바꾼다(없으면 앞 done개)."""
+        if applied is None:
+            prev = self.get_demo_progress()
+            applied = prev["applied"] if prev and prev["scenario"] == scenario else list(range(done))
         with self._tx() as db:
             db.execute("INSERT INTO settings (key, value) VALUES ('demo_progress', ?) "
-                       "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (_json({"scenario": scenario, "done": done}),))
+                       "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                       (_json({"scenario": scenario, "done": done, "applied": sorted(set(applied))}),))
 
     def reset(self, actor: str = "시스템") -> None:
         """시연 데이터(출처가 시연인 사건과 딸린 작업·회신·리뷰·이벤트, 시연 등록부 행)를 지우고 시계를 기준일로 되돌린다.

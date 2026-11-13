@@ -54,9 +54,9 @@ def test_시연_폴더_기본값과_환경변수(monkeypatch, tmp_path):
 
 def test_장면1_파일을_읽는다():
     sc = scenarios.load("scenario_1")
-    assert sc.name == "scenario_1" and sc.plans == ("PLAN-019",) and sc.contracts == ()
-    assert [s["action"] for s in sc.script] == ["회신", "회신", "결정"]
-    assert [s.get("dept") for s in sc.script[:2]] == ["물류", "SCM"] and sc.script[2]["actor"] == "Masil 대표"
+    assert sc.name == "scenario_1" and sc.plans == ("PLAN-014",) and sc.contracts == ()
+    assert [s["action"] for s in sc.script] == ["회신", "결정", "기준일"]
+    assert sc.script[0]["dept"] == "물류" and sc.script[1]["actor"] == "Masil 대표"
 
 
 def test_사람_목록은_역할과_보고_체계를_담는다():
@@ -171,7 +171,7 @@ def _scene_values() -> set[str]:
 
 def test_엔진코드에_장면값이_없다():
     values = _scene_values()
-    assert {"PLAN-019", "4807921", "4,807,921", "9/14", "그룹 CEO"} <= values  # 대조 목록이 실제로 채워졌는지
+    assert {"PLAN-014", "5414940", "5,414,940", "7/20", "그룹 CEO"} <= values  # 대조 목록이 실제로 채워졌는지
     sources = {p.name: p.read_text(encoding="utf-8") for p in ENGINE_DIR.glob("*.py")}
     assert {"flow.py", "scenarios.py"} <= set(sources)
     found = [(name, v) for name, src in sources.items() for v in values if v in src]

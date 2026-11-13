@@ -59,6 +59,7 @@ def statuses(store, cid):
 
 # ---- 지시서·개정 11a 필수 ----
 
+@pytest.mark.usefixtures("legacy_scenes")
 def test_장면1_정상(store):
     eng, fake = make(store, ACCEPT, ACCEPT)
     ids = eng.seed("scenario_1")
@@ -110,6 +111,7 @@ def test_장면1_정상(store):
     assert len(fake.calls) == 2
 
 
+@pytest.mark.usefixtures("legacy_scenes")
 def test_대본을_끝까지_실행하면_1차_집행(store):
     eng, _ = make(store, ACCEPT, ACCEPT)
     eng.seed("scenario_1")
@@ -318,6 +320,7 @@ def test_분할승인은_분할안이_있어야_하고_있으면_2차_잠금(sto
     assert any("100" in t["detail"] for t in store.list_tasks(cid) if t["title"] == "물류 출고")
 
 
+@pytest.mark.usefixtures("legacy_scenes")
 def test_캘린더에_기한_집행일_하회구간(store):
     eng, _, cid = seeded(store, ACCEPT)
     cal = eng.calendar()
@@ -470,6 +473,7 @@ def test_금액만_바뀌어도_받은_승인은_무효(store):
     assert "요청액" in store.events(cid, kind="재승인알림")[0]["detail"]["text"]
 
 
+@pytest.mark.usefixtures("legacy_scenes")
 def test_승인_전_등록부_변경은_사실만_바꾸고_상태는_그대로(store):
     eng, _, cid = seeded(store, ACCEPT)
     eng.update_plan("PLAN-019", {"settlement_date": "2026-09-20"}, "캠페인 담당자")
@@ -478,6 +482,7 @@ def test_승인_전_등록부_변경은_사실만_바꾸고_상태는_그대로(
     assert store.events(cid, kind="재승인알림") == []
 
 
+@pytest.mark.usefixtures("legacy_scenes")
 def test_끝난_건은_등록부가_바뀌어도_그대로_경고만_한번(store):
     eng, _, cid = seeded(store, ACCEPT, ACCEPT)
     eng.run_script("scenario_1")
@@ -490,6 +495,7 @@ def test_끝난_건은_등록부가_바뀌어도_그대로_경고만_한번(stor
     assert len(warn) == 1 and "settlement_date" in warn[0]["detail"]["changes"]
 
 
+@pytest.mark.usefixtures("legacy_scenes")
 def test_가져오기로_바뀐_등록부도_다음_점검에서_반영(store):
     eng, _, cid = seeded(store, ACCEPT)
     store.update_plan(store.get_plan("PLAN-019")["id"], {"settlement_date": "2026-09-20"}, "다른 경로")
