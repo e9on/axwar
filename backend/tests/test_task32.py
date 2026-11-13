@@ -135,7 +135,7 @@ def test_비용_분해는_앞_단계와_이어진다(store):
     _, _, ev = _plan_ev(store, "PLAN-001")
     rows = {r["key"]: r["explain"] for r in ev["cost_breakdown"]["rows"]}
     assert rows["pre_marketing"] == "매출 약 4억 2,200만 원에서 반품·원가·수수료·배송비를 빼면 약 2억 4,900만 원이 남아요."
-    assert rows["influencer_fee"].startswith("그중 인플루언서에게 준 피는 약 1억 6,100만 원")
+    assert rows["influencer_fee"].startswith("그중 인플루언서에게 준 값은 약 1억 6,100만 원")
     assert "약 1억 4,900만 원" in rows["other_media"]
     assert "약 8,750만 원이 남아요" in rows["after_fee"]
     assert "약 6,130만 원 모자라" in rows["final"] and rows["final"].endswith("나빠요.")

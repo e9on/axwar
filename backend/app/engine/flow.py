@@ -104,7 +104,7 @@ DEFINITIVE_REFUSAL = (P_STOCK,)
 # 값이 역할 목록(쉼표로 구분)인 정책 항목: 바꿀 때 모르는 역할을 넣을 수 없다
 ROLE_KEYS = ("roles.campaign", "roles.contract", "roles.logistics", "roles.cs", "roles.ceo", "roles.head")  # 값이 역할 하나인 정책 항목: 사람 목록에 있는 역할이어야 한다
 ROLE_LIST_KEYS = ("admin.policy_editors", "admin.review_inputters", "admin.return_inputters", "admin.registry_editors")
-# 조건변경 통보 재협상안(설계 5.2): 성과 피 기준을 총매출이 아니라 공제 후 순액으로. 고정 피 금액은 시스템이 정하지 않는다.
+# 조건변경 통보 재협상안(설계 5.2): 성과 값 기준을 총매출이 아니라 공제 후 순액으로. 고정 값 금액은 시스템이 정하지 않는다.
 NET_BASE = "공제 후 순액"
 NET_DEDUCTIONS = ("반품 환불", "쿠폰", "채널 수수료")
 # 승인권자 표기(rules.approver) → 승인하는 역할. 보고만 받는 표기는 승인 대상이 아니다.
@@ -157,7 +157,7 @@ SYNC_FIELDS = {
 # 분할 수량 변경(11b)은 등록부가 아니라 엔진이 바꾸므로 그 자리에서 _invalidate(material=["split"])를 부른다.
 MATERIAL = {KIND_PLAN: ("amount_krw", "settlement_date"), KIND_CONTRACT: ("annual_fixed_krw",)}
 LABELS = {"amount_krw": "요청액", "settlement_date": "집행일", "phase1_date": "1차 집행일", "deadline": "기한", "expected_gmv_krw": "예상 GMV",
-          "plan_total_krw": "기안 총액", "annual_fixed_krw": "연 고정 피", "expiry": "계약 만료", "split": "분할안"}
+          "plan_total_krw": "기안 총액", "annual_fixed_krw": "연 고정 값", "expiry": "계약 만료", "split": "분할안"}
 # 승인 단계: 단계마다 (승인권자, 근거, 받은 승인, 판정 기준 날짜) 사실 키. 11b는 "2차"를 더한다.
 # 1차 날짜는 등록부 집행일이 아니라 phase1_date다: SCM 거절로 연기한 날짜(shift)는 등록부를 고치지 않고 별도 키에 둔다.
 STAGES = {"1차": ("approvers", "approver_hits", "approved_roles", "phase1_date"),
@@ -1702,8 +1702,8 @@ class Engine:
         """기본 거부된 계약: 순액 기준 재협상안으로 조건변경 통보 초안(AI)을 만들고 계약 담당에게 발송 작업을 낸다."""
         f = case["facts"]
         reg = self.store.get_contract(f["contract_row_id"])
-        contract = {"인플루언서": f["influencer_name"], "연 고정 피(원)": f["annual_fixed_krw"],
-                    "성과 피 조건": reg.get("performance_fee_text") or "", "계약 만료": f["expiry"],
+        contract = {"인플루언서": f["influencer_name"], "연 고정 값(원)": f["annual_fixed_krw"],
+                    "성과 값 조건": reg.get("performance_fee_text") or "", "계약 만료": f["expiry"],
                     "해지·조건변경 통보 기한": f["deadline"]}
         proposal = {"fixed_fee_krw": f["annual_fixed_krw"], "performance_base": NET_BASE,
                     "deductions": list(NET_DEDUCTIONS)}
@@ -2976,7 +2976,7 @@ class Engine:
             if f.get("scm"):
                 out["SCM 응답"] = f["scm"]["state"]
         else:
-            out |= {"연 고정 피": f["annual_fixed_krw"], "계약 만료": f["expiry"]}
+            out |= {"연 고정 값": f["annual_fixed_krw"], "계약 만료": f["expiry"]}
         out |= self._brief_numbers(case)
         return out
 

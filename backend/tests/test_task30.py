@@ -121,7 +121,7 @@ def test_정리해도_실패하면_모델_이름은_남긴다():
 
 def test_가짜_모드_통보_초안은_짧은_통보문(monkeypatch):
     monkeypatch.delenv("AXWAR_AI", raising=False)
-    contract = {"인플루언서": "혜인", "연 고정 피(원)": 2800000000, "성과 피 조건": "총매출의 5%",
+    contract = {"인플루언서": "혜인", "연 고정 값(원)": 2800000000, "성과 값 조건": "총매출의 5%",
                 "계약 만료": "2026-08-31", "해지·조건변경 통보 기한": "2026-07-17"}
     proposal = {"fixed_fee_krw": 2800000000, "performance_base": "순액", "deductions": ["반품 환불", "쿠폰", "채널 수수료"]}
     r = notice_draft(make_provider("writer"), contract, proposal)
