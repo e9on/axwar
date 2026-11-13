@@ -58,7 +58,8 @@ REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
     _MKT + "mkt_orders_ms.csv": ("order_id", "order_date", "customer_ref", "channel_id", "sku_id", "campaign_id", "gmv_krw"),
     _MKT + "mkt_repurchase_ms.csv": ("customer_ref", "reorder_within_90d"),
     _MKT + "mkt_returns_ms.csv": ("order_id", "refund_amount_krw", "reason"),
-    _MST + "m_campaign_ms.csv": ("campaign_id", "influencer_id", "sales_channel", "product_line", "start_date"),
+    _MST + "m_campaign_ms.csv": ("campaign_id", "campaign_name", "influencer_id", "sales_channel", "product_line", "start_date"),
+    _MST + "m_influencer_ms.csv": ("influencer_id", "influencer_name"),
     _MST + "m_channel_ms.csv": ("channel_id", "channel_type", "partner_code", "payment_terms_days"),
     _MST + "m_sku_ms.csv": ("sku_id", "safety_stock_weeks_min"),
     "05_external/benchmark/ext_channel_benchmark.csv": ("channel_type", "return_rate_pct"),
@@ -161,6 +162,11 @@ PLAN_SOURCE = _MKT + "mkt_budget_plan_ms.csv"  # 캠페인 확대 기안이 든 
 def campaign_master_rows() -> list[dict]:
     """캠페인 마스터(캠페인 -> 인플루언서·판매 채널)."""
     return read_table(_MST + "m_campaign_ms.csv")
+
+
+def influencer_rows() -> list[dict]:
+    """인플루언서 마스터(인플루언서 ID -> 이름)."""
+    return read_table(_MST + "m_influencer_ms.csv")
 
 
 def plan_rows() -> list[dict]:

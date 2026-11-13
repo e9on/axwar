@@ -23,6 +23,7 @@ _SCHEMA: dict[str, type] = {
     "cash.horizon_days": int,
     "signals.return_ratio_red": float,
     "signals.hhi_limit": int,
+    "signals.reversal_cut": float,
     "volume.low_confidence_share": float,
     "scm.stockout_loss_pct": float,
     "scm.no_reply_days": int,
@@ -48,12 +49,14 @@ _SCHEMA: dict[str, type] = {
     "roles.contract": str,
     "roles.logistics": str,
     "roles.cs": str,
+    "roles.ceo": str,
+    "roles.head": str,
     "volume.input_lead_days": int,
 }
 
 # 0 초과 1 이하여야 하는 비율 항목(1.5 같은 값이 들어가면 규칙이 거꾸로 동작한다)
 _RATIO_KEYS = ("split.sellthrough_hold_ratio", "allocate.capacity_fallback_ratio", "volume.low_confidence_share",
-               "scm.stockout_loss_pct")
+               "scm.stockout_loss_pct", "signals.reversal_cut")
 
 # 배정 모델 항목: 값이 모델 단가표에 있어야 한다
 _MODEL_KEYS = [k for k in _SCHEMA if k.startswith("ai.") and (k.endswith("_model") or k.endswith("_backup"))]

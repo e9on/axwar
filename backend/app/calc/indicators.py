@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from app.calc.campaign import influencer_ranking
 from app.calc.signals import JUDGE, Signal, future_value_signals, risk_signals
 from app.data import loader
-from app.rules.models import RuleHit
+from app.rules.models import RuleHit, make_detail
 
 _SOURCE = "설계 4.4 위험 신호"
 
@@ -32,20 +32,24 @@ def _judge(subject: str, signals: list[Signal]) -> KeyIndicators:
     excluded = [s for s in signals if s.level == "red" and s.judgment != JUDGE]
     unmeasurable = [s for s in signals if s.level == "unmeasurable"]
     if red:
-        hits = [RuleHit(s.key, f"{s.label} 🔴({s.compare}): {s.basis}", _SOURCE, s.badge) for s in red]
+        hits = [RuleHit(s.key, f"{s.label} 🔴({s.compare}): {s.basis}", _SOURCE, s.badge, s.detail) for s in red]
     else:
         text = f"{subject}: 판정에 쓰는 위험 신호 🔴 없음"
         if excluded:
             text += "(" + "; ".join(f"{s.label}: {s.exclude_reason}이라 판정에서 뺌" for s in excluded) + ")"
         if unmeasurable:
             text += "; 측정 불가: " + ", ".join(f"{s.label}({s.basis})" for s in unmeasurable)
-        hits = [RuleHit("indicators_good", text, _SOURCE, "계산")]
+        hits = [RuleHit("indicators_good", text, _SOURCE, "계산", make_detail(
+            "판정에 쓰는 위험 신호(실적 기반)에 🔴가 하나도 없으면 지표가 좋은 것으로 봄. 참고 신호·측정 불가는 판정에서 뺌",
+            tuple((s.label, s.value) for s in signals if s.judgment == JUDGE and s.value is not None),
+            tuple(dict.fromkeys(f for s in signals if s.detail for f in s.detail["sources"]))))]
     return KeyIndicators(subject, not red, tuple(s.key for s in red), tuple(s.key for s in excluded),
                          tuple(s.key for s in unmeasurable), tuple(hits))
 
 
 def _no_basis(subject: str, why: str) -> KeyIndicators:
-    hit = RuleHit("no_signals", f"{subject}: {why}라 지표를 판단할 수 없음(나쁨으로 봄)", _SOURCE, "계산")
+    hit = RuleHit("no_signals", f"{subject}: {why}라 지표를 판단할 수 없음(나쁨으로 봄)", _SOURCE, "계산", make_detail(
+        "원본에 근거가 없으면 지표를 판단할 수 없어 나쁨으로 본다(손실 먼저 경계)"))
     return KeyIndicators(subject, False, (), (), (), (hit,))
 
 
