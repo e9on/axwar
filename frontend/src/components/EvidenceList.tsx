@@ -165,6 +165,11 @@ export default function EvidenceList({ data }: { data: EvidenceData }) {
     ...data.rule.indicator_hits.map((h) => ({ ...h, group: 'i' })),
   ]
 
+  // 지표 근거 줄이 위험 신호 줄과 같은 설명이면 결재 이유 칸에서는 설명을 빼고 한 줄 요약만 둔다
+  const signalSentences = new Set(data.signals.map((x) => x.explain?.trim()).filter((x): x is string => !!x))
+  const sameAsSignal = (h: { group: string; explain?: string | null }) => h.group === 'i' && !!h.explain?.trim() && signalSentences.has(h.explain.trim())
+  const hasSameIndicator = ruleLines.some(sameAsSignal)
+
   return (
     <div className="evidence">
       <p className="muted asm-note">가정 = 원본에 없어 정한 값</p>
@@ -173,6 +178,7 @@ export default function EvidenceList({ data }: { data: EvidenceData }) {
           <p className="muted">결재선 이유가 아직 없어요</p>
         ) : (
           <ul className="elist rule-box">
+            {hasSameIndicator && <li className="rule-summary muted">성과 지표가 나빠 결재가 더 붙었어요</li>}
             {ruleLines.map((h, i) => (
               <Row key={`${h.group}${i}`} {...props(`rule-${h.group}${i}`)} detail={h.detail} kind="rule" assumed={h.badge === '가정'} superseded={h.superseded}>
                 <span className="eline">
@@ -183,7 +189,7 @@ export default function EvidenceList({ data }: { data: EvidenceData }) {
                     {h.group === 'i' && <span className="stage">지표 </span>}
                     <b className="elabel">{h.text}</b>
                   </span>
-                  {h.explain?.trim() && <span className="explain">{h.explain.trim()}</span>}
+                  {h.explain?.trim() && !sameAsSignal(h) && <span className="explain">{h.explain.trim()}</span>}
                   <span className="esrc muted">{h.source}</span>
                 </span>
               </Row>

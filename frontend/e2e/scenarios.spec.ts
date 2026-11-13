@@ -21,11 +21,28 @@ async function startScene(page: Page, title: string) {
   await expect(page.getByText(/^0 \/ \d+단계 진행$/)).toBeVisible()
 }
 
-async function playSteps(page: Page, count: number, total: number) {
-  for (let i = 1; i <= count; i++) {
-    await page.getByRole('button', { name: '다음 단계' }).click()
-    await expect(page.getByText(`${i} / ${total}단계 진행`)).toBeVisible()
-  }
+/** "다음 날짜로" 버튼을 한 번 누르고, 서버가 알려 준 날짜로 넘어갈 때까지 기다린다 */
+async function nextDate(page: Page) {
+  const btn = page.getByRole('button', { name: /^다음 날짜로 \(/ })
+  await expect(btn).toBeEnabled()
+  await btn.click()
+  await expect(page.getByRole('region', { name: '진행' }).getByText('진행 중…')).toHaveCount(0)
+}
+
+/** 시연 조작판의 바로가기로 결정할 사람으로 바꿔 건을 연다 */
+async function openWaiting(page: Page, who: string) {
+  await page.getByRole('button', { name: new RegExp(`^${who}(으)?로 바꿔 건 열기$`) }).click()
+  await expect(page).toHaveURL(/\/cases\/\d+/)
+}
+
+async function goDemo(page: Page) {
+  await page.getByRole('navigation', { name: '화면 이동' }).getByRole('link', { name: '시연' }).click()
+}
+
+/** 끝까지는 시험용이라 접힌 곳 안에 있다 */
+async function runToEnd(page: Page) {
+  await page.getByText('대본 끝까지 자동 진행').click()
+  await page.getByRole('button', { name: '끝까지 진행' }).click()
 }
 
 async function viewAs(page: Page, name: string) {
@@ -44,14 +61,15 @@ async function openTodo(page: Page, ref: string, column?: string) {
   await expect(page).toHaveURL(/\/cases\/\d+/)
 }
 
-test('scenario_1: 물류·SCM 회신 뒤 Masil 대표가 근거를 보고 승인한다', async ({ page, problems }) => {
+test('scenario_1: 7월 3일 물류 회신이 오면 Masil 대표가 근거를 보고 승인하고, 7월 20일에 1차 집행이 된다', async ({ page, problems }) => {
   void problems
   await startScene(page, '장면 1\\. 정상')
-  await playSteps(page, 2, 3) // 물류 회신, SCM 회신 (세 번째 단계 = 승인은 화면에서 직접)
+  await nextDate(page) // 7월 3일: 물류 회신이 저절로 도착
+  const progress = page.getByRole('region', { name: '진행' })
+  await expect(progress.getByRole('status', { name: '이번에 일어난 일' })).toContainText('물류')
+  await expect(progress).toContainText('이제 Masil 대표가 결정할 차례예요')
 
-  await viewAs(page, 'Masil 대표')
-  await goHome(page)
-  await openTodo(page, 'PLAN-019', '승인 대기')
+  await openWaiting(page, 'Masil 대표')
 
   // 첫 화면(1440x900) 안에 지금 할 일 문장과 버튼이 보인다
   const now = page.getByRole('group', { name: '결정' })
@@ -75,16 +93,21 @@ test('scenario_1: 물류·SCM 회신 뒤 Masil 대표가 근거를 보고 승인
 
   await expect(page.getByText(/보냈어요/)).toBeVisible()
   await expect(page.getByText(/1차 집행|승인 완료/).first()).toBeVisible()
+
+  // 조작판으로 돌아오면 기다리는 결정이 사라지고 다음 날짜(7월 20일)가 남는다
+  await goDemo(page)
+  await expect(page.getByText(/이제 .* 결정할 차례예요/)).toHaveCount(0)
+  await nextDate(page)
+  await expect(page.getByText('오늘 7월 20일')).toBeVisible()
+  await expect(page.getByRole('button', { name: '다음 날짜로' })).toBeDisabled()
 })
 
 test('scenario_2: 재고 부족으로 막힌 이유를 보고 분할 승인한다', async ({ page, problems }) => {
   void problems
   await startScene(page, '장면 2\\. 조건 변경 — SCM 일부 허용')
-  await playSteps(page, 1, 10) // 물류 회신
-
-  await viewAs(page, '그룹 CEO')
-  await goHome(page)
-  await openTodo(page, 'PLAN-001')
+  await nextDate(page) // 7월 2일 물류 회신 도착
+  await expect(page.getByRole('region', { name: '진행' })).toContainText('이제 그룹 CEO가 결정할 차례예요')
+  await openWaiting(page, '그룹 CEO')
 
   const decide = page.getByRole('group', { name: '결정' })
   await expect(decide.getByRole('list', { name: '지금 할 수 없는 결정' })).toContainText('지금 할 수 없어요')
@@ -98,21 +121,25 @@ test('scenario_2: 재고 부족으로 막힌 이유를 보고 분할 승인한�
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await expect(page.getByText(/보냈어요/)).toBeVisible()
 
-  // 시연 조작판으로 이어서 진행(이사회 분할 승인 → SCM 일부 허용 → 재승인 둘). 이미 한 CEO 승인 단계는 서버가 건너뛴다
-  await page.getByRole('navigation', { name: '화면 이동' }).getByRole('link', { name: '시연' }).click()
-  for (let i = 2; i <= 6; i++) {
-    await page.getByRole('button', { name: '다음 단계' }).click()
-    await expect(page.getByText(`${i} / 10단계 진행`)).toBeVisible()
-  }
-  await page.goBack() // 건 상세로 돌아와 다시 읽힌다
-  await page.getByRole('button', { name: /^2차 집행/ }).click()
-  await expect(page.getByText(/2차 계획 [\d,]+개/)).toBeVisible()
+  // 조작판으로 돌아오면 이어서 이사회 차례. 이사회로 바꿔 건을 열어 결정한다
+  await goDemo(page)
+  await expect(page.getByRole('region', { name: '진행' })).toContainText('이제 이사회가 결정할 차례예요')
+  await openWaiting(page, '이사회')
+  await page.getByRole('group', { name: '결정' }).getByRole('button', { name: /^분할 승인/ }).click()
+  await page.getByRole('dialog').getByRole('button', { name: '분할 승인 확정' }).click()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+
+  // 날짜만 넘기면 7월 4일 SCM 회신이 도착한다
+  await goDemo(page)
+  await nextDate(page)
+  await expect(page.getByRole('status', { name: '이번에 일어난 일' })).toContainText('SCM')
 })
 
 test('scenario_3: 승인 없이 기본 거부 날이 되면 기본 거부와 통보 초안이 보인다', async ({ page, problems }) => {
   void problems
   await startScene(page, '장면 3\\. 정보 부족·승인 없음')
-  await playSteps(page, 2, 4) // 7/12, 7/14 기준일 이동
+  await nextDate(page) // 7월 12일
+  await nextDate(page) // 7월 14일: 승인 없이 기본 거부 날
 
   await viewAs(page, '계약 담당자')
   await goHome(page)
@@ -125,11 +152,9 @@ test('scenario_3: 승인 없이 기본 거부 날이 되면 기본 거부와 통
 test('scenario_1_escalate: 마케팅팀장이 위로 올리면 Masil 대표 결재선에 들어간다', async ({ page, problems }) => {
   void problems
   await startScene(page, '장면 1 변형\\. 상신 — .*')
-  await playSteps(page, 2, 4) // 물류·SCM 회신
-
-  await viewAs(page, '마케팅팀장')
-  await goHome(page)
-  await openTodo(page, 'DEMO-PLAN-001', '승인 대기')
+  await nextDate(page) // 7월 3일 물류 회신
+  await expect(page.getByRole('region', { name: '진행' })).toContainText('이제 마케팅팀장이 할 차례예요')
+  await openWaiting(page, '마케팅팀장')
 
   await page.getByRole('group', { name: '결정' }).getByRole('button', { name: '위로 올리기' }).click()
   const dlg = page.getByRole('dialog')
@@ -158,19 +183,19 @@ test('시연 조작판: 장면 설명은 두 줄로 줄여 보이고, 고른 장
 
   await startScene(page, '장면 1\. 정상')
   await page.getByRole('region', { name: '진행' }).getByText('자세히').click()
-  await expect(page.getByRole('region', { name: '진행' }).locator('.scene-desc')).toContainText('SCM이 전량 허용하고 Masil 대표가 승인하면')
+  await expect(page.getByRole('region', { name: '진행' }).locator('.scene-desc')).toContainText('Masil 대표가 승인하면')
 })
 
 test('scenario_2_exception: 반품 기준 숫자와 예외 승인 뒤 상태가 2차 관찰에 서버 값으로 보인다', async ({ page, problems }) => {
   void problems
   await startScene(page, '장면 2 변형\\. 2차 반품 자동 보류 — .*')
-  await page.getByRole('button', { name: '끝까지' }).click()
+  await runToEnd(page)
   await expect(page.getByText(/^13 \/ 13단계 진행$/)).toBeVisible()
 
   // 새로고침해도 서버가 기억한 진행 위치가 그대로다
   await page.reload()
   await expect(page.getByText(/^13 \/ 13단계 진행$/)).toBeVisible()
-  await expect(page.getByRole('button', { name: '다음 단계' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '다음 단계' })).toHaveCount(0)
 
   const id = await page.evaluate(async () => {
     const list = (await (await fetch('/api/cases')).json()) as { id: number; ref_id: string }[]
@@ -182,7 +207,7 @@ test('scenario_2_exception: 반품 기준 숫자와 예외 승인 뒤 상태가 
   await expect(box).toContainText('단순변심')
   const color = box.getByRole('button', { name: /색상불만/ })
   await expect(color).toContainText('150건')
-  await expect(color).toContainText('5.00%')
+  await expect(color).toContainText('5.0%')
   await expect(color).toContainText('초과')
   await expect(box).toContainText('예외 승인을 받은 건')
   await expect(box).toContainText('관찰')
@@ -198,7 +223,7 @@ test('메인: 하회 구간 이름표가 표시 칸과 겹치지 않는다', asy
   void problems
   // 일정이 많이 쌓인 장면 끝(표시가 하회 구간 띠 안까지 들어오는 상태)에서 잰다
   await startScene(page, '장면 2 변형\\. 2차 반품 자동 보류 — .*')
-  await page.getByRole('button', { name: '끝까지' }).click()
+  await runToEnd(page)
   await expect(page.getByText(/^13 \/ 13단계 진행$/)).toBeVisible()
   await page.goto('/')
   await expect(page.getByTestId('band').first()).toBeVisible()

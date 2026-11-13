@@ -208,7 +208,7 @@ describe('시연 조작판 개편', () => {
       'GET /api/people': { json: PEOPLE },
       'GET /api/clock': { json: { date: '2026-07-01', mode: '시연' } },
       'GET /api/demo/scenarios': { json: SCENES },
-      'GET /api/demo/state': { json: { scenario: 'scenario_2', title: SCENES[0].title, done, total: 4, finished: false, next_step: SCENES[0].script[done], date: '2026-07-01' } },
+      'GET /api/demo/state': { json: { scenario: 'scenario_2', title: SCENES[0].title, done, total: 4, finished: false, next_step: SCENES[0].script[done], date: '2026-07-01', next_date: '2026-07-14', waiting: { index: 1, action: '결정', actor: '그룹 CEO', target: 'PLAN-001', text: '그룹 CEO가 분할 승인해요', ready: true, step: SCENES[0].script[1] } } },
       'GET /api/cases': { json: [{ id: 7, kind: '기안', ref_id: 'PLAN-001', title: '혜인 기초 캠페인3 · 혜인', status: '승인 대기' }] },
     })
     return render(
@@ -228,10 +228,9 @@ describe('시연 조작판 개편', () => {
     expect(items[3]).toHaveTextContent('캠페인 담당자가 판매 실적을 넣어요')
     // 진행한 단계는 체크, 다음 단계는 강조
     expect(items[0]).toHaveAttribute('data-done', 'true')
-    expect(items[1]).toHaveAttribute('data-next', 'true')
-    // 다음이 결정이면 그 사람으로 바꿔 건을 여는 안내
-    expect(screen.getByText(/이제 그룹 CEO로 바꿔 혜인 기초 캠페인3 · 혜인을 열어 보세요/)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /그룹 CEO로 바꿔 열기/ })).toBeInTheDocument()
+    // 결정이 기다리면 그 사람으로 바꿔 건을 여는 안내
+    expect(await screen.findByText(/이제 그룹 CEO가 결정할 차례예요/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /그룹 CEO로 바꿔 건 열기/ })).toBeInTheDocument()
   })
 
   it('화면에_금지어가_없다_시연', async () => {
@@ -334,6 +333,34 @@ describe('근거 줄을 말로 보이기', () => {
     expect(screen.getByText('집행일이 기준 아래 구간에 걸려 대표 결재가 필요해요.')).toBeVisible()
     expect(screen.getByText('이 캠페인이 만든 매출은 1,000원이에요.')).toBeVisible()
     expect(screen.getByText('광고비 대비 실제 매출이 열 곳 중 가장 좋아요.')).toBeVisible()
+  })
+
+  it('지표_근거가_위험_신호와_같은_설명이면_결재_이유에서는_한_줄로_줄인다', async () => {
+    const same = '혜인 캠페인 주문 100건 중 약 18건에 쿠폰이 겹쳐 쓰였어요. 훨씬 많아서 나빠요.'
+    const ev = {
+      ...EXPLAIN_EVIDENCE,
+      signals: [{ ...EXPLAIN_EVIDENCE.signals[1], key: 'coupon_stacking', label: '쿠폰 중복 비중', level: 'red', explain: same }],
+      rule: {
+        ...EXPLAIN_EVIDENCE.rule,
+        indicator_hits: [{ rule_id: 'coupon_stacking', text: '쿠폰 중복 비중', source: 'x.md', badge: '원본', explain: same, detail: D }],
+      },
+    }
+    mountCase(MAY, 'Masil 대표', {}, ev)
+    await openAllFolds()
+    // 위험 신호 줄에는 설명이 한 번, 결재 이유 줄에는 설명 대신 요약 한 줄
+    expect(screen.getAllByText(same)).toHaveLength(1)
+    expect(screen.getByText('성과 지표가 나빠 결재가 더 붙었어요')).toBeVisible()
+  })
+
+  it('지표_근거_설명이_신호와_다르면_그대로_보인다', async () => {
+    const ev = {
+      ...EXPLAIN_EVIDENCE,
+      rule: { ...EXPLAIN_EVIDENCE.rule, indicator_hits: [{ rule_id: 'x', text: '다른 지표', source: 'x.md', badge: '원본', explain: '이 줄만의 설명이에요.', detail: D }] },
+    }
+    mountCase(MAY, 'Masil 대표', {}, ev)
+    await openAllFolds()
+    expect(screen.getByText('이 줄만의 설명이에요.')).toBeVisible()
+    expect(screen.queryByText('성과 지표가 나빠 결재가 더 붙었어요')).toBeNull()
   })
 
   it('계산_근거는_펼쳐야_보인다', async () => {
