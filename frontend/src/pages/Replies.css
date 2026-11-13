@@ -1,0 +1,58 @@
+/* 회신 입력 (시안 A 결재판): 목록은 줄과 구분선, 오른쪽은 서류 */
+.replies { max-width: 1200px; margin: 0 auto; }
+.replies .muted { color: var(--c-ink-3); }
+.rgrid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: var(--s-5); margin-top: var(--s-4); align-items: start; }
+.rlist section { margin-bottom: var(--s-5); }
+.rlist h2 { font-size: var(--t-4); margin-bottom: var(--s-2); }
+.rgroup h3 { font-size: var(--t-2); font-family: var(--f-ui); color: var(--c-ink-2); border-bottom: 2px solid var(--c-rule-strong); padding: var(--s-1) 0; margin-top: var(--s-3); }
+.rows { list-style: none; margin: 0; padding: 0; }
+.rows li { border-bottom: 1px solid var(--c-rule); }
+.rrow {
+  display: grid; width: 100%; text-align: left; gap: var(--s-1);
+  background: transparent; border: 0; border-left: 3px solid transparent; padding: var(--s-2) var(--s-3);
+}
+.rrow:hover { background: var(--c-navy-soft); }
+.rrow[aria-pressed="true"] { border-left-color: var(--c-navy); background: var(--c-navy-soft); }
+.rname { font-weight: var(--w-bold); overflow-wrap: anywhere; }
+.rsub { color: var(--c-ink-2); font-size: var(--t-1); overflow-wrap: anywhere; }
+
+.rdoc { background: var(--c-sheet); border: 1px solid var(--c-rule); padding: var(--s-5); }
+.rdoc h3 { font-size: var(--t-4); margin: var(--s-5) 0 var(--s-2); }
+.rhead { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--s-4); border-bottom: 2px solid var(--c-rule-strong); padding-bottom: var(--s-3); }
+.rhead .no { color: var(--c-ink-3); font-size: var(--t-1); }
+.rhead h2 { font-size: var(--t-5); font-weight: var(--w-heavy); margin: var(--s-1) 0 var(--s-2); }
+.rhead .facts { display: flex; flex-wrap: wrap; gap: var(--s-1) var(--s-5); color: var(--c-ink-2); }
+.rhead .facts b { color: var(--c-ink); font-weight: var(--w-bold); }
+.rhead .back { color: var(--c-navy); white-space: nowrap; }
+.ask { margin: var(--s-4) 0 var(--s-2); font-size: var(--t-3); font-weight: var(--w-medium); }
+.past { list-style: none; margin: 0; padding: 0; }
+.past li { border-bottom: 1px solid var(--c-rule); padding: var(--s-2) 0; }
+.past p { margin: 0 0 var(--s-1); overflow-wrap: anywhere; }
+.past .interp { color: var(--c-ink-2); font-size: var(--t-1); }
+
+.rform { display: grid; gap: var(--s-3); }
+.rform h3 { margin-bottom: 0; }
+.rform label { display: grid; gap: var(--s-1); color: var(--c-ink-2); font-size: var(--t-1); }
+.rform textarea, .rform input[type="number"] {
+  width: 100%; padding: var(--s-2); border: 1px solid var(--c-rule); border-radius: var(--r-2); background: var(--c-sheet); font-size: var(--t-2);
+}
+.rform .num input { max-width: var(--col-cmp); }
+.rform .warn { margin: 0; padding: var(--s-2) var(--s-3); color: var(--c-warn); background: var(--c-warn-soft); border: 1px solid var(--c-warn); border-radius: var(--r-1); }
+.rform .err, .jbox .err, .p2inputs .err { margin: 0; color: var(--c-seal); font-weight: var(--w-medium); }
+.rform .btn { justify-self: start; }
+
+.saved { margin-top: var(--s-5); border-top: 2px solid var(--c-rule-strong); }
+.saved h3 { margin-top: var(--s-3); }
+.saved h4 { margin: var(--s-3) 0 var(--s-1); font-family: var(--f-ui); font-size: var(--t-2); }
+.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--s-1) var(--s-4); margin: 0; }
+.kv dt { color: var(--c-ink-3); }
+.kv dd { margin: 0; font-weight: var(--w-medium); overflow-wrap: anywhere; }
+.changed { margin: 0; padding-left: var(--s-4); }
+
+/* .btn 버튼 모양은 DecisionPanel.css의 공용 규칙을 쓴다 */
+
+@media (max-width: 900px) {
+  .rgrid { grid-template-columns: minmax(0, 1fr); }
+  .rdoc { padding: var(--s-4); }
+  .rhead { grid-template-columns: minmax(0, 1fr); }
+}

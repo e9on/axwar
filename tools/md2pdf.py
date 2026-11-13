@@ -37,6 +37,7 @@ code { font-family: Consolas, monospace; font-size: 9pt; background: #f3f4f6; pa
 pre { background: #f6f8fa; border: 1px solid #d0d7de; padding: 8px; border-radius: 4px; white-space: pre-wrap; font-size: 8.5pt; }
 pre code { background: none; padding: 0; }
 strong { color: #0b2a4a; }
+img { max-width: 100%; border: 1px solid #d0d7de; margin: 6px 0; }
 .b { display: inline-block; font-size: 8pt; font-weight: bold; padding: 0 5px; border-radius: 3px; margin: 0 1px; color: #fff; }
 .b-원본 { background: #1f6feb; } .b-계산 { background: #8250df; } .b-가정 { background: #d4a72c; color: #222; }
 .b-회신 { background: #1a7f37; } .b-의견 { background: #6e7781; } .b-AI { background: #cf222e; }
@@ -75,7 +76,7 @@ def convert(src: Path, dst: Path) -> None:
     body = markdown.markdown(text, extensions=["tables", "fenced_code", "sane_lists"])
     body = BADGE.sub(lambda m: f'<span class="b b-{m.group(1)}">{m.group(1)}</span>', body)
     title = next((l[2:].strip() for l in text.splitlines() if l.startswith("# ")), src.stem)
-    html = f'<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>{title}</title><style>{CSS}</style></head><body>{body}</body></html>'
+    html = f'<!doctype html><html lang="ko"><head><meta charset="utf-8"><base href="{src.parent.resolve().as_uri()}/"><title>{title}</title><style>{CSS}</style></head><body>{body}</body></html>'
     browser = next((b for b in BROWSERS if Path(b).exists()), None)
     if not browser:
         sys.exit("Chrome 또는 Edge를 찾지 못했어요")

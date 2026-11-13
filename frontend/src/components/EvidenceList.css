@@ -1,0 +1,68 @@
+.evidence h3 { font-size: var(--t-4); margin: var(--s-5) 0 var(--s-2); }
+.evidence section:first-child h3 { margin-top: var(--s-4); }
+.evidence .note, .evidence .limit { font-size: var(--t-1); color: var(--c-ink-3); margin: var(--s-1) 0 var(--s-2); }
+.evidence .limit { margin-top: var(--s-4); }
+.evidence .muted { color: var(--c-ink-3); }
+
+.elist { list-style: none; margin: 0; padding: 0; }
+.elist.rule-box { background: var(--c-paper); border-left: 3px solid var(--c-navy); padding: var(--s-1) var(--s-3); }
+.erow { border-bottom: 1px solid var(--c-rule); }
+.erow:last-child { border-bottom: 0; }
+.erow[data-assumed="true"] .ebtn { box-shadow: inset 3px 0 0 var(--c-b-asm); }
+
+/* 줄 전체가 펼침 버튼 */
+.ebtn {
+  display: grid; align-items: start; gap: var(--s-1) var(--s-3);
+  width: 100%; text-align: left; border: 0; background: none; color: inherit;
+  padding: var(--s-2) var(--s-2); border-radius: var(--r-2);
+}
+.ebtn:hover { background: var(--c-navy-soft); }
+.ebtn.signal { grid-template-columns: var(--col-lv) minmax(var(--col-name), 1fr) minmax(var(--col-num), auto) minmax(var(--col-cmp), 2fr) var(--col-chev); }
+.ebtn.indicator, .ebtn.cost { grid-template-columns: minmax(var(--col-name), 1.2fr) minmax(var(--col-name), auto) minmax(var(--col-name), 2fr) var(--col-chev); }
+.ebtn.rule { grid-template-columns: minmax(0, 3fr) minmax(0, 1fr) var(--col-chev); }
+.ehead { display: grid; gap: var(--s-3); padding: 0 var(--s-2); color: var(--c-ink-3); font-size: var(--t-1); border-bottom: 1px solid var(--c-rule); }
+.ehead.signal { grid-template-columns: var(--col-lv) minmax(var(--col-name), 1fr) minmax(var(--col-num), auto) minmax(var(--col-cmp), 2fr) var(--col-chev); }
+.ecell { min-width: 0; overflow-wrap: anywhere; }
+.ecell.n, .ehead .n { text-align: right; white-space: nowrap; }
+.ecell.src { font-size: var(--t-1); }
+.ecell.lv { font-weight: var(--w-bold); white-space: nowrap; }
+.ecell.lv.red { color: var(--c-seal); }
+.ecell.lv.yel { color: var(--c-warn); }
+.ecell.lv.grn { color: var(--c-ok); }
+.ecell.lv.none { color: var(--c-ink-3); }
+.ecell .stage { color: var(--c-ink-3); font-size: var(--t-1); }
+.chev { color: var(--c-ink-3); text-align: right; }
+
+.epanel { padding: var(--s-2) var(--s-3) var(--s-4) var(--s-4); background: var(--c-paper); border-left: 3px solid var(--c-rule); margin: 0 var(--s-2) var(--s-2); }
+.epanel[hidden] { display: none; }
+.edetail p { margin: 0 0 var(--s-2); }
+.edetail .dh { font-size: var(--t-1); font-weight: var(--w-bold); color: var(--c-ink-2); }
+.edetail p.dh { margin: var(--s-3) 0 var(--s-1); }
+.inputs { display: grid; grid-template-columns: repeat(auto-fill, minmax(calc(var(--col-name) + var(--col-num)), 1fr)); gap: var(--s-1) var(--s-4); margin: 0; }
+.inputs div { display: flex; justify-content: space-between; gap: var(--s-3); border-bottom: 1px dotted var(--c-rule); }
+.inputs dt { color: var(--c-ink-2); }
+.inputs dd { margin: 0; font-weight: var(--w-medium); text-align: right; }
+.sources, .policies { margin: 0; padding: 0; list-style: none; }
+.sources li { overflow-wrap: anywhere; }
+.policies li { padding: var(--s-2) var(--s-3); border-left: 3px solid var(--c-rule); margin-bottom: var(--s-2); background: var(--c-sheet); }
+.policies li[data-assumed="true"] { border-left-color: var(--c-b-asm); background: var(--c-warn-soft); }
+.policies li p { margin: 0; }
+.policies code { font-family: var(--f-ui); font-size: var(--t-1); }
+
+@media (max-width: 760px) {
+  .ehead { display: none; }
+  .ebtn.signal { grid-template-columns: var(--col-lv) minmax(0, 1fr) auto var(--col-chev); }
+  .ebtn.signal .cmp { grid-column: 2 / 4; }
+  .ebtn.indicator, .ebtn.cost { grid-template-columns: minmax(0, 1fr) auto var(--col-chev); }
+  .ebtn.indicator .cmp, .ebtn.cost .cmp { grid-column: 1 / 3; }
+  .ebtn.rule { grid-template-columns: minmax(0, 1fr) var(--col-chev); }
+  .ebtn.rule .src { grid-column: 1 / 2; }
+  .ebtn.signal .chev { grid-column: 4; grid-row: 1; }
+  .ebtn.indicator .chev, .ebtn.cost .chev { grid-column: 3; grid-row: 1; }
+  .ebtn.rule .chev { grid-column: 2; grid-row: 1; }
+  .epanel { margin: 0 0 var(--s-2); padding-left: var(--s-3); }
+}
+
+/* 상신으로 바뀌기 전의 처음 판정 줄 */
+.erow[data-superseded="true"] .ebtn { color: var(--c-ink-3); }
+.erow[data-superseded="true"] .ecell.text { text-decoration: none; opacity: 0.85; }

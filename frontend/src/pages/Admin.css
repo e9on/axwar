@@ -1,0 +1,79 @@
+/* 시연 조작판·기록·정책·등록 화면 공통 (시안 A 결재판): 줄과 구분선, 서류 모양. 값은 tokens.css만 쓴다 */
+.admin { max-width: 1200px; margin: 0 auto; padding: var(--s-6) var(--s-5); }
+.admin h1 { font-size: var(--t-5); font-weight: var(--w-heavy); margin-bottom: var(--s-2); }
+.admin h2 { font-size: var(--t-4); margin: var(--s-5) 0 var(--s-2); }
+.admin .lead { color: var(--c-ink-2); margin: 0 0 var(--s-4); }
+.admin .muted { color: var(--c-ink-3); }
+.admin .err { color: var(--c-seal); font-weight: var(--w-medium); margin: var(--s-2) 0 0; }
+.admin .note { margin: var(--s-3) 0; padding: var(--s-2) var(--s-3); border: 1px solid var(--c-rule); border-left: 3px solid var(--c-navy); background: var(--c-sheet); }
+.admin .note ul { margin: var(--s-1) 0 0; padding-left: var(--s-4); }
+.admin .note p { margin: 0; }
+.admin .note a, .admin a { color: var(--c-navy); }
+.admin .warn-line { color: var(--c-warn); }
+
+.admin .bar-tools { display: flex; flex-wrap: wrap; gap: var(--s-2); align-items: center; margin: var(--s-3) 0; }
+.admin .bar-tools label { display: inline-flex; gap: var(--s-2); align-items: center; color: var(--c-ink-2); }
+.admin input[type="text"], .admin input[type="search"], .admin select, .admin textarea,
+.dlg input[type="text"], .dlg input[type="date"], .dlg input[type="search"], .dlg select {
+  padding: var(--s-1) var(--s-2); border: 1px solid var(--c-rule); border-radius: var(--r-2); background: var(--c-sheet);
+}
+.admin .tabs { display: flex; flex-wrap: wrap; gap: 0; border-bottom: 2px solid var(--c-rule-strong); margin: var(--s-3) 0; }
+.admin .tabs button { background: transparent; border: 0; border-bottom: 3px solid transparent; padding: var(--s-2) var(--s-4); font-weight: var(--w-bold); color: var(--c-ink-2); margin-bottom: -2px; }
+.admin .tabs button[aria-pressed="true"] { color: var(--c-navy); border-bottom-color: var(--c-navy); }
+
+/* 줄 목록: 서류 줄처럼 가는 선으로 나눈다 */
+.ledger { list-style: none; margin: 0; padding: 0; border-top: 2px solid var(--c-rule-strong); }
+.ledger > li { border-bottom: 1px solid var(--c-rule); padding: var(--s-2) var(--s-1); display: grid; gap: var(--s-1) var(--s-4); align-items: start; }
+.ledger .k { font-weight: var(--w-bold); overflow-wrap: anywhere; }
+.ledger .sub { color: var(--c-ink-2); font-size: var(--t-1); overflow-wrap: anywhere; }
+.ledger .label { display: none; }
+.ledger .num { font-variant-numeric: tabular-nums; text-align: right; }
+.ledger .acts { display: flex; flex-wrap: wrap; gap: var(--s-2); justify-content: flex-end; }
+
+.ledger.events > li { grid-template-columns: 11em 9em minmax(0, 1fr); }
+.ledger.calls > li { grid-template-columns: 11em minmax(0, 1fr) 6em 6em 7em; }
+.ledger.assume > li { grid-template-columns: 3em minmax(0, 2fr) minmax(0, 1fr) minmax(0, 3fr); }
+.ledger.policy > li { grid-template-columns: minmax(0, 3fr) minmax(0, 1fr) minmax(0, 3fr) auto; }
+.ledger.history > li { grid-template-columns: 11em minmax(0, 2fr) minmax(0, 2fr) minmax(0, 3fr); }
+.ledger.plans > li { grid-template-columns: minmax(0, 2fr) minmax(0, 2fr) minmax(0, 2fr) minmax(0, 2fr) auto; }
+.ledger.contracts > li { grid-template-columns: minmax(0, 2fr) minmax(0, 2fr) minmax(0, 2fr) minmax(0, 2fr) auto; }
+.ledger.steps > li { grid-template-columns: 2.5em minmax(0, 1fr); }
+
+.origin { display: inline-block; font-size: var(--t-1); border: 1px solid var(--c-rule); border-radius: var(--r-1); padding: 0 var(--s-2); color: var(--c-ink-2); margin-left: var(--s-2); }
+
+/* 시연 조작판 */
+.scenes { list-style: none; margin: 0; padding: 0; border-top: 2px solid var(--c-rule-strong); }
+.scenes li { border-bottom: 1px solid var(--c-rule); }
+.scene { display: grid; width: 100%; text-align: left; gap: var(--s-1); background: transparent; border: 0; border-left: 3px solid transparent; padding: var(--s-2) var(--s-3); }
+.scene:hover { background: var(--c-navy-soft); }
+.scene[aria-pressed="true"] { border-left-color: var(--c-navy); background: var(--c-navy-soft); }
+.scene .k { font-weight: var(--w-bold); }
+.scene .sub { color: var(--c-ink-2); font-size: var(--t-1); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+.scene-desc { color: var(--c-ink-2); font-size: var(--t-1); max-width: 72ch; }
+.steps .no { font-family: var(--f-doc); font-weight: var(--w-heavy); font-size: var(--t-4); }
+.steps .state { font-size: var(--t-1); font-weight: var(--w-bold); color: var(--c-ok); margin-left: var(--s-2); }
+.steps .next { font-size: var(--t-1); font-weight: var(--w-bold); color: var(--c-navy); margin-left: var(--s-2); }
+.steps .result { margin: var(--s-1) 0 0; padding-left: var(--s-4); color: var(--c-ink-2); }
+.steps li[data-next="true"] { background: var(--c-navy-soft); }
+.dates { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+
+/* 버튼 모양은 DecisionPanel.css의 .btn을 쓰되 화면 안에서는 작게 */
+.admin .btn { padding: var(--s-1) var(--s-4); }
+.admin .btn.small { padding: 0 var(--s-3); font-size: var(--t-1); }
+
+/* 입력 창 안의 칸 */
+.dlg .field { display: grid; gap: var(--s-1); margin-bottom: var(--s-3); color: var(--c-ink-2); font-size: var(--t-1); }
+.dlg .field input[type="text"], .dlg .field input[type="date"], .dlg .field textarea { width: 100%; font-size: var(--t-2); color: var(--c-ink); }
+.dlg .field.check { display: flex; gap: var(--s-2); align-items: center; font-size: var(--t-2); }
+.dlg .hint { color: var(--c-ink-3); font-size: var(--t-1); margin: 0 0 var(--s-2); }
+.dlg .now { margin: 0 0 var(--s-3); }
+.dlg .now b { overflow-wrap: anywhere; }
+
+@media (max-width: 900px) {
+  .admin { padding: var(--s-4); }
+  .ledger.events > li, .ledger.calls > li, .ledger.assume > li, .ledger.policy > li, .ledger.history > li,
+  .ledger.plans > li, .ledger.contracts > li { grid-template-columns: minmax(0, 1fr); }
+  .ledger .num { text-align: left; }
+  .ledger .acts { justify-content: flex-start; }
+  .ledger .label { display: inline; color: var(--c-ink-3); font-size: var(--t-1); margin-right: var(--s-2); }
+}
