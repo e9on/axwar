@@ -22,14 +22,26 @@
       "plan": "DEMO-PLAN-001",
       "dept": "물류",
       "text": "전량 가능합니다. 집행일부터 평소 처리량 안에서 출고할 수 있습니다.",
-      "attachments": 0
+      "attachments": 0,
+      "ai": {
+        "stance": "수용",
+        "qty_limit": null,
+        "next_date": null,
+        "needs_human": false
+      }
     },
     {
       "action": "회신",
       "plan": "DEMO-PLAN-001",
       "dept": "SCM",
       "text": "전량 허용합니다. 안전재고를 사용해도 좋습니다.",
-      "attachments": 0
+      "attachments": 0,
+      "ai": {
+        "stance": "수용",
+        "qty_limit": null,
+        "next_date": null,
+        "needs_human": false
+      }
     },
     {
       "action": "상신",

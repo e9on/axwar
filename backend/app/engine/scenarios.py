@@ -12,7 +12,11 @@
     plans에 넣어 사건을 열 수 있다. note는 "시연용 가정: ..." 설명(등록부 raw·기안등록 이벤트에 남아 화면에 드러남).
   requests: [{plan|contract, dept, text, attach_required?, purpose?}]
   script: [{action, plan|contract, date?, ...}]
-    회신  dept, text, attachments?          (SCM 응답도 dept="SCM" 회신)
+    회신  dept, text, attachments?, ai?     (SCM 응답도 dept="SCM" 회신)
+      ai (선택): 이 회신의 AI 해석 {stance(수용|조건부수용|거절|정보부족), qty_limit(정수|null), next_date(YYYY-MM-DD|null),
+        needs_human(참/거짓), confidence?(숫자)} — 실제 회신 해석 결과와 같은 키. AI 모드가 fake(키 없는 시연)일 때만 이 값을
+        그 회신의 해석으로 쓰고(판정 기록의 모델 이름에 "fake(대본)"이 남음), real 모드에서는 무시하고 실제 모델이 해석한다.
+        고정 응답 공급자를 주입한 시험에서도 무시한다. 없으면 키워드 규칙 해석.
     결정  actor(보는 사람 이름), decision(승인|분할승인|거절), comment?, stage?("1차" 기본 | "2차": 2차 승인 대기 건의 결정, 승인|거절)
     리뷰  reviews: [[상품, 문장], ...]
     반품  change_of_mind, color(건수)
@@ -32,6 +36,7 @@ from datetime import date
 from pathlib import Path
 
 from app import config
+from app.ai import judge
 from app.data import loader
 from app.store import db as _db
 from app.store.db import Store
@@ -43,6 +48,8 @@ ACTION_FIELDS = {"회신": ("dept", "text"), "결정": ("actor", "decision"), "�
                  "반품": ("change_of_mind", "color"), "판매": ("actor", "orders", "returns"), "공지": ("actor",), "발송": ("actor",), "상신": ("actor", "stage", "opinion", "reason"),
                  "예외 승인": ("actor", "qty", "reason"), "기준일": ("date",)}
 TARGETED = ("회신", "결정", "리뷰", "반품", "판매", "공지", "발송", "상신", "예외 승인")
+AI_KEYS = ("stance", "qty_limit", "next_date", "needs_human")
+AI_OPTIONAL = ("confidence",)
 UP_STAGES = ("1차", "2차")
 UP_OPINIONS = ("승인 권고", "반대 권고")
 _TOP_KEYS = ("title", "description", "plans", "contracts", "requests", "script")
@@ -167,6 +174,28 @@ def _check_demo_plans(name: str, rows) -> tuple[dict, ...]:
     return tuple(rows)
 
 
+def _check_ai(name: str, where: str, ai) -> None:
+    w = f"{where}의 ai"
+    if not isinstance(ai, dict):
+        raise _fail(name, f"{w}는 객체여야 함")
+    missing = [k for k in AI_KEYS if k not in ai]
+    extra = sorted(set(ai) - set(AI_KEYS) - set(AI_OPTIONAL))
+    if missing or extra:
+        raise _fail(name, f"{w}의 항목이 잘못됨 — 없는 것 {missing}, 모르는 것 {extra} (필요: {', '.join(AI_KEYS)})")
+    if ai["stance"] not in judge.ALLOWED["stance"]:
+        raise _fail(name, f"{w}.stance는 {', '.join(sorted(judge.ALLOWED['stance']))} 중 하나여야 함: {ai['stance']!r}")
+    q = ai["qty_limit"]
+    if q is not None and (not isinstance(q, int) or isinstance(q, bool) or q < 0):
+        raise _fail(name, f"{w}.qty_limit는 0 이상 정수 또는 null이어야 함: {q!r}")
+    if ai["next_date"] is not None:
+        _check_date(name, f"{w}.next_date", ai["next_date"])
+    if not isinstance(ai["needs_human"], bool):
+        raise _fail(name, f"{w}.needs_human은 참/거짓이어야 함")
+    c = ai.get("confidence")
+    if c is not None and (not isinstance(c, (int, float)) or isinstance(c, bool)):
+        raise _fail(name, f"{w}.confidence는 숫자여야 함")
+
+
 def _check_step(name: str, i: int, s, plans: list, contracts: list) -> None:
     where = f"script[{i}]"
     if not isinstance(s, dict):
@@ -187,6 +216,8 @@ def _check_step(name: str, i: int, s, plans: list, contracts: list) -> None:
         att = s.get("attachments", 0)
         if not isinstance(att, int) or isinstance(att, bool) or att < 0:
             raise _fail(name, f"{where}의 attachments는 0 이상 정수여야 함")
+        if "ai" in s:
+            _check_ai(name, where, s["ai"])
     elif action in ("공지", "발송"):
         if not isinstance(s["actor"], str) or not s["actor"].strip():
             raise _fail(name, f"{where}의 actor가 잘못됨")

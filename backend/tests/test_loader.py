@@ -46,8 +46,8 @@ def test_필수_열이_빠지면_파일과_열_이름을_담은_오류(tmp_path,
 
 def test_필수_열_목록에_없는_파일은_오류(data_copy):
     with pytest.raises(DataFormatError) as e:
-        read_table("02_masil/master/m_influencer_ms.csv")
-    assert "필수 열 미등록 파일" in str(e.value) and "m_influencer_ms.csv" in str(e.value)
+        read_table("02_masil/master/m_unregistered_ms.csv")
+    assert "필수 열 미등록 파일" in str(e.value) and "m_unregistered_ms.csv" in str(e.value)
 
 
 def test_계산에서_읽는_모든_파일이_등록되어_있다():

@@ -15,7 +15,13 @@
       "plan": "PLAN-001",
       "dept": "물류",
       "text": "평소 하루 20,000개, 최대 26,000개까지 처리할 수 있습니다.",
-      "attachments": 0
+      "attachments": 0,
+      "ai": {
+        "stance": "수용",
+        "qty_limit": null,
+        "next_date": null,
+        "needs_human": false
+      }
     },
     {
       "action": "결정",
@@ -36,7 +42,13 @@
       "plan": "PLAN-001",
       "dept": "SCM",
       "text": "3,000개까지 허용합니다.",
-      "attachments": 0
+      "attachments": 0,
+      "ai": {
+        "stance": "조건부수용",
+        "qty_limit": 3000,
+        "next_date": null,
+        "needs_human": false
+      }
     },
     {
       "action": "결정",
