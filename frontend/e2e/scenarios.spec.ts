@@ -183,7 +183,6 @@ test('scenario_2_exception: 반품 기준 숫자와 예외 승인 뒤 상태가 
   const color = box.getByRole('button', { name: /색상불만/ })
   await expect(color).toContainText('150건')
   await expect(color).toContainText('5.00%')
-  await expect(color).toContainText('한계')
   await expect(color).toContainText('초과')
   await expect(box).toContainText('예외 승인을 받은 건')
   await expect(box).toContainText('관찰')

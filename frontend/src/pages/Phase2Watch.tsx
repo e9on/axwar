@@ -11,7 +11,7 @@ import { josa, num, pct, unitValue, won } from '../format'
 import { ACT_CANCEL, ACT_CONTINUE, ACT_EXCEPTION, ACT_RETURN, ACT_REVIEW, ACT_SALES, S_PHASE2_HOLD, SELL_ADJUST, SELL_HOLD, SELL_SOLDOUT, ST_ENDED, ST_PHASE2_WAIT } from '../decisions'
 import type { Gate, ObserveCase, Phase2Observe } from '../replyTypes'
 import LoadFailed from '../components/LoadFailed'
-import { Row } from '../components/EvidenceList'
+import { Line, Row } from '../components/EvidenceList'
 import '../components/EvidenceList.css'
 import './Phase2Watch.css'
 
@@ -124,15 +124,12 @@ function ReturnBox({ p2 }: { p2: Phase2Observe }) {
               const id = `${uid}-${it.label}`.replace(/:/g, '')
               return (
                 <Row key={it.label} id={id} open={open.has(id)} toggle={toggle} detail={it.detail} kind="indicator">
-                  <span className="ecell">{it.label}</span>
-                  <span className="ecell n">
-                    {num(it.count)}건 · {it.rate === null ? '계산 불가' : unitValue(it.rate, it.unit)}
-                  </span>
-                  <span className="ecell cmp">
-                    {[it.limit !== null && `한계 ${unitValue(it.limit, it.unit)}`, it.baseline !== null && `기준선 ${unitValue(it.baseline, it.unit)}`].filter(Boolean).join(' · ')}
-                    {(it.limit !== null || it.baseline !== null) && ' · '}
-                    <span className={it.over ? 'over' : undefined}>{it.over ? '초과' : '기준 이내'}</span>
-                  </span>
+                  <Line
+                    mark={it.over ? { text: '초과', cls: 'red' } : { text: '기준 이내', cls: 'grn' }}
+                    label={it.label}
+                    explain={it.explain}
+                    fallback={`${num(it.count)}건 · ${it.rate === null ? '계산 불가' : unitValue(it.rate, it.unit)}`}
+                  />
                 </Row>
               )
             })}

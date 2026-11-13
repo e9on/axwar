@@ -9,7 +9,7 @@ const LEVEL: Record<SignalLine['level'], { text: string; cls: string }> = {
   red: { text: '나쁨', cls: 'red' },
   yellow: { text: '주의', cls: 'yel' },
   green: { text: '좋음', cls: 'grn' },
-  unmeasurable: { text: '측정 불가', cls: 'none' },
+  unmeasurable: { text: '잴 수 없음', cls: 'none' },
 }
 
 export function DetailPanel({ detail, note }: { detail: Detail | undefined; note?: string }) {
@@ -105,9 +105,27 @@ export function Row({ id, open, toggle, detail, note, kind, assumed, superseded,
         </span>
       </button>
       <div id={panel} className="epanel" hidden={!open}>
+        <p className="dh basis">계산 근거</p>
         <DetailPanel detail={detail} note={note} />
       </div>
     </li>
+  )
+}
+
+/** 줄 하나의 모양: 결론 표시 + 굵은 이름(+ 작은 값), 아래에 설명 문장. 설명이 없으면 값만 */
+export function Line({ mark, label, value, tag, badge, explain, fallback }: { badge?: string; mark?: { text: string; cls: string }; label: string; value?: string; tag?: string; explain?: string | null; fallback?: ReactNode }) {
+  const sentence = explain?.trim()
+  return (
+    <span className="eline">
+      <span className="ehead-line">
+        {mark && <span className={`ecell lv ${mark.cls}`}>{mark.text}</span>}
+        {badge && <Badge kind={badge} />}
+        <b className="elabel">{label}</b>
+        {value && <span className="eval">{value}</span>}
+        {tag && <span className="muted"> · {tag}</span>}
+      </span>
+      {sentence ? <span className="explain">{sentence}</span> : fallback ? <span className="explain fallback muted">{fallback}</span> : null}
+    </span>
   )
 }
 
@@ -157,14 +175,17 @@ export default function EvidenceList({ data }: { data: EvidenceData }) {
           <ul className="elist rule-box">
             {ruleLines.map((h, i) => (
               <Row key={`${h.group}${i}`} {...props(`rule-${h.group}${i}`)} detail={h.detail} kind="rule" assumed={h.badge === '가정'} superseded={h.superseded}>
-                <span className="ecell text">
-                  <Badge kind={h.badge} />
-                  {h.superseded && <span className="stage">처음 판정 </span>}
-                  {h.group === 'p2' && <span className="stage">2차 </span>}
-                  {h.group === 'i' && <span className="stage">지표 </span>}
-                  {h.text}
+                <span className="eline">
+                  <span className="ehead-line">
+                    <Badge kind={h.badge} />
+                    {h.superseded && <span className="stage">처음 판정 </span>}
+                    {h.group === 'p2' && <span className="stage">2차 </span>}
+                    {h.group === 'i' && <span className="stage">지표 </span>}
+                    <b className="elabel">{h.text}</b>
+                  </span>
+                  {h.explain?.trim() && <span className="explain">{h.explain.trim()}</span>}
+                  <span className="esrc muted">{h.source}</span>
                 </span>
-                <span className="ecell src muted">{h.source}</span>
               </Row>
             ))}
           </ul>
@@ -178,27 +199,13 @@ export default function EvidenceList({ data }: { data: EvidenceData }) {
       ) : (
         <>
           <Fold title="위험 신호" summary={signalSummary(data.signals)}>
-            <div className="ehead signal">
-              <span>신호</span>
-              <span>지표</span>
-              <span className="n">값</span>
-              <span>비교·근거</span>
-              <span />
-            </div>
             <ul className="elist">
               {data.signals.map((s) => {
                 const lv = LEVEL[s.level] ?? LEVEL.unmeasurable
                 const note = s.exclude_reason || (s.level === 'unmeasurable' ? s.compare : undefined)
                 return (
                   <Row key={s.key} {...props(`sig-${s.key}`)} detail={s.detail} kind="signal" assumed={s.badge === '가정'} note={note}>
-                    <span className={`ecell lv ${lv.cls}`}>{lv.text}</span>
-                    <span className="ecell">{s.label}</span>
-                    <span className="ecell n">{signalValue(s)}</span>
-                    <span className="ecell cmp">
-                      <Badge kind={s.badge} />
-                      {s.compare}
-                      {s.judgment === '참고' && <span className="muted"> · 참고용</span>}
-                    </span>
+                    <Line mark={lv} label={s.label} badge={s.badge} tag={s.judgment === '참고' ? '참고용' : undefined} explain={s.explain} fallback={s.level === 'unmeasurable' ? undefined : signalValue(s)} />
                   </Row>
                 )
               })}
@@ -209,12 +216,7 @@ export default function EvidenceList({ data }: { data: EvidenceData }) {
             <ul className="elist">
               {data.key_indicators.map((k) => (
                 <Row key={k.key} {...props(`key-${k.key}`)} detail={k.detail} kind="indicator" assumed={k.badge === '가정'}>
-                  <span className="ecell">{k.label}</span>
-                  <span className="ecell n">{indicatorValue(k)}</span>
-                  <span className="ecell cmp">
-                    <Badge kind={k.badge} />
-                    {k.compare_label && k.compare_value !== null && `${k.compare_label} ${unitValue(k.compare_value, k.compare_unit ?? k.unit)}`}
-                  </span>
+                  <Line label={k.label} badge={k.badge} value={indicatorValue(k)} explain={k.explain} />
                 </Row>
               ))}
             </ul>
@@ -225,11 +227,7 @@ export default function EvidenceList({ data }: { data: EvidenceData }) {
             <ul className="elist">
               {data.cost_breakdown.rows.map((r) => (
                 <Row key={r.key} {...props(`cost-${r.key}`)} detail={r.detail} kind="cost" assumed={r.badge === '가정'}>
-                  <span className="ecell">{r.label}</span>
-                  <span className="ecell n">{unitValue(r.amount, r.unit ?? 'krw')}</span>
-                  <span className="ecell cmp">
-                    <Badge kind={r.badge} />
-                  </span>
+                  <Line label={r.label} badge={r.badge} value={r.explain?.trim() ? undefined : unitValue(r.amount, r.unit ?? 'krw')} explain={r.explain} />
                 </Row>
               ))}
             </ul>
@@ -238,12 +236,13 @@ export default function EvidenceList({ data }: { data: EvidenceData }) {
                 <p className="dh-line">본전 조건</p>
                 <ul className="elist">
                 <Row {...props('be')} detail={data.breakeven.detail} kind="indicator" assumed={data.breakeven.badge === '가정'}>
-                  <span className="ecell">{data.breakeven.label}</span>
-                  <span className="ecell n">{data.breakeven.value === null ? '측정 불가' : unitValue(data.breakeven.value, data.breakeven.unit ?? 'ratio')}</span>
-                  <span className="ecell cmp">
-                    <Badge kind={data.breakeven.badge} />
-                    {data.breakeven.compare}
-                  </span>
+                  <Line
+                    mark={LEVEL[data.breakeven.level] ?? LEVEL.unmeasurable}
+                    label={data.breakeven.label}
+                    badge={data.breakeven.badge}
+                    explain={data.breakeven.explain}
+                    fallback={data.breakeven.value === null ? undefined : unitValue(data.breakeven.value, data.breakeven.unit ?? 'ratio')}
+                  />
                 </Row>
                 </ul>
               </>

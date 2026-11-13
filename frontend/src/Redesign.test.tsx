@@ -298,3 +298,72 @@ describe('배지 정리와 AI 의견', () => {
     expect(await screen.findByText(long)).toBeInTheDocument()
   })
 })
+
+const EXPLAIN_EVIDENCE = {
+  ...EVIDENCE,
+  signals: [
+    { key: 'a', label: '예상 ROAS 괴리', value: 10.4, unit: 'multiple', compare: '기준 ≤ 1.5 z=2.1 ROAS', level: 'red', badge: '계산', judgment: '판정', exclude_reason: '', explain: '예상 매출이 실제 기록보다 크게 부풀려져 있어서 나쁘게 봤어요.', detail: { ...D, formula: '예상 ROAS = 예상 GMV ÷ 예산' } },
+    { key: 'b', label: '쿠폰 중복 비중', value: null, unit: 'ratio', compare: '측정 불가', level: 'unmeasurable', badge: '계산', judgment: '판정', exclude_reason: '', explain: '쿠폰 기록이 없어 잴 수 없었어요.', detail: D },
+  ],
+  key_indicators: [{ ...EVIDENCE.key_indicators[0], explain: '광고비 대비 실제 매출이 열 곳 중 가장 좋아요.' }],
+  cost_breakdown: { note: '표본', rows: [{ key: 'g', label: '매출(GMV)', amount: 1000, unit: 'krw', badge: '계산', explain: '이 캠페인이 만든 매출은 1,000원이에요.', detail: D }] },
+  rule: { ...EVIDENCE.rule, approver_hits: [{ ...EVIDENCE.rule.approver_hits[0], text: '하회 구간', explain: '집행일이 기준 아래 구간에 걸려 대표 결재가 필요해요.' }] },
+}
+
+async function openAllFolds() {
+  await screen.findByRole('button', { name: /위험 신호/ })
+  for (let n = 0; n < 10; n++) {
+    const closed = Array.from(document.querySelectorAll<HTMLElement>('button[data-fold][aria-expanded="false"]'))
+    if (closed.length === 0) return
+    for (const b of closed) await userEvent.click(b)
+  }
+}
+
+describe('근거 줄을 말로 보이기', () => {
+  it('근거_줄은_결론과_설명_문장으로_보인다', async () => {
+    mountCase(MAY, 'Masil 대표', {}, EXPLAIN_EVIDENCE)
+    await openAllFolds()
+    const row = (await screen.findByRole('button', { name: /예상 ROAS 괴리/ })).closest('li') as HTMLElement
+    expect(within(row).getByText('나쁨')).toBeInTheDocument()
+    expect(within(row).getByText('예상 ROAS 괴리').tagName).toBe('B')
+    expect(within(row).getByText('예상 매출이 실제 기록보다 크게 부풀려져 있어서 나쁘게 봤어요.')).toBeVisible()
+    expect(row).not.toHaveTextContent('z=')
+    expect(row).not.toHaveTextContent('≤')
+    const cant = screen.getByText('쿠폰 중복 비중').closest('li') as HTMLElement
+    expect(within(cant).getByText('잴 수 없음')).toBeInTheDocument()
+    expect(screen.getByText('집행일이 기준 아래 구간에 걸려 대표 결재가 필요해요.')).toBeVisible()
+    expect(screen.getByText('이 캠페인이 만든 매출은 1,000원이에요.')).toBeVisible()
+    expect(screen.getByText('광고비 대비 실제 매출이 열 곳 중 가장 좋아요.')).toBeVisible()
+  })
+
+  it('계산_근거는_펼쳐야_보인다', async () => {
+    mountCase(MAY, 'Masil 대표', {}, EXPLAIN_EVIDENCE)
+    await openAllFolds()
+    const btn = await screen.findByRole('button', { name: /예상 ROAS 괴리/ })
+    const panel = document.getElementById(btn.getAttribute('aria-controls') as string) as HTMLElement
+    expect(panel).not.toBeVisible()
+    expect(within(panel).getByText('계산 근거', { ignore: 'none' })).not.toBeVisible()
+    await userEvent.click(btn)
+    expect(within(panel).getByText('계산 근거')).toBeVisible()
+    expect(within(panel).getByText(/예상 ROAS = 예상 GMV ÷ 예산/)).toBeVisible()
+  })
+
+  it('explain_없으면_값만', async () => {
+    mountCase(MAY, 'Masil 대표', {}, { ...EXPLAIN_EVIDENCE, signals: [{ ...EXPLAIN_EVIDENCE.signals[0], explain: undefined }] })
+    await openAllFolds()
+    const row = (await screen.findByRole('button', { name: /예상 ROAS 괴리/ })).closest('li') as HTMLElement
+    expect(row).toHaveTextContent('10.400')
+    expect(row).not.toHaveTextContent('z=')
+    expect(row).not.toHaveTextContent('≤')
+    expect(row).not.toHaveTextContent('ROAS 괴리 ROAS')
+  })
+
+  it('표_머리가_없다', async () => {
+    mountCase(MAY, 'Masil 대표', {}, EXPLAIN_EVIDENCE)
+    await openAllFolds()
+    await screen.findByRole('button', { name: /예상 ROAS 괴리/ })
+    const ev = document.querySelector('.evidence') as HTMLElement
+    expect(ev.querySelector('.ehead')).toBeNull()
+    expect(within(ev).queryByText('비교·근거')).toBeNull()
+  })
+})

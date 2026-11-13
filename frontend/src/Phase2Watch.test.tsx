@@ -205,7 +205,6 @@ describe('2차 집행 관찰', () => {
     const color = b.getByRole('button', { name: /색상불만/ })
     expect(color).toHaveTextContent('150건')
     expect(color).toHaveTextContent('5.00%')
-    expect(color).toHaveTextContent('한계 4.34%')
     expect(color).toHaveTextContent('초과')
     expect(b.getByText(/1차 집행 수량 3,000개/)).toBeInTheDocument()
     expect(b.getByText(/판매 실적 주문 2,600건/)).toBeInTheDocument()
@@ -502,5 +501,17 @@ describe('2차 집행 관찰', () => {
     expect(screen.getByRole('region', { name: '반품' })).toBeInTheDocument()
     expect(screen.getAllByText(/등록되지 않은 사람이에요/).length).toBeGreaterThan(0)
     expect(screen.queryByRole('button', { name: '리뷰 저장' })).toBeNull()
+  })
+})
+
+describe('반품 줄을 말로 보이기', () => {
+  it('반품_줄은_설명_문장과_접힌_계산_근거', async () => {
+    const rc = { ...RETURNS_CHECK, items: [{ ...RETURNS_CHECK.items[1], explain: '색상 불만 반품이 평소보다 많아 기준을 넘었어요.' }] }
+    setup({ status: '2차 보류', p2: { gate: HOLD_BLOCK, returns_check: rc } })
+    mount('캠페인 담당자')
+    const box = await screen.findByRole('region', { name: '반품' })
+    const row = within(box).getByText('색상불만').closest('li') as HTMLElement
+    expect(within(row).getByText('색상 불만 반품이 평소보다 많아 기준을 넘었어요.')).toBeVisible()
+    expect(within(row).getByText('계산 근거')).not.toBeVisible()
   })
 })

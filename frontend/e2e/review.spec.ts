@@ -151,3 +151,30 @@ test('배지 정리(#33) 스크린샷: 배지정리_*', async ({ page, request }
   await page.getByRole('button', { name: /AI 브리핑/ }).first().click()
   await page.screenshot({ path: join(OUT, '배지정리_근거펼침_1440.png'), fullPage: true })
 })
+
+test('말로 설명(#33) 스크린샷: 말로설명_* (서버 explain이 아직 없어 응답에 가짜 문장을 끼워 그림)', async ({ page, request }) => {
+  test.setTimeout(180_000)
+  const api = 'http://127.0.0.1:8000'
+  await request.post(`${api}/api/demo/reset`, { data: { scenario: 'scenario_2' } })
+  await request.post(`${api}/api/demo/run`, { data: { scenario: 'scenario_2', from_step: 0, upto: 1 } })
+  const cases = (await (await request.get(`${api}/api/cases`)).json()) as { id: number; ref_id: string }[]
+  const id = cases.find((c) => c.ref_id === 'PLAN-001')?.id
+  expect(id).toBeTruthy()
+  await page.route('**/api/cases/*/evidence', async (route) => {
+    const res = await route.fetch()
+    const body = await res.json()
+    const say = (l: { label?: string; level?: string; explain?: string }) => {
+      if (l.explain) return
+      l.explain = l.level === 'red' ? `${l.label}이(가) 기준보다 많이 벗어나 있어서 결과가 나빠요. (시험용 가짜 문장)` : `${l.label}은(는) 기준 안에 있어서 결과가 좋아요. (시험용 가짜 문장)`
+    }
+    for (const s of body.signals ?? []) say(s)
+    for (const k of body.key_indicators ?? []) say(k)
+    await route.fulfill({ response: res, json: body })
+  })
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`/cases/${id}?as=${encodeURIComponent('그룹 CEO')}`)
+  await page.waitForLoadState('networkidle')
+  await page.getByRole('button', { name: /위험 신호/ }).click()
+  await page.getByRole('button', { name: /핵심 지표/ }).click()
+  await page.screenshot({ path: join(OUT, '말로설명_위험신호_1440.png'), fullPage: true })
+})

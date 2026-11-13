@@ -76,6 +76,7 @@ export type ReturnItem = {
   rate: number | null
   over: boolean
   unit: string
+  explain?: string | null
   detail: Detail
 }
 /** 반품 관찰 기준 숫자(서버 계산). 화면은 나누지 않고 그대로 보인다 */

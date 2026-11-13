@@ -166,8 +166,8 @@ describe('건 상세', () => {
     expect(evidence.queryAllByText('원본')).toHaveLength(0)
     // 수준은 색만이 아니라 글자로도
     expect(evidence.getByText('나쁨')).toBeInTheDocument()
-    expect(evidence.getByText('좋음')).toBeInTheDocument()
-    expect(evidence.getAllByText('측정 불가').length).toBeGreaterThan(0)
+    expect(evidence.getAllByText('좋음').length).toBeGreaterThan(0)
+    expect(evidence.getAllByText('잴 수 없음').length).toBeGreaterThan(0)
     expect(screen.getByText(/표본 금액이라 실제 계약액과 곱하지 않음/)).toBeInTheDocument()
     expect(screen.getByText(/마지막 클릭 후 7일 기준/)).toBeInTheDocument()
   })
@@ -754,13 +754,6 @@ describe('낮은 항목', () => {
     await openFolds()
     const stamps = await screen.findByRole('list', { name: '2차 결재란' })
     expect(within(stamps).getByRole('listitem', { name: '그룹 CEO: 내 차례' })).toBeInTheDocument()
-  })
-
-  it('위험_신호_열_머리는_보조기기에도_읽힌다', async () => {
-    Setup(MAY, 'Masil 대표')
-    mount('Masil 대표')
-    await evidenceReady()
-    expect(document.querySelector('.ehead')).not.toHaveAttribute('aria-hidden')
   })
 
   it('시연_메모는_case_note에서_읽고_따로_기안을_읽지_않는다', async () => {
