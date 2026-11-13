@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useLocation, useParams } from 'react-router-dom'
 import { api } from '../api'
 import { useClock } from '../state/clock'
 import { useViewer } from '../state/viewer'
@@ -53,6 +53,7 @@ function historySummary(d: CaseDetailData): string {
 
 export default function CaseDetailPage() {
   const { id } = useParams()
+  const location = useLocation()
   const { person, failed: viewerFailed, retry: retryViewer } = useViewer()
   const { version } = useClock()
   const [making, setMaking] = useState(false)
@@ -87,9 +88,10 @@ export default function CaseDetailPage() {
         {back}
         {detail.error ? (
           detail.status === 404 ? (
-            <p role="alert" className="missing">
-              찾을 수 없는 건이에요. {detail.error}
-            </p>
+            <div role="alert" className="missing">
+              <p>{detail.error || '이 건을 찾을 수 없어요.'}</p>
+              <Link to={`/${location.search}`} className="btn">메인으로 가서 다시 시작</Link>
+            </div>
           ) : (
             <LoadFailed retry={detail.retry} message={`건 상세를 불러오지 못했어요. ${detail.error}`} />
           )

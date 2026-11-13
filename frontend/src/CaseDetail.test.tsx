@@ -459,7 +459,8 @@ describe('건 상세', () => {
       [`GET ${DETAIL_PATH('Masil 대표')}`]: { status: 404, json: { detail: '건 7을 찾을 수 없음' } },
     })
     mount('Masil 대표')
-    expect(await screen.findByText(/찾을 수 없는 건이에요/)).toBeInTheDocument()
+    expect(await screen.findByText('건 7을 찾을 수 없음', { selector: '.missing p' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '메인으로 가서 다시 시작' })).toBeInTheDocument()
   })
 
   it('근거를_못_읽으면_그_칸에만_다시_시도', async () => {
