@@ -110,3 +110,4 @@
   .tl { padding: var(--s-3) var(--s-4); }
   .todo { padding: var(--s-4); grid-template-columns: 1fr; }
 }
+.todo .to-replies { color: var(--c-navy); }

@@ -12,6 +12,7 @@
   padding: var(--s-1) var(--s-2); border: 1px solid var(--c-rule); border-radius: var(--r-2);
   background: var(--c-sheet);
 }
+.who input[type="date"]:focus-within { outline: 2px solid var(--c-navy); outline-offset: 2px; } /* 날짜 칸은 안쪽 칸에 초점이 가서 바깥 테두리를 따로 둔다 */
 .date { font-weight: var(--w-bold); color: var(--c-ink); }
 .mode { margin-left: var(--s-2); font-size: var(--t-1); color: var(--c-ink-3); border: 1px solid var(--c-rule); border-radius: var(--r-1); padding: 0 var(--s-2); }
 .clock-move { display: flex; gap: var(--s-2); align-items: center; }

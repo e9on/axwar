@@ -121,7 +121,7 @@ function DemoPanel() {
               <li key={s.name}>
                 <button type="button" className="scene" aria-pressed={s.name === run.scenario} disabled={busy} onClick={() => setAsking(s)}>
                   <span className="k">{s.title}</span>
-                  <span className="sub">{s.description}</span>
+                  <span className="sub" title={s.description}>{s.description}</span>
                 </button>
               </li>
             ))}
@@ -132,6 +132,7 @@ function DemoPanel() {
       {active && (
         <section aria-label="진행">
           <h2>{active.title}</h2>
+          <p className="scene-desc">{active.description}</p>
           <div className="bar-tools">
             <button type="button" className="btn pri" disabled={busy || finished} onClick={playOne}>
               한 단계 진행

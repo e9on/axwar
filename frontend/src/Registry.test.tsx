@@ -52,6 +52,25 @@ describe('기안·계약 등록', () => {
     expect(c).toHaveTextContent('화면 등록')
   })
 
+  it('기안이_많으면_찾기_칸으로_거를_수_있다', async () => {
+    const many = Array.from({ length: 25 }, (_, i) => ({ ...PLANS[0], id: 100 + i, plan_id: `PLAN-${String(i + 1).padStart(3, '0')}` }))
+    mount({ 'GET /api/plans': { json: many } })
+    const box = await screen.findByRole('searchbox', { name: '기안 찾기' })
+    const list = screen.getByRole('list', { name: '기안 목록' })
+    expect(within(list).getAllByRole('listitem')).toHaveLength(25)
+    await userEvent.type(box, 'PLAN-007')
+    expect(within(list).getAllByRole('listitem')).toHaveLength(1)
+    await userEvent.clear(box)
+    await userEvent.type(box, '없는기안')
+    expect(await screen.findByText('찾는 기안이 없어요')).toBeInTheDocument()
+  })
+
+  it('기안이_적으면_찾기_칸이_없다', async () => {
+    mount()
+    await screen.findByRole('list', { name: '기안 목록' })
+    expect(screen.queryByRole('searchbox', { name: '기안 찾기' })).toBeNull()
+  })
+
   it('기안_등록_폼_보내기와_서버_오류', async () => {
     let n = 0
     const { calls } = mount({

@@ -36,7 +36,7 @@ function second(column: string, it: Item): { meta: string; text: string; seal: b
     if (it.approval_deadline) parts.push(`마지막 승인일 ${it.approval_deadline}`)
     parts.push(`${it.stage ?? '1차'} 승인`)
     const up = it.상신?.[0]
-    if (up) parts.push(`${up.from}가 올림: ${up.reason}`)
+    if (up) parts.push(`${up.from}에서 올림: ${up.reason}`)
     return { meta: parts.join(' · '), text: '', seal: false }
   }
   if (it.approval_deadline && column === '기한 임박') parts.push(`마지막 승인일 ${it.approval_deadline}`)

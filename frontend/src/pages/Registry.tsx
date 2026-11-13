@@ -154,11 +154,17 @@ function originLabel(o: string): string {
   return ORIGIN_LABEL[o] ?? o
 }
 
+/** 기안이 이만큼 넘으면 찾기 칸을 보인다(원본 기안은 25건) */
+const PLAN_SEARCH_FROM = 8
+
 export default function Registry() {
   const { person } = useViewer()
   const plans = useLoad<PlanRow[]>('/api/plans', [])
   const contracts = useLoad<ContractRow[]>('/api/contracts', [])
   const [form, setForm] = useState<Target | null>(null)
+  const [planQ, setPlanQ] = useState('')
+  const planWords = planQ.trim().toLowerCase()
+  const visiblePlans = (plans.data ?? []).filter((p) => !planWords || [p.plan_id, p.campaign_id, p.influencer_id, p.channel].some((v) => v?.toLowerCase().includes(planWords)))
   const [notice, setNotice] = useState<Notice | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -285,8 +291,19 @@ export default function Registry() {
         ) : plans.data.length === 0 ? (
           <p className="muted">등록된 기안이 없어요</p>
         ) : (
+          <>
+            {plans.data.length > PLAN_SEARCH_FROM && (
+              <div className="bar-tools">
+                <label>
+                  기안 찾기
+                  <input type="search" value={planQ} onChange={(e) => setPlanQ(e.target.value)} placeholder="번호·캠페인·인플루언서" />
+                </label>
+                <span className="muted">{num(visiblePlans.length)}개</span>
+              </div>
+            )}
+            {visiblePlans.length === 0 && <p className="muted">찾는 기안이 없어요</p>}
           <ul className="ledger plans" aria-label="기안 목록">
-            {plans.data.map((p) => (
+            {visiblePlans.map((p) => (
               <li key={p.id}>
                 <div>
                   <span className="k">{p.plan_id}</span>
@@ -311,6 +328,7 @@ export default function Registry() {
               </li>
             ))}
           </ul>
+          </>
         )}
       </section>
 
