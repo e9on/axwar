@@ -47,7 +47,7 @@ from app.rules.approver import decide_contract, decide_plan, diff_approver
 from app.rules.capacity import parse_capacity
 from app.rules.deadline import approval_deadline, deadline_actions, deny_date, is_lapsed
 from app.rules.models import ApproverChange, ApproverDecision, ContractFacts, PlanFacts, RuleHit, make_detail
-from app.rules.split import GateResult, make_split, phase2_gate
+from app.rules.split import GateResult, make_split, phase2_gate, return_check
 from app.store.db import CASE_DEMO, CASE_OPERATION, CLOCK_LOCKED, MODE_OPERATION, Store
 
 KIND_PLAN, KIND_CONTRACT = "기안", "계약"
@@ -129,6 +129,7 @@ UP_OPINIONS = scenarios.UP_OPINIONS
 UP_LABEL = {v: k for k, v in APPROVER_ROLE.items()}  # 역할 -> 승인권자 표기(이사회 -> 이사회 의결)
 P2_DECISIONS = (D_APPROVE, D_REJECT)  # 2차 결정은 분할 승인이 없다
 CHOICE_CONTINUE, CHOICE_CANCEL = "2차 계속", "2차 취소"
+A_SALES, A_REVIEW, A_RETURN = "판매 실적 입력", "리뷰 입력", "반품 입력"  # 2차 관찰 화면의 입력 동작 이름
 NO_SALES = "1차 판매 실적 미입력"
 SELL_ADJUST, SELL_HOLD, SELL_SOLDOUT = "조절", "보류", "품절"
 SCM_ASKED, SCM_FULL, SCM_PARTIAL, SCM_REFUSED = "요청", "전량 허용", "일부 허용", "거절"
@@ -557,18 +558,22 @@ class Engine:
         if role not in editors:
             raise PermissionError(f"{actor}({role})는 {what}을(를) 바꿀 수 없음 — {'·'.join(editors)}만")
 
-    def _require_inputter(self, actor: str | None, key: str, what: str) -> None:
-        """리뷰·반품 입력 권한(수정 회차 1 판정 2). actor가 없으면 시연 대본 재생(시스템)이라 시연 모드에서만.
-        운영 모드에서는 정책 항목(key)의 역할만. 시연 모드에서는 등록된 사람이면 된다."""
+    def _inputter_block(self, actor: str | None, key: str, what: str) -> str | None:
+        """리뷰·반품 입력이 막혀 있으면 그 이유, 아니면 None(수정 회차 1 판정 2). actor가 없으면 시연 대본 재생(시스템)이라 시연 모드에서만.
+        운영 모드에서는 정책 항목(key)의 역할만. 시연 모드에서는 등록된 사람이면 된다. _require_inputter와 2차 관찰의 viewer.blocked가 같이 씀."""
         operation = self.store.get_mode() == MODE_OPERATION
         if actor is None:
-            if operation:
-                raise PermissionError(f"운영 모드에서는 시연용 {what} 입력을 할 수 없음 — 담당 역할이 직접 입력해야 함")
-            return
+            return f"운영 모드에서는 시연용 {what} 입력을 할 수 없음 — 담당 역할이 직접 입력해야 함" if operation else None
         role = self.role_of(actor)
         allowed = [r.strip() for r in policy.get(key).split(",") if r.strip()]
         if operation and role not in allowed:
-            raise PermissionError(f"{actor}({role})는 {what}을(를) 입력할 수 없음 — {'·'.join(allowed)}만")
+            return f"{actor}({role})는 {what}을(를) 입력할 수 없음 — {'·'.join(allowed)}만"
+        return None
+
+    def _require_inputter(self, actor: str | None, key: str, what: str) -> None:
+        why = self._inputter_block(actor, key, what)
+        if why:
+            raise PermissionError(why)
 
     @_locked
     def change_policy(self, actor: str, key: str, value, reason: str) -> None:
@@ -1771,10 +1776,10 @@ class Engine:
         owner = self._owner(case["kind"])
         color = human = 0
         for product, text in reviews:
-            self.store.add_review(case_id, product, text)
+            review_id = self.store.add_review(case_id, product, text)
             j = judge.interpret_review(self._provider("review"), product, text)
             self.store.add_judgment(case_id, "리뷰해석", j.model, f"{product} 리뷰: {text}",
-                                    {**asdict(j), "raw": j.raw[:RAW_KEEP]}, j.needs_human, j.confidence,
+                                    {**asdict(j), "raw": j.raw[:RAW_KEEP], "review_id": review_id}, j.needs_human, j.confidence,
                                     j.ledger_id)
             color += int(j.reason == COLOR_REVIEW or j.content_gap)
             human += int(j.needs_human)
@@ -1877,20 +1882,24 @@ class Engine:
         p1 = f.get("phase1") or {}
         inf = f.get("influencer_id") or ""
         end, renewal = self._contract_terms(inf)
-        p1_date = _d(p1["date"]) if p1.get("date") else self._today()
         r = {} if f.get("phase2_exception") else (f.get("returns") or {})  # 예외 승인을 받은 건은 반품 보류 사유를 보지 않는다
         return phase2_gate(
             phase1_orders=p1.get("qty") or 0,
             change_of_mind_returns=r.get("change_of_mind", 0), color_returns=r.get("color", 0),
             baseline_change_of_mind=return_count_rate(inf, CHANGE_OF_MIND),
             baseline_color=return_count_rate(inf, COLOR_RETURN),
-            days_since_phase1=(self._today() - p1_date).days,
+            days_since_phase1=self._elapsed_days(f),
             color_review_flagged=bool(f.get("color_review_flagged")),
             content_fix_confirmed=bool(f.get("content_fix_confirmed")),
             renewal_confirmed=renewal,
             phase2_date=_d(p2["date"]) if p2.get("date") else date.max,
             contract_end=end,
         )
+
+    def _elapsed_days(self, f: dict) -> int:
+        """1차 집행일부터 오늘까지 지난 일수(날짜가 없으면 0). 2차 게이트의 관찰 기간 판정과 관찰 화면이 같이 씀."""
+        p1 = f.get("phase1") or {}
+        return (self._today() - (_d(p1["date"]) if p1.get("date") else self._today())).days
 
     def phase2_status(self, case_id: int) -> GateResult:
         """지금 2차 집행을 열 수 있는지(반품·리뷰·관찰·계약 만료 판정)."""
@@ -2094,6 +2103,21 @@ class Engine:
             units = (p1 or 0) + qty
         return f["amount_krw"] * qty // units if units else 0
 
+    def _sales_role_block(self, actor: str, role: str) -> str | None:
+        return None if role == self.campaign else f"{actor}({role})는 1차 판매 실적을 입력할 수 없음 — {self.campaign}만"
+
+    @staticmethod
+    def _sales_case_block(case: dict) -> str | None:
+        """판매 실적을 지금 넣을 수 없는 건이면 그 이유. record_phase1_sales와 viewer.blocked가 같이 씀."""
+        f = case["facts"]
+        if case["kind"] != KIND_PLAN or not f.get("phase1"):
+            return "1차 집행이 시작된 기안만 판매 실적을 입력할 수 있음"
+        if f.get("phase2_sellthrough"):
+            return "이미 판매율로 2차를 판정한 건은 판매 실적을 고칠 수 없음"
+        if not f["phase1"].get("qty"):
+            return "1차 수량이 없어 판매율을 낼 수 없음"
+        return None
+
     @_locked
     def record_phase1_sales(self, case_id: int, actor: str, orders: int, returns: int) -> dict:
         """캠페인 담당이 1차 판매 실적(주문 수·반품 수)을 입력한다. 순판매 = 주문 - 반품.
@@ -2102,7 +2126,7 @@ class Engine:
         HTTP 연결은 Task 12."""
         role = self.role_of(actor)
         if role != self.campaign:
-            raise PermissionError(f"{actor}({role})는 1차 판매 실적을 입력할 수 없음 — {self.campaign}만")
+            raise PermissionError(self._sales_role_block(actor, role))
         for label, v in (("주문 수", orders), ("반품 수", returns)):
             if not isinstance(v, int) or isinstance(v, bool) or v < 0:
                 raise ValueError(f"{label}는 0 이상 정수여야 함: {v!r}")
@@ -2110,12 +2134,9 @@ class Engine:
             raise ValueError(f"반품 수({returns:,})가 주문 수({orders:,})보다 클 수 없음")
         case = self.store.get_case(case_id)
         f = case["facts"]
-        if case["kind"] != KIND_PLAN or not f.get("phase1"):
-            raise ValueError("1차 집행이 시작된 기안만 판매 실적을 입력할 수 있음")
-        if f.get("phase2_sellthrough"):
-            raise ValueError("이미 판매율로 2차를 판정한 건은 판매 실적을 고칠 수 없음")
-        if not f["phase1"].get("qty"):
-            raise ValueError("1차 수량이 없어 판매율을 낼 수 없음")
+        why = self._sales_case_block(case)
+        if why:
+            raise ValueError(why)
         f["sales"] = {"orders": orders, "returns": returns, "net": orders - returns, "date": self._today().isoformat()}
         self.store.update_facts(case_id, f, actor, f"1차 판매 실적 입력: 주문 {orders:,}, 반품 {returns:,}")
         for t in self.store.list_tasks(case_id):
@@ -2138,25 +2159,43 @@ class Engine:
             f[STAGES["2차"][1]].append({"rule_id": "sellthrough_adjust", "text": core,
                                        "source": "1차 판매 실적", "badge": "계산"})
 
+    def _hold_block(self, case: dict, actor: str, sell_only: bool) -> tuple[type, str] | None:
+        """2차 보류 판단(계속·취소)이 지금 막혀 있으면 (오류 종류, 이유), 아니면 None. _hold_guard와 viewer.blocked가 같이 씀."""
+        f = case["facts"]
+        rec = f.get("phase2_sellthrough") or {}
+        if case["kind"] != KIND_PLAN or case["status"] != S_PHASE2_HOLD:
+            return ValueError, "2차 보류 상태인 건만 판단할 수 있음"
+        if sell_only and rec.get("outcome") != SELL_HOLD:
+            return ValueError, ("1차 판매율이 하한 미만이라 2차 보류가 된 건만 2차 계속을 판단할 수 있음"
+                                "(반품 보류는 2차 취소 또는 2차 승인권자 중 최고 역할의 예외 승인)")
+        if f.get("phase2_decision"):
+            return ValueError, "이미 판단한 건 — 판단은 한 번만"
+        role = self.role_of(actor)
+        if not self._can_handle(f, STALE_PHASE2_HOLD, role, self.campaign):
+            return PermissionError, f"{actor}({role})는 2차 보류를 판단할 수 없음 — {self.campaign}(또는 방치로 올려 받은 사람)만"
+        return None
+
     def _hold_guard(self, case_id: int, actor: str, reason, sell_only: bool = True) -> tuple[dict, dict, dict]:
         """2차 보류 판단의 공통 검사. 보류 상태가 아니면 ValueError. sell_only(2차 계속)면 판매율 보류만, 아니면(2차 취소) 반품 보류도 가능.
         이미 판단했으면 ValueError, 담당도 올려 받은 사람도 아니면 PermissionError, 이유가 비면 ValueError."""
         case = self.store.get_case(case_id)
         f = case["facts"]
-        rec = f.get("phase2_sellthrough") or {}
-        if case["kind"] != KIND_PLAN or case["status"] != S_PHASE2_HOLD:
-            raise ValueError("2차 보류 상태인 건만 판단할 수 있음")
-        if sell_only and rec.get("outcome") != SELL_HOLD:
-            raise ValueError("1차 판매율이 하한 미만이라 2차 보류가 된 건만 2차 계속을 판단할 수 있음"
-                             "(반품 보류는 2차 취소 또는 2차 승인권자 중 최고 역할의 예외 승인)")
-        if f.get("phase2_decision"):
-            raise ValueError("이미 판단한 건 — 판단은 한 번만")
-        role = self.role_of(actor)
-        if not self._can_handle(f, STALE_PHASE2_HOLD, role, self.campaign):
-            raise PermissionError(f"{actor}({role})는 2차 보류를 판단할 수 없음 — {self.campaign}(또는 방치로 올려 받은 사람)만")
+        blocked = self._hold_block(case, actor, sell_only)
+        if blocked:
+            raise blocked[0](blocked[1])
         if not isinstance(reason, str) or not reason.strip():
             raise ValueError("판단 이유 문장이 필요함")
-        return case, f, rec
+        return case, f, f.get("phase2_sellthrough") or {}
+
+    def _continue_error(self, case: dict) -> str | None:
+        """2차 계속이 보류 뒤에 생긴 사유 때문에 막혀 있으면 그 문장. continue_phase2와 viewer.blocked가 같이 씀."""
+        blockers = [r for r in self._gate(case).reasons if r != NO_SALES]
+        if self._phase2_blocked(case["facts"]) and not blockers:
+            blockers = ["갱신 미확정인데 2차 집행일이 계약 만료 뒤"]
+        if not blockers:  # 보류 뒤에 생긴 반품 보류·리뷰 잠금이 우선: 계속은 막고(취소는 가능) 풀린 뒤 다시 판단한다
+            return None
+        return ("2차를 계속할 수 없음 — 자동 보류 사유가 남아 있음: " + "; ".join(blockers) +
+                " (사유가 풀린 뒤 다시 판단하거나 2차 취소)")
 
     def _finish_hold(self, case: dict, f: dict, rec: dict, actor: str, choice: str, reason: str, qty_a: int,
                      amt_a: int, status: str) -> dict:
@@ -2183,12 +2222,9 @@ class Engine:
         """판매율 보류 건을 2차 계속으로 판단한다. 수량은 1 이상 계획 2차 이하, 금액은 같은 비율로 줄이고
         2차 승인권자를 다시 판정하며 2차 잠금(승인 대기) 경로로 보낸다."""
         case, f, rec = self._hold_guard(case_id, actor, reason)
-        blockers = [r for r in self._gate(case).reasons if r != NO_SALES]
-        if self._phase2_blocked(f) and not blockers:
-            blockers = ["갱신 미확정인데 2차 집행일이 계약 만료 뒤"]
-        if blockers:  # 보류 뒤에 생긴 반품 보류·리뷰 잠금이 우선: 계속은 막고(취소는 가능) 풀린 뒤 다시 판단한다
-            raise ValueError("2차를 계속할 수 없음 — 자동 보류 사유가 남아 있음: " + "; ".join(blockers) +
-                             " (사유가 풀린 뒤 다시 판단하거나 2차 취소)")
+        why = self._continue_error(case)
+        if why:
+            raise ValueError(why)
         qty_b, amt_b = rec["qty_before"], rec["amount_before"]
         if not isinstance(qty, int) or isinstance(qty, bool) or not 1 <= qty <= qty_b:
             raise ValueError(f"2차 수량은 1 이상 계획 2차({qty_b:,}개) 이하의 정수여야 함: {qty!r}")
@@ -2224,23 +2260,31 @@ class Engine:
         known = [r for r in roles if r in chain]
         return max(known, key=chain.index) if known else None
 
+    def _exception_block(self, case: dict, actor: str) -> tuple[type, str] | None:
+        """반품 보류 예외 승인이 지금 막혀 있으면 (오류 종류, 이유), 아니면 None. approve_phase2_exception과 viewer.blocked가 같이 씀."""
+        f = case["facts"]
+        if case["kind"] != KIND_PLAN or case["status"] != S_PHASE2_HOLD or not f.get("phase2"):
+            return ValueError, "2차 보류 상태인 건만 예외 승인할 수 있음"
+        if (f.get("phase2_sellthrough") or {}).get("outcome") == SELL_HOLD:
+            return ValueError, "판매율이 하한 미만인 보류는 예외 승인이 아니라 2차 계속·취소로 판단함"
+        if f.get("phase2_decision"):
+            return ValueError, "이미 판단한 건 — 판단은 한 번만"
+        role, top = self.role_of(actor), self._exception_role(f)
+        if top is None or role != top:
+            return PermissionError, (f"{actor}({role})는 예외 승인할 수 없음 — 이 건 2차 승인권자 중 최고 역할"
+                                     f"({top or '없음'})만")
+        return None
+
     @_locked
     def approve_phase2_exception(self, case_id: int, actor: str, qty: int, reason: str) -> dict:
         """반품 자동 보류 건을 2차 승인권자 중 최고 역할이 이유를 적어 예외 승인한다(H3). 수량은 1 이상 계획 2차 이하, 금액은 같은 비율로
         줄이고 2차 승인권자를 다시 판정하며 2차 잠금(승인 대기) 경로로 보낸다. 이후 반품 보류 사유는 다시 걸지 않는다."""
         case = self.store.get_case(case_id)
         f = case["facts"]
-        if case["kind"] != KIND_PLAN or case["status"] != S_PHASE2_HOLD or not f.get("phase2"):
-            raise ValueError("2차 보류 상태인 건만 예외 승인할 수 있음")
-        rec = f.get("phase2_sellthrough") or {}
-        if rec.get("outcome") == SELL_HOLD:
-            raise ValueError("판매율이 하한 미만인 보류는 예외 승인이 아니라 2차 계속·취소로 판단함")
-        if f.get("phase2_decision"):
-            raise ValueError("이미 판단한 건 — 판단은 한 번만")
-        role, top = self.role_of(actor), self._exception_role(f)
-        if top is None or role != top:
-            raise PermissionError(f"{actor}({role})는 예외 승인할 수 없음 — 이 건 2차 승인권자 중 최고 역할"
-                                  f"({top or '없음'})만")
+        blocked = self._exception_block(case, actor)
+        if blocked:
+            raise blocked[0](blocked[1])
+        role = self.role_of(actor)
         if not isinstance(reason, str) or not reason.strip():
             raise ValueError("예외 승인 이유 문장이 필요함")
         p2 = f["phase2"]
@@ -2646,12 +2690,81 @@ class Engine:
                                   "detail": t["detail"], "due": t["due"]})
         return out
 
-    def phase2_view(self, case_id: int) -> dict:
-        """2차 집행 관찰 화면(설계 6.5): 계획 2차, 2차 승인권자, 게이트(열림·자동 보류·사유), 판매 실적·반품·판매율 판정·담당 판단."""
+    def _phase2_viewer(self, case: dict, viewer: str) -> dict:
+        """보는 사람이 2차 관찰에서 지금 보낼 수 있는 동작(actions)과 막힌 동작과 이유(blocked). 판정은 각 엔진 메서드가 쓰는 검사 함수 그대로,
+        저장하지 않는다. 동작: 2차 계속·2차 취소·예외 승인·판매 실적 입력·리뷰 입력·반품 입력."""
+        role = self.role_of(viewer)
+        why: dict[str, str | None] = {}
+        hold = self._hold_block(case, viewer, True)
+        why[CHOICE_CONTINUE] = hold[1] if hold else self._continue_error(case)
+        cancel = self._hold_block(case, viewer, False)
+        why[CHOICE_CANCEL] = cancel[1] if cancel else None
+        exc = self._exception_block(case, viewer)
+        why[CHOICE_EXCEPTION] = exc[1] if exc else None
+        why[A_SALES] = self._sales_role_block(viewer, role) or self._sales_case_block(case)
+        why[A_REVIEW] = self._inputter_block(viewer, "admin.review_inputters", "리뷰")
+        why[A_RETURN] = self._inputter_block(viewer, "admin.return_inputters", "반품")
+        return {"person": viewer, "role": role, "actions": [a for a, r in why.items() if not r],
+                "blocked": [{"action": a, "reason": r} for a, r in why.items() if r]}
+
+    def _reviews_view(self, case_id: int) -> list[dict]:
+        """리뷰마다 그 리뷰의 AI 해석(사유·감정·영상과 색 차이·확신도·모델)을 review_id로 연결한다. 해석 기록에 review_id가 없는 옛 리뷰는 None."""
+        by_review = {}
+        for j in self.store.list_judgments(case_id):
+            rid = j["result"].get("review_id") if j["kind"] == "리뷰해석" else None
+            if rid is not None:
+                by_review[rid] = j
+        out = []
+        for r in self.store.list_reviews(case_id):
+            j = by_review.get(r["id"])
+            judgment = None
+            if j:
+                res = j["result"]
+                judgment = {"id": j["id"], "reason": res.get("reason"), "sentiment": res.get("sentiment"),
+                            "content_gap": res.get("content_gap"), "confidence": j["confidence"],
+                            "needs_human": j["needs_human"], "model": j["model"]}
+            out.append({**r, "judgment": judgment})
+        return out
+
+    def _returns_check(self, case: dict) -> dict:
+        """반품 관찰 기준 숫자: 단순변심·색상불만마다 기준선, 통계 한계값(2차 게이트와 같은 return_check), 지금 반품 건수·비율, 초과 여부.
+        1차 주문 수·관찰 일수·보정 방식과 계산 근거(detail)도 준다. 읽기 전용."""
+        f = case["facts"]
+        n = (f.get("phase1") or {}).get("qty") or 0
+        inf = f.get("influencer_id") or ""
+        ret = f.get("returns") or {}
+        z = policy.get("split.stop_z")
+        required = policy.get("split.return_observe_days")
+        elapsed = self._elapsed_days(f)
+        items = []
+        for label, key, reason in (("단순변심", "change_of_mind", CHANGE_OF_MIND), ("색상불만", "color", COLOR_RETURN)):
+            base = return_count_rate(inf, reason)
+            count = ret.get(key, 0)
+            chk = return_check(count, n, base, z) if n > 0 else {"rate": None, "limit": None, "over": False}
+            detail = make_detail(
+                "한계값 = 기준선 + z × √(기준선 × (1 − 기준선) ÷ 1차 주문 수), 반품률 = 반품 건수 ÷ 1차 주문 수, 반품률이 한계값을 넘으면 2차 자동 보류",
+                (("기준선(평소 반품률)", base, "ratio"), ("1차 주문 수", n), ("z", z), ("한계값", chk["limit"], "ratio"),
+                 ("반품 건수", count), ("반품률", chk["rate"], "ratio")),
+                ("02_masil/marketing/mkt_orders_ms.csv", "02_masil/marketing/mkt_returns_ms.csv"),
+                ("split.stop_z", "split.return_observe_days"))
+            items.append({"label": label, "baseline": base, "orders": n, "limit": chk["limit"], "count": count,
+                          "rate": chk["rate"], "over": chk["over"], "unit": "ratio",
+                          "detail": evidence_calc.resolve_detail(detail)})
+        return {"entered": bool(f.get("returns")), "orders": n, "z": z,
+                "exception_applied": bool(f.get("phase2_exception")),
+                "observation": {"required_days": required, "elapsed_days": elapsed, "done": elapsed >= required,
+                                "adjustment": "보정 없음 — 관찰 일수가 모자라면 비율을 늘려 잡지 않고 2차를 열지 않으며, "
+                                              "입력한 반품 건수를 1차 주문 수로 그대로 나눔"},
+                "items": items}
+
+    def phase2_view(self, case_id: int, viewer: str | None = None) -> dict:
+        """2차 집행 관찰 화면(설계 6.5): 계획 2차, 2차 승인권자, 게이트(열림·자동 보류·사유), 판매 실적·반품·판매율 판정·담당 판단,
+        반품 기준 숫자(returns_check), 리뷰와 AI 해석(reviews). viewer(보는 사람)를 주면 지금 보낼 수 있는 동작(viewer.actions·blocked)도 준다. 읽기 전용."""
         case = self.store.get_case(case_id)
         f = case["facts"]
         has = bool(f.get(STAGES["2차"][0]))
-        return {"plan": f.get("phase2"), "approvers": f.get(STAGES["2차"][0]), "hits": _plain(self._approver_view(f, "2차")),
+        return {"viewer": self._phase2_viewer(case, viewer) if viewer is not None else None,
+                "returns_check": self._returns_check(case), "reviews": self._reviews_view(case_id), "plan": f.get("phase2"), "approvers": f.get(STAGES["2차"][0]), "hits": _plain(self._approver_view(f, "2차")),
                 "required_roles": _required_roles(f, "2차") if has else [],
                 "pending_roles": _pending_roles(f, "2차") if has else [],
                 "gate": asdict(self._gate(case)), "sales": f.get("sales"), "returns": f.get("returns"),
@@ -2795,7 +2908,7 @@ class Engine:
         f = case["facts"]
         open_ = case["status"] in OPEN[case["kind"]]
         pending = _pending_roles(f) if open_ else []
-        p2 = self.phase2_view(case_id) if case["kind"] == KIND_PLAN and f.get("phase2") else None
+        p2 = self.phase2_view(case_id, viewer) if case["kind"] == KIND_PLAN and f.get("phase2") else None
         shown = {k: (_plain(v) if k.endswith("_hits") else v) for k, v in f.items()}
         out = {
             "case": {**{k: case[k] for k in ("id", "kind", "ref_id", "status", "origin", "created_at", "updated_at")},
@@ -2817,7 +2930,7 @@ class Engine:
             "approvals": self.store.list_approvals(case_id),
             "requests": self._requests_view(case_id),
             "tasks": self.store.list_tasks(case_id),
-            "reviews": self.store.list_reviews(case_id),
+            "reviews": self._reviews_view(case_id),
             "judgments": self.store.list_judgments(case_id),
             "history": self.store.events(case_id),
         }

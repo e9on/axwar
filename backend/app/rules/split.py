@@ -63,6 +63,13 @@ def return_stop_threshold(baseline: float, n_orders: int, z: float | None = None
     return baseline + z * math.sqrt(baseline * (1 - baseline) / n_orders)
 
 
+def return_check(count: int, n_orders: int, baseline: float, z: float | None = None) -> dict:
+    """반품 건수 하나의 통계 기준 판정: 반품률, 한계값(기준선 + z × 표준오차), 초과 여부. 2차 게이트와 관찰 화면이 같이 쓴다."""
+    rate = count / n_orders
+    limit = return_stop_threshold(baseline, n_orders, z)
+    return {"rate": rate, "limit": limit, "over": rate > limit}
+
+
 def phase2_gate(
     phase1_orders: int,
     change_of_mind_returns: int,
@@ -93,11 +100,10 @@ def phase2_gate(
         ("색상불만", color_returns, baseline_color),
     ):
         if phase1_orders > 0:
-            rate = count / phase1_orders
-            limit = return_stop_threshold(base, phase1_orders)
-            if rate > limit:
+            chk = return_check(count, phase1_orders, base)
+            if chk["over"]:
                 auto_stopped = True
-                reasons.append(f"{label} 반품률 {rate:.1%}이 기준 {limit:.1%} 초과")
+                reasons.append(f"{label} 반품률 {chk['rate']:.1%}이 기준 {chk['limit']:.1%} 초과")
     if auto_stopped:
         actions.append("2차 자동 보류")
 
