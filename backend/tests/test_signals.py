@@ -218,3 +218,14 @@ def test_형식이_깨진_통보는_파일명을_담은_오류(data_copy):
     with pytest.raises(DataFormatError) as e:
         payment_term_notices()
     assert "bb_payment_term_notice_bad.md" in str(e.value)
+
+
+def test_예상치_기반_신호는_판정에_쓰지_않고_이유를_단다():
+    """설계 4.5: 예상 GMV는 성과 판단에 쓰지 않는다 → 예상 ROAS 괴리는 참고 신호."""
+    from app.calc.signals import JUDGE, REFERENCE, future_value_signals
+    sigs = {s.key: s for s in risk_signals("PLAN-019")}
+    assert sigs["forecast_gap"].judgment == REFERENCE and "설계 4.5" in sigs["forecast_gap"].exclude_reason
+    assert {k for k, s in sigs.items() if s.judgment == JUDGE} == set(sigs) - {"forecast_gap"}
+    assert all(s.exclude_reason == "" for k, s in sigs.items() if k != "forecast_gap")
+    assert all(s.judgment == JUDGE for s in future_value_signals("INF-001"))
+    assert "모든 기안" not in sigs["forecast_gap"].basis

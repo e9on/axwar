@@ -76,8 +76,21 @@ def test_2차_집행일을_8월24일로_옮기면_CEO에서_대표로_이동():
     assert ch.before[0] == "CEO"
     assert ch.after[0] == "Masil 대표"
     assert "하회 구간" in ch.reason and "8/24" in ch.reason
+    assert "새 근거:" in ch.reason and "더는 적용되지 않는 근거:" in ch.reason
+    assert "7/27" in ch.reason.split("더는 적용되지 않는 근거:")[1]
 
 
 def test_승인권자가_같으면_변경_없음():
     d = decide_plan(plan(4_807_921, date(2026, 9, 14)), W)
     assert diff_approver(d, d, date(2026, 9, 14)) is None
+
+
+def test_전속계약_현금부족_판정일은_재계약_시작일():
+    from dataclasses import replace
+    # 통보 기한(7/17)은 하회 구간 밖이지만 재계약 시작일(만료 다음 날)이 구간 안이면 CEO·이사회
+    inside = replace(contract(1_000_000_000), deadline=date(2026, 7, 17), expiry=date(2026, 7, 31))
+    d = decide_contract(inside, W)
+    assert d.approvers[:2] == ("CEO", "이사회") and "covenant_window" in ids(d)
+    # 통보 기한이 구간 안이어도 재계약 시작일(9/1)이 구간 밖이면 금액 기준으로
+    outside = replace(contract(1_000_000_000), deadline=date(2026, 8, 1), expiry=date(2026, 8, 31))
+    assert decide_contract(outside, W).approvers == ("Masil 대표",)
