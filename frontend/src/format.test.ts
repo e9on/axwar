@@ -37,6 +37,11 @@ describe('조사 고르기', () => {
   ])('%s + %s', (word, kind, out) => {
     expect(josa(word, kind as '로')).toBe(out)
   })
+  it('을_를', () => {
+    expect(josa('장면 1. 정상', '을')).toBe('장면 1. 정상을')
+    expect(josa('장면 2. 분할', '을')).toBe('장면 2. 분할을')
+    expect(josa('시나리오', '을')).toBe('시나리오를')
+  })
   it('은_는', () => {
     expect(josa('승인', '은')).toBe('승인은')
     expect(josa('거절', '은')).toBe('거절은')

@@ -26,6 +26,28 @@ export function clip(text: string, n = AI_SHORT_LIMIT): string {
   return text.length > n ? `${text.slice(0, n)}…` : text
 }
 
+export type AiGroup = { head: string | null; bodies: string[] }
+
+/** 같은 머리말이 이어지면 한 묶음으로 (머리말은 한 번만 보인다) */
+export function aiGroups(text: string): AiGroup[] {
+  const out: AiGroup[] = []
+  for (const l of aiLines(text)) {
+    const last = out[out.length - 1]
+    if (last && l.head !== null && last.head === l.head) last.bodies.push(l.body)
+    else out.push({ head: l.head, bodies: [l.body] })
+  }
+  return out
+}
+
+/** 핵심 줄에 보이는 두 줄: 권고 + 첫 이유. 옛 글은 첫 문장 한 줄 */
+export function aiCore(text: string): string[] {
+  const lines = aiLines(text)
+  const rec = lines.find((l) => l.head === '권고')
+  const why = lines.find((l) => l.head === '이유')
+  if (!rec) return [aiHeadline(text)].filter(Boolean)
+  return [clip(rec.body), ...(why ? [clip(why.body)] : [])]
+}
+
 /** 핵심 줄에 보이는 한 줄: 권고 줄, 없으면 첫 줄(옛 글은 첫 문장, 길면 120자) */
 export function aiHeadline(text: string): string {
   const lines = aiLines(text)

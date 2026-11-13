@@ -255,14 +255,14 @@ describe('배지 정리와 AI 의견', () => {
     expect(screen.getAllByText('가정 = 원본에 없어 정한 값')).toHaveLength(1)
   })
 
-  it('AI_의견은_줄바꿈되고_권고_줄만_핵심에', async () => {
+  it('AI_의견은_줄바꿈되고_핵심에는_권고와_첫_이유만', async () => {
     const text = '권고: 분할 승인\n이유: 재고가 모자라요\n주의: 둘째 수량은 판매 뒤 결정'
     mountCase(MAY, 'Masil 대표', { briefing: AI_OK(text, 'fake-model') })
     const core = await screen.findByRole('group', { name: '가장 큰 위험' })
     const keylines = core.closest('dl') as HTMLElement
     const ai = within(keylines).getByText('AI 의견').nextElementSibling as HTMLElement
     expect(ai).toHaveTextContent('분할 승인')
-    expect(ai).not.toHaveTextContent('재고가 모자라요')
+    expect(ai).not.toHaveTextContent('둘째 수량')
     await userEvent.click(screen.getByRole('button', { name: /AI 브리핑/ }))
     const head = await screen.findByText('이유:')
     expect(head.tagName).toBe('B')
@@ -271,6 +271,42 @@ describe('배지 정리와 AI 의견', () => {
     expect(screen.getByText('주의:')).toBeInTheDocument()
     expect(screen.getByText('권고:')).toBeInTheDocument()
     expect(screen.getByText(/시연용 해석/)).toBeInTheDocument()
+  })
+
+  it('핵심_AI_의견은_권고와_첫_이유', async () => {
+    const text = '권고: 분할 승인\n이유: 재고가 모자라요\n이유: 입고가 늦어요\n주의: 둘째 수량은 판매 뒤 결정'
+    mountCase(MAY, 'Masil 대표', { briefing: AI_OK(text) })
+    const core = await screen.findByRole('group', { name: '가장 큰 위험' })
+    const ai = within(core.closest('dl') as HTMLElement).getByText('AI 의견').nextElementSibling as HTMLElement
+    const lines = ai.querySelectorAll('.ai-line')
+    expect(lines.length).toBe(2)
+    expect(lines[0]).toHaveTextContent('분할 승인')
+    expect(lines[1]).toHaveTextContent('재고가 모자라요')
+    expect(ai).not.toHaveTextContent('입고가 늦어요')
+    expect(ai).not.toHaveTextContent('둘째 수량')
+  })
+
+  it('펼친_AI_의견은_같은_머리말을_묶어_보인다', async () => {
+    const text = '권고: 분할 승인\n이유: 재고가 모자라요\n이유: 입고가 늦어요\n주의: 첫째 주의\n주의: 둘째 주의'
+    const counter = '반대로 결정하려면: 재고를 채워요\n반대로 결정하려면: 입고를 당겨요\n확인할 것: 입고일'
+    mountCase(MAY, 'Masil 대표', { briefing: AI_OK(text), counterpoints: AI_OK(counter) })
+    await userEvent.click(await screen.findByRole('button', { name: /AI 브리핑/ }))
+    expect(await screen.findAllByText('이유:')).toHaveLength(1)
+    expect(screen.getAllByText('주의:')).toHaveLength(1)
+    const group = screen.getByText('이유:').closest('.ai-group') as HTMLElement
+    const items = group.querySelectorAll('li')
+    expect(items).toHaveLength(2)
+    expect(items[1]).toHaveTextContent('입고가 늦어요')
+    await userEvent.click(screen.getByRole('button', { name: /반대 근거/ }))
+    expect(await screen.findAllByText('반대로 결정하려면:')).toHaveLength(1)
+    expect(screen.getByText('확인할 것:')).toBeInTheDocument()
+    expect(screen.getByText('입고를 당겨요')).toBeInTheDocument()
+  })
+
+  it('괄호_조사가_없다', async () => {
+    mountCase(MAY, 'Masil 대표', { briefing: AI_OK('권고: 분할 승인\n이유: 재고가 모자라요') })
+    await screen.findByRole('group', { name: '가장 큰 위험' })
+    expect(visibleText(document.body)).not.toMatch(/\((?:으|이|가|을|를|은|는|와|과)\)/)
   })
 
   it('반대_근거도_머리말이_굵다', async () => {

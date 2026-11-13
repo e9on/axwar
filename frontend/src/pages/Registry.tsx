@@ -94,11 +94,11 @@ function RowForm({ target, actor, onClose, onDone }: { target: Target; actor: st
         const r = await api.post<RegisterReply>(plan ? '/api/plans' : '/api/contracts', { actor, fields, open_case: openCase })
         const id = r.plan_id ?? r.influencer_code ?? ''
         const lines = r.case_id !== null ? [] : r.open_error ? [`등록은 됐지만 건은 열지 못했어요: ${r.open_error}`] : []
-        await onDone({ title: `${label} ${id}을(를) 등록했어요`, lines, caseId: r.case_id ?? undefined })
+        await onDone({ title: `${label} ${id} 등록했어요`, lines, caseId: r.case_id ?? undefined })
       } else {
         const path = plan ? `/api/plans/${encodeURIComponent(idText)}` : `/api/contracts/${(row as unknown as ContractRow).id}`
         const r = await api.put<{ actions: ServerAction[] }>(path, { actor, fields })
-        await onDone({ title: `${label} ${idText}을(를) 고쳤어요`, lines: (r.actions ?? []).map(actionLine) })
+        await onDone({ title: `${label} ${idText} 고쳤어요`, lines: (r.actions ?? []).map(actionLine) })
       }
     } catch (e) {
       setError((e as Error).message)

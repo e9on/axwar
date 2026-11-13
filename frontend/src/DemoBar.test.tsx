@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import App from './App'
 import { fakeServer } from './test/fakeServer'
+import { visibleText } from './test/visibleText'
 
 const PEOPLE = [
   { name: '마케팅팀장', role: '마케팅팀' },
@@ -84,6 +85,13 @@ describe('메인의 시연 막대', () => {
     expect(screen.queryByRole('heading', { name: '시연 조작판' })).toBeNull()
     // 보는 사람은 첫 결정권자
     await waitFor(() => expect(viewer()).toBe('Masil 대표'))
+  })
+
+  it('괄호_조사가_없다', async () => {
+    mount('/', { scenario: 'scenario_1', waiting: WAIT_NOW, next_date: '2026-07-20' })
+    const bar = await screen.findByRole('region', { name: '시연 진행' })
+    await within(bar).findByRole('button', { name: 'Masil 대표로 바꾸기' })
+    expect(visibleText(document.body)).not.toMatch(/\((?:으|이|가|을|를|은|는|와|과)\)/)
   })
 
   it('진행은_하루씩_advance', async () => {

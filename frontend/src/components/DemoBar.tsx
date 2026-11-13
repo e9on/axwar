@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { koDateWeekday } from '../date'
-import { actionLine } from '../format'
+import { actionLine, josa } from '../format'
 import { ga, plainLine } from '../copy'
 import { useStartScene } from '../state/demoScene'
 import type { useDemoScene } from '../state/demoScene'
@@ -78,7 +78,7 @@ export default function DemoBar({ demo }: { demo: Scene }) {
         {ended && result && <span className="db-result"> {plainLine(result, 120)}</span>}
         {need && who && who !== person?.name && (
           <button type="button" className="btn small" onClick={() => demo.switchTo(who)}>
-            {who}(으)로 바꾸기
+            {josa(who, '로')} 바꾸기
           </button>
         )}
       </p>
@@ -97,7 +97,7 @@ export default function DemoBar({ demo }: { demo: Scene }) {
       {asking && (
         <FormDialog title="장면 불러오기" confirmLabel="초기화하고 시작" tone="deny" busy={resetting} error={failed} onConfirm={restart} onCancel={() => setAsking(false)}>
           <p>
-            <b>{scene.title}</b>을(를) 처음부터 시작하면 시연 데이터가 지워져요.
+            <b>{scene.title}</b>{josa(scene.title ?? '', '을').slice((scene.title ?? '').length)} 처음부터 시작하면 시연 데이터가 지워져요.
           </p>
         </FormDialog>
       )}

@@ -6,6 +6,7 @@ import { useViewer } from '../state/viewer'
 import { useLoad } from '../state/useLoad'
 import { DEMO_MODE } from '../decisions'
 import { sceneSummary } from '../copy'
+import { josa } from '../format'
 import type { DemoState, Scenario } from '../adminTypes'
 import FormDialog from '../components/FormDialog'
 import LoadFailed from '../components/LoadFailed'
@@ -111,7 +112,7 @@ function DemoPanel() {
           }}
         >
           <p>
-            <b>{asking.title}</b>을(를) 시작하면 시연 데이터가 지워져요. 지금까지 진행한 것은 사라지고 장면 처음으로 돌아가요.
+            <b>{asking.title}</b>{josa(asking.title, '을').slice(asking.title.length)} 시작하면 시연 데이터가 지워져요. 지금까지 진행한 것은 사라지고 장면 처음으로 돌아가요.
           </p>
         </FormDialog>
       )}

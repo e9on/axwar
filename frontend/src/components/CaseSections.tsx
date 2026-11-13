@@ -5,7 +5,7 @@ import { signalValue, indicatorValue } from './EvidenceList'
 import { RULE_LABEL, RULE_LABEL_FALLBACK, changeLine, fromTo } from '../copy'
 import type { AiText, ApproverChange, CaseDetailData, CaseEvent, CaseRequest, Escalation, EvidenceData, ReplyJudgment } from '../caseTypes'
 import { koDate } from '../date'
-import { AI_SHORT_LIMIT, aiHeadline, aiLines, clip, isStructured } from '../aiText'
+import { AI_SHORT_LIMIT, aiCore, aiGroups, clip, isStructured } from '../aiText'
 
 /** 결재선이 바뀐 이력: 상신은 "A에서 B로, 상신(의견): 이유", 그 밖의 권한 이동은 "A에서 B로: 이유" */
 export function ChangeLines({ escalations, changes }: { escalations: Escalation[]; changes: ApproverChange[] }) {
@@ -100,11 +100,21 @@ function AiBody({ text }: { text: string }) {
   if (isStructured(text)) {
     return (
       <div className="ai-lines">
-        {aiLines(text).map((l, i) => (
-          <p key={i} style={{ whiteSpace: 'pre-line' }}>
-            {i === 0 && <Badge kind="AI" />}
-            {l.head && <b>{l.head}:</b>} {l.body}
-          </p>
+        {aiGroups(text).map((g, i) => (
+          <div key={i} className="ai-group">
+            <p style={{ whiteSpace: 'pre-line' }}>
+              {i === 0 && <Badge kind="AI" />}
+              {g.head && <b>{g.head}:</b>}
+              {g.bodies.length === 1 && <> {g.bodies[0]}</>}
+            </p>
+            {g.bodies.length > 1 && (
+              <ul>
+                {g.bodies.map((b, j) => (
+                  <li key={j} style={{ whiteSpace: 'pre-line' }}>{b}</li>
+                ))}
+              </ul>
+            )}
+          </div>
         ))}
       </div>
     )
@@ -215,7 +225,7 @@ export function KeyLines({ detail, evidence, canMake, making, onMake }: { detail
   const reds = evidence ? evidence.signals.filter((s) => s.level === 'red' && s.judgment === JUDGE).slice(0, 2) : []
   const roas = evidence?.key_indicators.find((i) => i.key === REAL_ROAS) ?? null
   const b = detail.briefing
-  const first = b && b.ok ? aiHeadline(b.text) : ''
+  const first = b && b.ok ? aiCore(b.text) : []
   return (
     <dl className="keylines" aria-label="핵심">
       <div>
@@ -243,8 +253,12 @@ export function KeyLines({ detail, evidence, canMake, making, onMake }: { detail
       <div>
         <dt>AI 의견</dt>
         <dd>
-          {first ? (
-            <span><Badge kind="AI" />{first}</span>
+          {first.length > 0 ? (
+            <>
+              {first.map((t, i) => (
+                <span className="ai-line" key={i}>{i === 0 && <Badge kind="AI" />}{t}</span>
+              ))}
+            </>
           ) : (
             <span className="muted">아직 없어요</span>
           )}

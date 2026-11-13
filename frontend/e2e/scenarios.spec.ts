@@ -1,4 +1,5 @@
 import { test as base, expect, type Page } from '@playwright/test'
+import { josa } from '../src/format'
 
 /** 장면마다 서버 오류(5xx)·콘솔 오류·잡히지 않은 예외가 없어야 한다 */
 const test = base.extend<{ problems: string[] }>({
@@ -32,9 +33,9 @@ async function playUntilNeed(page: Page, who: string | RegExp) {
   await expect(demoBar(page).getByRole('button', { name: '▶ 진행' })).toBeVisible()
 }
 
-/** 시연 막대의 "OO(으)로 바꾸기" 단추가 있으면 눌러 그 사람으로 본다(이미 그 사람이면 없음) */
+/** 시연 막대의 "OO로 바꾸기" 단추가 있으면 눌러 그 사람으로 본다(이미 그 사람이면 없음) */
 async function viewWaiting(page: Page, who: string) {
-  const btn = demoBar(page).getByRole('button', { name: `${who}(으)로 바꾸기` })
+  const btn = demoBar(page).getByRole('button', { name: `${josa(who, '로')} 바꾸기` })
   if (await btn.count()) await btn.click()
   await expect(page.getByLabel('보는 사람')).toHaveValue(who)
 }

@@ -8,10 +8,11 @@ const FINAL_RIEUL = 8 // 받침 ㄹ의 번호
 const HANGUL_LAST = 55203 // 한글 음절 끝(힣)
 
 /** 이름·동작 뒤에 받침에 맞는 조사를 붙인다. 한글이 아닌 글자로 끝나면 받침 없는 것으로 본다 */
-export function josa(word: string, kind: '로' | '은'): string {
+export function josa(word: string, kind: '로' | '은' | '을'): string {
   const code = word.charCodeAt(word.length - 1)
   const final = code >= HANGUL_FIRST && code <= HANGUL_LAST ? (code - HANGUL_FIRST) % FINALS : 0
   if (kind === '로') return `${word}${final === 0 || final === FINAL_RIEUL ? '로' : '으로'}`
+  if (kind === '을') return `${word}${final === 0 ? '를' : '을'}`
   return `${word}${final === 0 ? '는' : '은'}`
 }
 
