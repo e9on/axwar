@@ -12,6 +12,8 @@ type ClockValue = {
   failed: boolean
   retry: () => void
   advance: (to: string) => Promise<void>
+  /** 서버의 기준일·모드를 다시 읽고 version을 올려 다른 화면이 다시 읽게 한다(시연 진행·모드 전환 뒤). */
+  refresh: () => Promise<void>
 }
 
 const ClockContext = createContext<ClockValue | null>(null)
@@ -53,7 +55,18 @@ export function ClockProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  return createElement(ClockContext.Provider, { value: { ...state, version, failed, retry, advance } }, children)
+  const refresh = useCallback(async () => {
+    try {
+      const reply = await api.get<ClockReply>('/api/clock')
+      setState({ date: reply.date, mode: reply.mode })
+      setFailed(false)
+      setVersion((v) => v + 1)
+    } catch {
+      setFailed(true) // 알림 줄이 이미 보여 줌
+    }
+  }, [])
+
+  return createElement(ClockContext.Provider, { value: { ...state, version, failed, retry, advance, refresh } }, children)
 }
 
 export function useClock(): ClockValue {
