@@ -102,3 +102,34 @@ test('PR #33 검토 반영 스크린샷(마무리_* 덮어쓰기)', async ({ pag
   await page.waitForLoadState('networkidle')
   await shot('2차_1440')
 })
+
+test('화면 개편(#33) 스크린샷: 개편_*', async ({ page, request }) => {
+  test.setTimeout(180_000)
+  const api = 'http://127.0.0.1:8000'
+  // 장면 2를 한 단계(물류 회신)만 진행: 그룹 CEO에게 분할 승인 차례가 온 상태
+  await request.post(`${api}/api/demo/reset`, { data: { scenario: 'scenario_2' } })
+  await request.post(`${api}/api/demo/run`, { data: { scenario: 'scenario_2', from_step: 0, upto: 1 } })
+  const cases = (await (await request.get(`${api}/api/cases`)).json()) as { id: number; ref_id: string }[]
+  const id = cases.find((c) => c.ref_id === 'PLAN-001')?.id
+  expect(id).toBeTruthy()
+  const ceo = encodeURIComponent('그룹 CEO')
+  const shot = (name: string, full = true) => page.screenshot({ path: join(OUT, `개편_${name}.png`), fullPage: full })
+  const go = async (url: string) => {
+    await page.goto(url)
+    await page.waitForLoadState('networkidle')
+  }
+  for (const w of [1440, 768, 390]) {
+    await page.setViewportSize({ width: w, height: 900 })
+    if (w !== 768) {
+      await go(`/?as=${ceo}`)
+      await shot(`메인_${w}`)
+      await go('/demo')
+      await shot(`시연_${w}`)
+    }
+    await go(`/cases/${id}?as=${ceo}`)
+    await shot(`건상세_${w}`)
+    if (w === 1440) await shot('건상세_첫화면_1440', false)
+    const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
+    expect(over, `${w}px 가로 스크롤`).toBeLessThanOrEqual(0)
+  }
+})

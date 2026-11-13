@@ -118,8 +118,8 @@ test('scenario_3: 승인 없이 기본 거부 날이 되면 기본 거부와 통
   await goHome(page)
   await expect(page.getByText('7월 14일').first()).toBeVisible()
   await openTodo(page, 'INF-001')
-  await expect(page.getByText(/기본 거부/).first()).toBeVisible()
-  await expect(page.getByText(/조건변경 통보|통보 초안/).first()).toBeVisible()
+  await expect(page.getByRole('group', { name: '결정' })).toContainText('통보 초안')
+  await expect(page.getByRole('group', { name: '결정' })).toContainText('통보 발송')
 })
 
 test('scenario_1_escalate: 마케팅팀장이 위로 올리면 Masil 대표 결재선에 들어간다', async ({ page, problems }) => {

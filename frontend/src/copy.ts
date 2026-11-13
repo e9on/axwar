@@ -18,8 +18,8 @@ export function findForbidden(text: string): string[] {
 }
 
 /** 서버 문장을 기본 화면에 쓸 한 줄로: 금지어가 나오기 전까지만, 길면 말줄임 */
-export function plainLine(text: string, max = 40): string {
-  let cut = text
+export function plainLine(text: string | null | undefined, max = 40): string {
+  let cut = text ?? ''
   for (const re of FORBIDDEN_TERMS) {
     const m = re.exec(cut)
     if (m) cut = cut.slice(0, m.index)

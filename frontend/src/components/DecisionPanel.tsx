@@ -204,6 +204,8 @@ export default function DecisionPanel({ detail, actor, onDone }: Props) {
   else if (c.open || phase2) lead = `${c.status} 상태예요. 다른 회신이나 결정을 기다리고 있어요.`
   else if (c.status === S_DEFAULT_DENY && deny) lead = `기본 거부 날(${koDate(deny)})까지 승인이 없어 확정 보류됐어요.`
   else lead = `${c.status} 상태예요.`
+  const mine = detail.tasks.filter((t) => t.status === '대기' && t.dept === v?.role)
+  if (!canDecide && !overdue && mine.length > 0) lead += ` 내 작업: ${mine.map((t) => `${t.title} (${koDate(t.due)}까지)`).join(', ')}`
   return (
     <div className="bar now" role="group" aria-label="결정" aria-busy={busy}>
       <p className="lead-now">
