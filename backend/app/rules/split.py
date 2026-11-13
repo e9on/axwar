@@ -55,12 +55,30 @@ def make_split(
     return SplitPlan(phase1, phase1_date, phase2, p2_date, tuple(hits))
 
 
+CHANGE_OF_MIND, COLOR_RETURN = "단순변심", "색상불만"  # 원본 반품 사유 값이자 2차 게이트의 반품 항목 이름
+RETURN_KEYS = {CHANGE_OF_MIND: "change_of_mind", COLOR_RETURN: "color"}  # 반품 사유 -> 건에 저장하는 반품 건수 키. 게이트와 관찰 화면이 같이 읽음
+
+
+def observation_done(days_since_phase1: int, observe_days: int | None = None) -> bool:
+    """반품 관찰 기간(정책 split.return_observe_days)이 끝났는지. 2차 게이트와 관찰 화면이 같이 씀."""
+    if observe_days is None:
+        observe_days = policy.get("split.return_observe_days")
+    return days_since_phase1 >= observe_days
+
+
 def return_stop_threshold(baseline: float, n_orders: int, z: float | None = None) -> float:
     if z is None:
         z = policy.get("split.stop_z")
     if n_orders <= 0:
         raise ValueError("1차 주문 수는 1 이상이어야 함")
     return baseline + z * math.sqrt(baseline * (1 - baseline) / n_orders)
+
+
+def return_check(count: int, n_orders: int, baseline: float, z: float | None = None) -> dict:
+    """반품 건수 하나의 통계 기준 판정: 반품률, 한계값(기준선 + z × 표준오차), 초과 여부. 2차 게이트와 관찰 화면이 같이 쓴다."""
+    rate = count / n_orders
+    limit = return_stop_threshold(baseline, n_orders, z)
+    return {"rate": rate, "limit": limit, "over": rate > limit}
 
 
 def phase2_gate(
@@ -83,21 +101,20 @@ def phase2_gate(
 
     if observe_days is None:
         observe_days = policy.get("split.return_observe_days")
-    if days_since_phase1 < observe_days:
+    if not observation_done(days_since_phase1, observe_days):
         reasons.append(f"관찰 {observe_days}일 미만({days_since_phase1}일)")
     if phase1_orders <= 0:
         reasons.append("1차 주문 0건: 반품 판정 불가")
 
     for label, count, base in (
-        ("단순변심", change_of_mind_returns, baseline_change_of_mind),
-        ("색상불만", color_returns, baseline_color),
+        (CHANGE_OF_MIND, change_of_mind_returns, baseline_change_of_mind),
+        (COLOR_RETURN, color_returns, baseline_color),
     ):
         if phase1_orders > 0:
-            rate = count / phase1_orders
-            limit = return_stop_threshold(base, phase1_orders)
-            if rate > limit:
+            chk = return_check(count, phase1_orders, base)
+            if chk["over"]:
                 auto_stopped = True
-                reasons.append(f"{label} 반품률 {rate:.1%}이 기준 {limit:.1%} 초과")
+                reasons.append(f"{label} 반품률 {chk['rate']:.1%}이 기준 {chk['limit']:.1%} 초과")
     if auto_stopped:
         actions.append("2차 자동 보류")
 

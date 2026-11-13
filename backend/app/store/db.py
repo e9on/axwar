@@ -300,6 +300,17 @@ class Store:
             db.execute("INSERT INTO settings (key, value) VALUES ('demo_clock', ?) "
                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (d.isoformat(),))
 
+    def get_demo_progress(self) -> dict | None:
+        """시연 대본 진행 위치 {scenario, done}(없으면 None). 초기화(reset)하면 지워진다."""
+        with self._lock:
+            saved = self._setting(self._db, "demo_progress")
+        return json.loads(saved) if saved else None
+
+    def set_demo_progress(self, scenario: str, done: int) -> None:
+        with self._tx() as db:
+            db.execute("INSERT INTO settings (key, value) VALUES ('demo_progress', ?) "
+                       "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (_json({"scenario": scenario, "done": done}),))
+
     def reset(self, actor: str = "시스템") -> None:
         """시연 데이터(출처가 시연인 사건과 딸린 작업·회신·리뷰·이벤트, 시연 등록부 행)를 지우고 시계를 기준일로 되돌린다.
         운영 출처 사건은 남긴다."""
@@ -309,7 +320,7 @@ class Store:
             db.execute("DELETE FROM cases WHERE origin=?", (CASE_DEMO,))  # 딸린 작업·요청·회신·리뷰·승인·권한이동·AI 판정·사건 이벤트는 CASCADE
             db.execute("DELETE FROM contracts WHERE origin='시연'")
             db.execute("DELETE FROM plans WHERE origin='시연'")
-            db.execute("DELETE FROM settings WHERE key='demo_clock'")
+            db.execute("DELETE FROM settings WHERE key IN ('demo_clock', 'demo_progress')")
             self._event(db, None, "초기화", actor, {})
 
     # ---- 사건 ----
