@@ -931,4 +931,13 @@ describe('승인 확인 창과 서버가 준 열린 여부·막힘', () => {
     expect(why).toHaveTextContent('마지막 승인일 7/13까지 승인 없음')
     expect(why).toHaveTextContent('승인하지 않은 결재: 이사회')
   })
+
+  it('1차_결재가_끝나_2차로_넘어간_건에는_1차_기본_거부_날이_지났다고_하지_않는다', async () => {
+    const over = { case: { ...detailOf(NOT).case, status: '2차 잠금', open: true, stage: '2차 관찰' }, deny_date: '2026-07-14', approval_deadline: '2026-07-13', rule: { ...detailOf(NOT).rule, approved_roles: ['마케팅팀', 'Masil 대표'], pending_roles: [] } }
+    Setup(NOT, '마케팅팀장', {}, over)
+    mount('마케팅팀장')
+    const lead = await screen.findByRole('group', { name: '결정' })
+    expect(lead).not.toHaveTextContent('기본 거부 날')
+    expect(lead).toHaveTextContent('2차 잠금 상태예요')
+  })
 })
