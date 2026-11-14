@@ -444,3 +444,33 @@ def test_SCM_회신_전_승인을_막아도_끝까지_돌리기는_끝난다(sto
         reset(c, scn)
         ok(c.post("/api/demo/run", json={"scenario": scn}))
         assert case(c, "PLAN-001")["status"] == end, scn
+
+
+def _scene2_to(c, day):
+    reset(c, "scenario_2")
+    adv(c, "2026-07-13")
+    for _ in range(6):
+        w = ok(c.get("/api/demo/state"))["waiting"]
+        if not w or w["action"] not in ("결정", "공지"):
+            break
+        ok(c.post("/api/demo/play", json={"step": w["step"]}))
+    adv(c, day)
+    return case(c, "PLAN-001")["id"]
+
+
+def test_1차_결재가_끝난_뒤_온_요청에는_1차_기한을_붙이지_않는다(store):
+    c, _ = fake_client(store)
+    _scene2_to(c, "2026-08-20")  # 2차 재고 확보(SCM) 회신 대기
+    [row] = [r for r in ok(c.get("/api/todo/SCM 담당자"))["회신 대기"] if "2차" in r["text"]]
+    assert row["deadline"] is None and row["approval_deadline"] is None and row["deny_date"] is None
+
+
+def test_사람_확인을_다시_넣어도_사람_확인_작업은_하나만_남는다(store):
+    c, _ = fake_client(store)
+    cid = _scene2_to(c, "2026-08-11")  # 8/10 리뷰로 콘텐츠 수정 요청이 생김
+    req = [r for r in store.list_requests(cid) if r["purpose"] == "콘텐츠 수정"][0]
+    if req["status"] == "대기":
+        ok(c.post(f"/api/requests/{req['id']}/reply", json={"actor": "캠페인 담당자", "text": "요청하신 대로 가능합니다.", "attachments": 0}))
+    ok(c.post(f"/api/requests/{req['id']}/resolve", json={"actor": "캠페인 담당자", "text": "확인했습니다. 진행 가능합니다.", "attachments": 0}))
+    open_tasks = [t for t in store.list_tasks(cid) if t["title"] == "회신 사람 확인" and t["status"] == "대기"]
+    assert len(open_tasks) == 1

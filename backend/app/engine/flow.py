@@ -179,6 +179,7 @@ DELEGATION_RULE = "plan_within_delegation"  # 규칙(rules/approver.py)의 전�
 REFERENCE_USE = "참고"  # 근거 신호의 쓰임 값: 결정에 쓰지 않는 참고용
 EXCEPTION_TASK = "2차 예외 승인 검토"  # 반품 자동 보류 때 예외 승인 권한자(2차 승인권자 중 최고 역할)의 작업
 POLICY_YES = "예"  # 예/아니오 정책 항목의 '예'
+HUMAN_CHECK_TASK = "회신 사람 확인"  # AI가 사람 확인으로 넘긴 회신의 작업
 ANNOUNCE_TASK = "1차 공지"  # 승인 뒤 캠페인 담당 작업, 공지하면 완료
 RAW_KEEP = 500  # AI 원문은 이 글자 수까지만 판정 기록에 남긴다
 OBSERVE_NOTE = "2차는 반품 관찰 뒤 열림"
@@ -1387,6 +1388,9 @@ class Engine:
             return {**base, "ignored": True, "reason": reason, "needs_human": False, "changed": False,
                     "status": case["status"], "judgment": None}
         reply_id = self.store.add_reply(request_id, text, attachments)
+        for t in self.store.list_tasks(case["id"]):  # 같은 부서 회신의 지난 사람 확인 작업은 닫는다(다시 필요하면 아래에서 새로 만든다)
+            if t["title"] == HUMAN_CHECK_TASK and t["status"] == "대기" and t["detail"].startswith(f"{req['dept']} 회신 "):
+                self.store.set_task_status(t["id"], "완료", resolved_by or "시스템")
         j = judge.interpret_reply(self._provider("reply"), req["dept"], req["text"], text, self._today())
         result = {**asdict(j), "raw": j.raw[:RAW_KEEP], "reply_id": reply_id}
         if resolved_by:
@@ -1420,7 +1424,7 @@ class Engine:
         self.store.set_request_status(request_id, R_HUMAN, "AI", why)
         if req["purpose"] == P_NOTICE:
             self.store.set_status(case["id"], S_HUMAN, "AI", why)
-        self._task_once(case["id"], self._owner(case["kind"]), "회신 사람 확인", self._today(),
+        self._task_once(case["id"], self._owner(case["kind"]), HUMAN_CHECK_TASK, self._today(),
                         f"{req['dept']} 회신 '{text}' — {why}. 사람이 확인해 주세요")
         return {**base, "ignored": False, "needs_human": True, "changed": False,
                 "status": self.store.get_case(case["id"])["status"], "judgment": result}
@@ -2935,8 +2939,12 @@ class Engine:
         return " · ".join(parts) + (" (시연용)" if "base" in plan["raw"] else "")
 
     def _item(self, c: dict) -> dict:
+        """할 일 한 줄. 1차 기한(확정 기한·마지막 승인일)은 1차 결재 단계(회신 대기·승인 대기)일 때만 붙인다 — 그 뒤에 생긴 일
+        (2차 요청·콘텐츠 수정·2차 예고 등)에 1차 기한이 보이면 헷갈린다. 2차 승인 줄은 2차 기한을 따로 덮어쓴다."""
+        first = (self.first_deadline_view(c["facts"]) if c["status"] in (S_WAIT_REPLY, *APPROVAL_STATES)
+                 else {"deadline": None, "deny_date": None, "approval_deadline": None})
         return {"case_id": c["id"], "kind": c["kind"], "ref_id": c["ref_id"], "title": self.case_title(c), "status": c["status"],
-                **self.first_deadline_view(c["facts"])}
+                **first}
 
     def _stale_open(self, c: dict, key: str) -> bool:
         """올림 알림은 그 일이 아직 미처리일 때만 보인다."""
