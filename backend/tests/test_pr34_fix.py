@@ -46,6 +46,7 @@ def _phase2_wait(store):
 
 # ---- M1 기한이 지난 건 ----
 
+@pytest.mark.usefixtures("legacy_scenes")
 def test_기본_거부_실행일이_지난_1차_건은_결정_목록이_비고_이유가_있다(store):
     eng = _eng(store)
     cid = eng.seed("scenario_1")[0]
@@ -270,6 +271,7 @@ def test_건_근거는_없어진_정책_키가_있어도_열린다(store):
 
 # ---- L10 상신이 여러 번 ----
 
+@pytest.mark.usefixtures("legacy_scenes")
 def test_상신이_둘이면_마지막_상신이_맨_앞(store):
     eng = Engine(store)
     cid = eng.seed("scenario_1_escalate")[0]

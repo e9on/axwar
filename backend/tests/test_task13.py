@@ -117,6 +117,7 @@ def _run(store, name, *responses):
     return eng, ids, [eng.play(s) for s in scenarios.load(name).script]
 
 
+@pytest.mark.usefixtures("legacy_scenes")
 def test_상신_대본은_상신_이벤트와_재결재로_끝난다(store):
     eng = Engine(store, provider=FakeProvider([ACCEPT, ACCEPT]))
     (cid,) = eng.seed("scenario_1_escalate")

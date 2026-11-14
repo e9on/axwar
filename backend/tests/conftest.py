@@ -24,3 +24,16 @@ def _clear_policy_overrides():
     from app import policy
     yield
     policy.clear_overrides()
+
+
+@pytest.fixture
+def legacy_scenes(tmp_path, monkeypatch):
+    """이슈 #42 전에 쓰던 장면 1(PLAN-019, 재고 부족 → SCM 회신)과 상신 변형(PLAN-019 복사, 9월)을 시연 폴더 복사본에 되돌려 놓는다.
+    재고 부족·SCM 길·상신 같은 엔진 동작은 그 데이터로 계속 시험하고, 지금 시연 장면은 test_task34.py가 본다."""
+    from pathlib import Path
+    dst = tmp_path / "demo_legacy"
+    shutil.copytree(config.demo_dir(), dst)
+    for f in (Path(__file__).parent / "legacy_demo").glob("*.json"):
+        shutil.copy(f, dst / f.name)
+    monkeypatch.setenv("AXWAR_DEMO_DIR", str(dst))
+    yield dst

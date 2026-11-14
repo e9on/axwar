@@ -3,6 +3,7 @@
 읽기 전용이고 AI를 부르지 않는다. 숫자는 꾸미지 않고 그대로 두며(형식은 화면이 정함), 정책은 호출 시점의 값을 읽는다.
 """
 from app import policy
+from app.calc import explain
 from app.calc.campaign import RETURN_RATE_SOURCES, _campaign_influencer, influencer_ranking, return_rate
 from app.calc.signals import (
     ATTRIBUTION_NOTE,
@@ -43,10 +44,17 @@ def resolve_detail(detail: dict | None, fallback_formula: str = "") -> dict:
             "sources": list(d.get("sources", [])), "policies": policies}
 
 
-def signal_line(s: Signal) -> dict:
-    return {"key": s.key, "label": s.label, "value": s.value, "compare": s.compare, "level": s.level,
+def influencer_name(influencer_id: str | None) -> str:
+    """풀이 문장에 쓰는 인플루언서 이름(마스터). 모르면 '이 인플루언서'."""
+    row = next((r for r in loader.influencer_rows() if r["influencer_id"] == influencer_id), None)
+    return row["influencer_name"] if row else explain.NO_NAME
+
+
+def signal_line(s: Signal, name: str = explain.NO_NAME) -> dict:
+    line = {"key": s.key, "label": s.label, "value": s.value, "compare": s.compare, "level": s.level,
             "unit": s.unit, "badge": s.badge, "judgment": s.judgment, "exclude_reason": s.exclude_reason,
             "detail": resolve_detail(s.detail, s.basis)}
+    return {**line, "explain": explain.signal(line, name)}
 
 
 def influencer_of_plan(plan_id: str) -> str | None:
@@ -88,47 +96,56 @@ def key_indicators(influencer_id: str) -> list[dict]:
     inverted = has_plan and req_rank <= cut * req_n and me.rank > (1 - cut) * n
     mine = return_rate(influencer_id, "단순변심")
     rest = return_rate(None, "단순변심", exclude=influencer_id)
+    name = influencer_name(influencer_id)
+    roas_bad = me.real_roas < 0 or me.rank > (1 - cut) * n  # 손해이거나 성과 순위가 아래 경계 안
+    top_spend = spend_rank <= cut * n
 
     def line(key, label, value, detail, rank=None, compare_label=None, compare_value=None, badge="계산", of=None,
-             unit=None, rank_reason=None):
+             unit=None, rank_reason=None, why=""):
         return {"key": key, "label": label, "value": value, "unit": unit, "rank": rank, "rank_reason": rank_reason,
                 "of": (of or n) if rank is not None else None,
                 "compare_label": compare_label, "compare_value": compare_value, "badge": badge,
-                "detail": resolve_detail(detail)}
+                "detail": resolve_detail(detail), "explain": why}
 
     return [
         line("real_roas", "실질 ROAS", me.real_roas, make_detail(
             "실질 ROAS = 마케팅 후 공헌(GMV − 환불 − 원가 − 채널 수수료 − 배송비 − 반품 물류비 − 광고비) ÷ 광고비. 높은 순위가 1위",
             (("실질 ROAS", me.real_roas, "multiple"), ("순위", me.rank), ("전체 인플루언서 수", n)), STATS_SOURCES), rank=me.rank,
-             unit="multiple"),
+             unit="multiple", why=explain.real_roas(name, me.real_roas, me.rank, n, roas_bad)),
         line("spend_share", "광고비 비중(%)", me.spend_share, make_detail(
             "광고비 비중 = 이 인플루언서 광고비 ÷ 전체 광고비. 큰 순위가 1위",
             (("광고비 비중(%)", me.spend_share, "percent"), ("순위", spend_rank), ("전체 인플루언서 수", n)),
-            (_AD, _CAMP)), rank=spend_rank, unit="percent"),
+            (_AD, _CAMP)), rank=spend_rank, unit="percent",
+             why=explain.spend_share(name, me.spend_share, spend_rank, n, top_spend, roas_bad)),
         line("request_share", "기안 요청 비중(%)", my_req, make_detail(
             "기안 요청 비중 = 이 인플루언서 캠페인의 기안 요청액 합 ÷ 원본 기안 파일의 기안 총액. 큰 순위가 1위",
             (("기안 요청 비중(%)", my_req, "percent"), ("순위", req_rank), ("기안이 있는 인플루언서 수", req_n)),
             (_PLAN, _CAMP)), rank=req_rank, of=req_n, unit="percent",
-             rank_reason=None if has_plan else "원본 기안 파일에 이 인플루언서의 기안이 없어 요청 비중 순위가 없음"),
+             rank_reason=None if has_plan else "원본 기안 파일에 이 인플루언서의 기안이 없어 요청 비중 순위가 없음",
+             why=explain.request_share(name, my_req, req_rank, req_n, bool(inverted))),
         line("allocation_inversion", "배분 역전", inverted, make_detail(
             "기안 요청 비중 순위가 위에서 경계 비율 안인데 실질 ROAS 순위가 아래에서 경계 비율 안이면 "
             "요청은 많은데 성과는 낮은 역전. 경계 비율은 가정",
             (("기안 요청 비중 순위", req_rank), ("기안이 있는 인플루언서 수", req_n), ("실질 ROAS 순위", me.rank),
              ("전체 인플루언서 수", n), ("경계 비율", cut, "ratio")),
-            (_PLAN, _CAMP, *STATS_SOURCES), ("signals.reversal_cut",)), badge="가정"),
+            (_PLAN, _CAMP, *STATS_SOURCES), ("signals.reversal_cut",)), badge="가정",
+             why=explain.allocation_inversion(bool(inverted), req_rank, req_n, me.rank, n)),
         line("simple_change_return", "단순변심 반품률", mine, make_detail(
             "단순변심 반품률 = 사유가 단순변심인 환불액 ÷ 해당 주문 GMV. 이 인플루언서와 그 외 인플루언서 전체를 비교",
             (("이 인플루언서", mine, "ratio"), ("그 외", rest, "ratio")), _RET_SRC),
-             compare_label="그 외 인플루언서", compare_value=rest, unit="ratio"),
+             compare_label="그 외 인플루언서", compare_value=rest, unit="ratio", why=explain.simple_change(name, mine, rest)),
     ]
 
 
 def cost_rows(influencer_id: str) -> dict:
-    """비용 분해 단계(매출 -> 마케팅 전 공헌 -> 인플루언서 피 -> 다른 매체 -> 피 뒤 -> 최종)."""
+    """비용 분해 단계(매출 -> 마케팅 전 공헌 -> 인플루언서 값 -> 다른 매체 -> 값 뺀 뒤 -> 최종)."""
     b = cost_breakdown(influencer_id)
 
+    name = influencer_name(influencer_id)
+
     def row(key, label, amount, detail):
-        return {"key": key, "label": label, "amount": amount, "unit": "krw", "badge": "계산", "detail": resolve_detail(detail)}
+        return {"key": key, "label": label, "amount": amount, "unit": "krw", "badge": "계산", "detail": resolve_detail(detail),
+                "explain": explain.cost_row(key, name, b)}
 
     return {"note": COST_NOTE, "rows": [
         row("gmv", "매출(GMV)", b.gmv, make_detail(
@@ -137,16 +154,16 @@ def cost_rows(influencer_id: str) -> dict:
         row("pre_marketing", "마케팅 전 공헌", b.pre_marketing, make_detail(
             "마케팅 전 공헌 = GMV − 환불 − 원가 − 채널 수수료 − 배송비 − 반품 건수 × 반품 물류비",
             (("매출", b.gmv), ("마케팅 전 공헌", b.pre_marketing)), STATS_SOURCES[:4])),
-        row("influencer_fee", "인플루언서 피", b.influencer_fee, make_detail(
-            "광고비 중 매체가 '인플루언서'인 금액의 합", (("인플루언서 피", b.influencer_fee),), (_AD, _CAMP))),
+        row("influencer_fee", "인플루언서 값", b.influencer_fee, make_detail(
+            "광고비 중 매체가 '인플루언서'인 금액의 합", (("인플루언서 값", b.influencer_fee),), (_AD, _CAMP))),
         row("other_media", "다른 매체 광고비", b.other_media, make_detail(
             "광고비 중 매체가 '인플루언서'가 아닌 금액의 합", (("다른 매체", b.other_media),), (_AD, _CAMP))),
-        row("after_fee", "피 뒤 공헌", b.after_fee, make_detail(
-            "피 뒤 공헌 = 마케팅 전 공헌 − 인플루언서 피",
-            (("마케팅 전 공헌", b.pre_marketing), ("인플루언서 피", b.influencer_fee)), STATS_SOURCES)),
+        row("after_fee", "인플루언서 값을 뺀 공헌", b.after_fee, make_detail(
+            "인플루언서 값을 뺀 공헌 = 마케팅 전 공헌 − 인플루언서 값",
+            (("마케팅 전 공헌", b.pre_marketing), ("인플루언서 값", b.influencer_fee)), STATS_SOURCES)),
         row("final", "최종 공헌", b.final, make_detail(
-            "최종 공헌 = 피 뒤 공헌 − 다른 매체 광고비",
-            (("피 뒤 공헌", b.after_fee), ("다른 매체", b.other_media)), STATS_SOURCES)),
+            "최종 공헌 = 인플루언서 값을 뺀 공헌 − 다른 매체 광고비",
+            (("인플루언서 값을 뺀 공헌", b.after_fee), ("다른 매체", b.other_media)), STATS_SOURCES)),
     ]}
 
 
@@ -166,6 +183,7 @@ def evidence(subject_kind: str, ref_id: str, source_plan_id: str | None) -> dict
             return {**empty, "reason": NO_CONTRACT_BASIS}
         sigs = future_value_signals(inf)
     be = breakeven_hidden_sales(inf)
+    name = influencer_name(inf)
     return {"available": True, "reason": None, "influencer_id": inf,
-            "signals": [signal_line(s) for s in sigs], "key_indicators": key_indicators(inf),
-            "cost_breakdown": cost_rows(inf), "breakeven": signal_line(be), "attribution_note": ATTRIBUTION_NOTE}
+            "signals": [signal_line(s, name) for s in sigs], "key_indicators": key_indicators(inf),
+            "cost_breakdown": cost_rows(inf), "breakeven": signal_line(be, name), "attribution_note": ATTRIBUTION_NOTE}
