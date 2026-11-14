@@ -635,9 +635,12 @@ class Engine:
         arrived = sorted(((s["date"], i) for i, s in enumerate(sc.script)
                           if i in applied and scenarios.is_outside(s) and s["action"] != "기준일" and "date" in s))
         later = [s["date"] for i, s in enumerate(sc.script) if i not in applied and scenarios.is_outside(s) and "date" in s]
+        waiting = self._demo_waiting(sc, applied)
+        if waiting and not waiting["ready"] and waiting["due"] and waiting["due"] > out["date"]:
+            later.append(waiting["due"])  # "다음 일까지"가 결정 마감일에도 멈추게
         return out | {"title": sc.title, "summary": sc.summary, "total": total, "finished": prog["done"] >= total,
                       "next_step": sc.script[prog["done"]] if prog["done"] < total else None,
-                      "waiting": self._demo_waiting(sc, applied), "next_date": min(later) if later else None,
+                      "waiting": waiting, "next_date": min(later) if later else None,
                       "arrived": [scenarios.arrival_text(sc.script[i]) for _, i in arrived],
                       "outcome": [f"{c['ref_id']} {c['status']}"
                                   for c in sorted(self._cases(), key=lambda c: c["id"])]}
@@ -648,12 +651,27 @@ class Engine:
         for i, s in enumerate(sc.script):
             if i in applied or scenarios.is_outside(s):
                 continue
-            ready = all(j in applied for j, o in enumerate(sc.script[:i]) if scenarios.is_outside(o))
-            if ready and self._decision_already_made(s):
+            arrived = all(j in applied for j, o in enumerate(sc.script[:i]) if scenarios.is_outside(o))
+            if arrived and self._decision_already_made(s):
                 continue
+            due = self._decision_due(s)
+            ready = arrived and (due is None or self._today().isoformat() >= due)
             return {"index": i, "action": s["action"], "actor": s.get("actor"), "target": s.get("plan") or s.get("contract"),
-                    "text": scenarios.decision_text(s), "ready": ready, "step": s}
+                    "text": scenarios.decision_text(s), "ready": ready, "due": due, "step": s}
         return None
+
+    def _decision_due(self, s: dict) -> str | None:
+        """결정 단계에서 시연이 멈출 날: 그 단계 결재의 마지막 승인일(사용자 결정: 승인할 수 있게 된 날이 아니라 마지막 알림 날에 멈춤).
+        그 전에도 할 일에서 결정할 수 있고, 그러면 이 단계는 건너뛴다. 결정이 아니거나 기한을 아직 모르면 None(바로 멈춤)."""
+        if s["action"] != "결정":
+            return None
+        found = self._find_case(*((KIND_PLAN, s["plan"]) if "plan" in s else (KIND_CONTRACT, s["contract"])))
+        if found is None:
+            return None
+        f = found["facts"]
+        if s.get("stage") == "2차":
+            return approval_deadline(_d(f["phase2_deadline"])).isoformat() if f.get("phase2_deadline") else None
+        return approval_deadline(_d(_decide_by(f)[0])).isoformat()
 
     def _decision_already_made(self, s: dict) -> bool:
         """대본의 사람 단계를 시연자가 화면에서 이미 끝냈는지. 결정은 그 역할이 승인했거나 사건이 끝났는지,
@@ -3269,8 +3287,29 @@ class Engine:
                                                  for h in self._approver_view(f, "2차")]}
         return out
 
+    def _approvable_since(self, case_id: int) -> str | None:
+        """지금 이어지는 승인 대기가 시작된 날(승인 대기·재승인 대기로 들어온 마지막 상태 변경의 기준일)."""
+        since = None
+        for e in self.store.events(case_id, kind="상태변경"):
+            if e["detail"].get("to") in APPROVAL_STATES and e["detail"].get("from") not in APPROVAL_STATES:
+                since = e["sim_date"]
+        return since
+
+    def _add_approval_period(self, c: dict, add) -> None:
+        """일정의 승인 기간: 승인할 수 있게 된 날부터 마지막 승인일까지(1차는 결재 기한, 2차는 2차 집행일 기준). 남은 승인권자에게 내 차례."""
+        f = c["facts"]
+        if c["status"] in APPROVAL_STATES:
+            start, end, roles, label = self._approvable_since(c["id"]), approval_deadline(_d(_decide_by(f)[0])), _pending_roles(f), ""
+        elif c["status"] == S_PHASE2_WAIT and f.get("phase2_deadline"):
+            start, end, roles, label = f.get("phase2_waiting_since"), approval_deadline(_d(f["phase2_deadline"])), _pending_roles(f, "2차"), "2차 "
+        else:
+            return
+        if not start or not roles or _d(start) > end:
+            return
+        add(start, "승인 기간", f"{c['ref_id']} {label}승인 기간 {_md(_d(start))}~{_md(end)}", c["id"], roles, end=end.isoformat())
+
     def calendar(self) -> list[dict]:
-        """캘린더(설계 6.2): 하회 구간, 확정·통보 기한, 집행일, 2차 집행일, 계약 만료, 작업 기한. 날짜순."""
+        """캘린더(설계 6.2): 하회 구간, 승인 기간(승인할 수 있게 된 날~마지막 승인일), 확정·통보 기한, 집행일, 2차 집행일, 계약 만료, 작업 기한. 날짜순."""
         out: list[dict] = []
 
         def add(day: str, kind: str, label: str, case_id=None, roles=(), end=None):
@@ -3282,6 +3321,7 @@ class Engine:
         for c in self._cases():
             f = c["facts"]
             pending = _pending_roles(f) if c["status"] in OPEN[c["kind"]] else []
+            self._add_approval_period(c, add)
             if c["kind"] == KIND_PLAN:
                 add(approval_deadline(_d(_decide_by(f)[0])).isoformat(), "알림", f"{c['ref_id']} 마지막 승인일(내일 기본 거부)",
                     c["id"], pending)

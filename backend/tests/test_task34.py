@@ -101,7 +101,7 @@ def test_바깥_사건의_date와_summary_형식을_검증한다(tmp_path):
 
 # ---- 날짜로 진행 ----
 
-def test_날짜를_넘기면_회신이_저절로_오고_결정은_시연자가_눌러_7월_20일_1차_집행까지(store):
+def test_날짜를_넘기면_회신이_저절로_오고_결정은_마지막_승인일에_멈춰_시연자가_눌러_7월_20일_1차_집행까지(store):
     c, eng = fake_client(store)
     reset(c, "scenario_1")
     st = ok(c.get("/api/demo/state"))
@@ -110,12 +110,17 @@ def test_날짜를_넘기면_회신이_저절로_오고_결정은_시연자가_�
     assert out["applied"] == [] and out["next_date"] == "2026-07-03"
     out = adv(c, "2026-07-03")
     assert len(out["applied"]) == 1 and "물류 회신" in out["applied"][0] and "7/3" in out["applied"][0]
-    assert out["waiting"]["actor"] == "Masil 대표" and out["waiting"]["ready"] is True
+    # 승인할 수 있게 됐지만 시연은 마지막 승인일(7/16)까지 멈추지 않는다 — 할 일에는 이미 있다
+    assert out["waiting"]["actor"] == "Masil 대표" and out["waiting"]["ready"] is False and out["waiting"]["due"] == "2026-07-16"
     assert "Masil 대표" in out["waiting"]["text"] and "PLAN-014" in out["waiting"]["text"] and "승인" in out["waiting"]["text"]
-    assert out["next_date"] == "2026-07-20"
+    assert out["next_date"] == "2026-07-16"
     assert case(c, "PLAN-014")["status"] == "승인 대기"  # 결정은 적용하지 않았다
-    out = adv(c, "2026-07-10")  # 결정이 늦어도 날짜는 넘어간다
-    assert out["applied"] == [] and out["waiting"]["actor"] == "Masil 대표" and case(c, "PLAN-014")["status"] == "승인 대기"
+    assert [x["ref_id"] for x in ok(c.get("/api/todo/Masil 대표"))["승인 대기"]] == ["PLAN-014"]
+    out = adv(c, "2026-07-10")
+    assert out["waiting"]["ready"] is False and case(c, "PLAN-014")["status"] == "승인 대기"
+    out = adv(c, "2026-07-16")  # 마지막 승인일: 여기서 멈춘다
+    assert out["applied"] == [] and out["waiting"]["actor"] == "Masil 대표" and out["waiting"]["ready"] is True
+    assert out["next_date"] == "2026-07-20"
     ok(c.post("/api/demo/play", json={"step": out["waiting"]["step"]}))  # 시연자가 결정
     assert case(c, "PLAN-014")["status"] == "1차 집행"
     st = ok(c.get("/api/demo/state"))
@@ -138,7 +143,8 @@ def test_날짜를_한꺼번에_넘기면_도착일_순서로_적용하고_결�
         ok(c.post("/api/demo/play", json={"step": ok(c.get("/api/demo/state"))["waiting"]["step"]}))
     out = adv(c, "2026-07-04")  # SCM이 일부만 허용하면 받은 승인이 무효가 되어 재승인은 시연자 몫
     assert [a.split()[0] for a in out["applied"]] == ["7/4"]
-    assert out["waiting"]["action"] == "결정" and out["waiting"]["actor"] == "그룹 CEO" and out["waiting"]["ready"] is True
+    assert out["waiting"]["action"] == "결정" and out["waiting"]["actor"] == "그룹 CEO"
+    assert out["waiting"]["ready"] is False and out["waiting"]["due"] == "2026-07-13"  # 마지막 승인일까지는 멈추지 않는다
     assert case(c, "PLAN-001")["status"] == "재승인 대기"
     out = adv(c, "2026-08-24")  # 재승인 없이 날짜가 넘어가도 리뷰(8/10)·반품(8/24)은 도착일 순서로 들어오고, 기한 규칙은 그대로 돈다
     assert [a.split()[0] for a in out["applied"]] == ["8/10", "8/24"]
@@ -265,3 +271,16 @@ def test_확정_기한이_집행일보다_앞이면_결재_기한은_그대로(s
     cid = case(c, "PLAN-001")["id"]
     d = ok(c.get(f"/api/cases/{cid}?viewer=그룹 CEO"))
     assert (d["deadline"], d["deny_date"], d["approval_deadline"]) == ("2026-07-17", "2026-07-14", "2026-07-13")
+
+
+def test_일정에는_승인할_수_있게_된_날부터_마지막_승인일까지_승인_기간이_보인다(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_1")
+    periods = lambda: [e for e in ok(c.get("/api/calendar")) if e["kind"] == "승인 기간"]
+    assert periods() == []  # 회신 대기: 아직 승인할 수 없다
+    adv(c, "2026-07-05")
+    [p] = periods()
+    assert (p["date"], p["end"], p["roles"]) == ("2026-07-03", "2026-07-16", ["Masil 대표"])
+    assert "PLAN-014" in p["label"] and "7/3~7/16" in p["label"]
+    ok(c.post("/api/demo/play", json={"step": ok(c.get("/api/demo/state"))["waiting"]["step"]}))
+    assert periods() == []  # 승인하면 사라진다
