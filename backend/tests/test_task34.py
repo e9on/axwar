@@ -485,3 +485,11 @@ def test_사람_확인_중인_요청은_회신_대기가_아니라_사람_확인
     todo = ok(c.get("/api/todo/캠페인 담당자"))
     assert [r for r in todo["회신 대기"] if r["request_id"] == req["id"]] == []
     assert len([t for t in todo["작업"] if t["title"] == "회신 사람 확인"]) == 1
+
+
+def test_반품_보류_기록_문장에_해야_함_말투가_없다(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_2_exception")
+    ok(c.post("/api/demo/run", json={"scenario": "scenario_2_exception", "from_step": 0}))
+    texts = [e["detail"].get("text", "") for e in store.events(case(c, "PLAN-001")["id"], kind="2차보류")]
+    assert texts and not [t for t in texts if "해야 함" in t or "해야 해요" in t]

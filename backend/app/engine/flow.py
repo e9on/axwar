@@ -2154,7 +2154,7 @@ class Engine:
         note = why + (f" — 받은 2차 승인({'·'.join(voided)}) 무효" if voided else "")
         self.store.set_status(case_id, S_PHASE2_HOLD, "시스템", note)
         text = (f"{case['ref_id']} 반품이 기준을 넘어 2차 자동 보류: {why}. 캠페인 담당은 2차 취소만 할 수 있고, "
-                "그래도 2차를 하려면 2차 승인권자 중 최고 역할이 이유를 적어 예외 승인해야 함")
+                "그래도 2차를 하려면 2차 승인권자 중 최고 역할이 이유를 적어 예외 승인할 수 있음")
         self.store.add_event(case_id, EV_P2_HOLD, "시스템", {"cause": "반품", "reasons": list(g.reasons),
                                                           "voided_roles": voided or [], "text": text})
         self._task_once(case_id, self.campaign, STALE_PHASE2_HOLD, self._today(), text)
