@@ -38,7 +38,7 @@ description = "담당에게 첫 경고(또는 작업 생성) 뒤 이 일수가 �
 
 [split.return_observe_days]
 value = 28
-source = "가정: 원본에 없음. 1차 집행 뒤 반품이 거의 나타나는 기간을 4주로 봄"
+source = "원본 mkt_returns_ms.csv 1,719건 계산: 주문일부터 환불 완료까지 91.6%가 28일 안(중앙값 18일, 95%는 30일). 원본에 정해진 관찰 기간은 없음"
 description = "2차 집행 전 1차 반품을 관찰하는 기간(일)"
 
 [split.stop_z]
