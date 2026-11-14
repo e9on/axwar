@@ -2005,15 +2005,15 @@ class Engine:
 
     def _phase2_preview(self, case_id: int) -> None:
         """2차 예고(사용자 결정: 2차 집행일은 미루지 않고 승인 기간은 최소로, 대신 미리 알림). 2차 승인권자마다 한 번,
-        2차 집행일과 그 날짜 기준 마지막 승인일(예정)을 알린다. 할 일에는 2차 승인 대기가 시작되기 전까지만 보인다."""
+        2차 집행일을 알린다(결과가 나오기 전이라 마지막 승인일은 지킬 수 없어 알리지 않음). 할 일에는 2차 승인 대기가 시작되기 전까지만 보인다."""
         case = self.store.get_case(case_id)
         f = case["facts"]
         p2 = f.get("phase2") or {}
         if not p2.get("date") or not f.get(STAGES["2차"][0]):
             return
         day = _d(p2["date"])
-        text = (f"{case['ref_id']} 2차 집행 예정 {_md(day)} — 1차 판매·반품 결과가 나오면 2차 승인을 요청해요. "
-                f"마지막 승인일은 {_md(approval_deadline(day))} 예정이에요")
+        text = (f"{case['ref_id']} 2차 집행 예정 {_md(day)} — 1차 판매·반품 결과가 나오면 바로 2차 승인을 요청해요. "
+                "결과가 늦게 나오면 집행일이 그만큼 밀릴 수 있어요")
         for role in _required_roles(f, "2차"):
             self.store.add_event(case_id, EV_P2_PREVIEW, "시스템", {"target": role, "date": p2["date"], "text": text})
 
