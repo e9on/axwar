@@ -7,7 +7,7 @@ import { useViewer } from '../state/viewer'
 import { useLoad } from '../state/useLoad'
 import { koDate } from '../date'
 import { num, pct } from '../format'
-import { R_DONE, R_HUMAN, R_WAIT } from '../decisions'
+import { FIRST_STAGE_STATUSES, R_DONE, R_HUMAN, R_WAIT } from '../decisions'
 import type { ReplyCase, ReplyResult, RequestRow } from '../replyTypes'
 import type { ReplyJudgment } from '../caseTypes'
 import Badge from '../components/Badge'
@@ -167,6 +167,7 @@ function Detail({ row, who, onSaved }: { row: RequestRow; who: string; onSaved: 
     )
   }
 
+  const firstStage = FIRST_STAGE_STATUSES.includes(d.case.status) // 1차 결재 단계에서만 1차 기한을 보인다
   return (
     <article className="doc rdoc">
       <div className="rhead">
@@ -182,12 +183,12 @@ function Detail({ row, who, onSaved }: { row: RequestRow; who: string; onSaved: 
             <span>
               건 상태 <b>{d.case.status}</b>
             </span>
-            {d.deadline && (
+            {firstStage && d.deadline && (
               <span>
                 확정 기한 <b>{koDate(d.deadline)}</b>
               </span>
             )}
-            {d.approval_deadline && (
+            {firstStage && d.approval_deadline && (
               <span>
                 마지막 승인일 <b>{koDate(d.approval_deadline)}</b>
               </span>

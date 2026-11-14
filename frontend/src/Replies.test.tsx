@@ -154,6 +154,15 @@ describe('회신 입력', () => {
     expect(screen.getByRole('button', { name: '회신 저장' })).toBeEnabled()
   })
 
+  it('1차_결재가_끝난_건의_요청에는_1차_기한을_보이지_않는다', async () => {
+    base({ 'GET /api/cases/7': { json: caseOf({ case: { ...caseOf().case, status: '2차 잠금', stage: '2차 관찰' } }) } })
+    mount()
+    await userEvent.click(await screen.findByRole('button', { name: /DEMO-PLAN-001/ }))
+    await screen.findByLabelText('회신 내용')
+    expect(screen.queryByText(/확정 기한/)).toBeNull()
+    expect(screen.queryByText(/마지막 승인일/)).toBeNull()
+  })
+
   it('내용이_비면_저장할_수_없다', async () => {
     base()
     mount()
