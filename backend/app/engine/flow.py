@@ -617,10 +617,21 @@ class Engine:
         rng = range(len(sc.script))[(from_step or 0):upto]
         applied = set(self.store.get_demo_progress()["applied"]) if from_step is not None else set()
         for i in rng:
-            out.append(self._play_step(sc.script[i]))
+            step = sc.script[i]
+            if self._waits_for_scm(step):  # 대본 순서상 SCM 회신 전 결정: 막히므로 건너뛰고 뒤의 재승인 단계가 대신 결정한다
+                out.append({"action": step["action"], "skipped": "SCM 안전재고 회신 전이라 건너뜀", "actions": []})
+            else:
+                out.append(self._play_step(step))
             applied.add(i)
             self._save_progress(scenario, applied)
         return out
+
+    def _waits_for_scm(self, step: dict) -> bool:
+        """1차 결정 단계인데 그 건이 SCM 안전재고 회신을 기다리고 있고 정책이 그 동안 결정을 막는가(approval.wait_for_scm)."""
+        if step["action"] != "결정" or step.get("stage") == "2차" or policy.get("approval.wait_for_scm") != POLICY_YES:
+            return False
+        found = self._find_case(*((KIND_PLAN, step["plan"]) if "plan" in step else (KIND_CONTRACT, step["contract"])))
+        return bool(found and step.get("decision") != D_REJECT and (found["facts"].get("scm") or {}).get("state") == SCM_ASKED)
 
     def demo_state(self) -> dict:
         """시연 대본 진행 상태: 어느 장면(scenario·title)을 몇 단계(done)까지 돌렸는지, 전체 단계 수(total), 다음 단계(next_step), 끝났는지,

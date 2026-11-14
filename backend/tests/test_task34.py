@@ -434,3 +434,13 @@ def test_SCM_안전재고_회신_전에는_승인과_분할_승인을_막고_거
         eng.decide(cid, "그룹 CEO", "분할승인")
     adv(c, "2026-07-04")  # SCM 회신 뒤에는 분할 승인할 수 있다
     assert "분할승인" in ok(c.get(f"/api/cases/{cid}?viewer=그룹 CEO"))["viewer"]["actions"]
+
+
+def test_SCM_회신_전_승인을_막아도_끝까지_돌리기는_끝난다(store):
+    from app import policy
+    policy.set_overrides({"approval.wait_for_scm": ("예", "시험", "")})
+    c, _ = fake_client(store)
+    for scn, end in [("scenario_2_exception", "완료"), ("scenario_2_sales", "완료"), ("scenario_2", "2차 보류")]:
+        reset(c, scn)
+        ok(c.post("/api/demo/run", json={"scenario": scn}))
+        assert case(c, "PLAN-001")["status"] == end, scn
