@@ -227,7 +227,7 @@ test('scenario_2_exception: 반품 기준 숫자와 예외 승인 뒤 상태가 
   await color.click()
   const row = box.locator('.erow', { hasText: '색상불만' })
   await expect(row.getByText('계산식')).toBeVisible()
-  await expect(row.getByText('mkt_returns_ms.csv')).toBeVisible()
+  await expect(row.getByText(/mkt_returns_ms.csv/).first()).toBeVisible() // 원본 파일 줄(정책 출처에도 같은 파일 이름이 나온다)
   await expect(page.getByRole('region', { name: '리뷰 신호' })).toBeVisible()
 })
 
