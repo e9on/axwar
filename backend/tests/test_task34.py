@@ -474,3 +474,14 @@ def test_사람_확인을_다시_넣어도_사람_확인_작업은_하나만_남
     ok(c.post(f"/api/requests/{req['id']}/resolve", json={"actor": "캠페인 담당자", "text": "확인했습니다. 진행 가능합니다.", "attachments": 0}))
     open_tasks = [t for t in store.list_tasks(cid) if t["title"] == "회신 사람 확인" and t["status"] == "대기"]
     assert len(open_tasks) == 1
+
+
+def test_사람_확인_중인_요청은_회신_대기가_아니라_사람_확인_작업_한_줄로만_보인다(store):
+    c, _ = fake_client(store)
+    cid = _scene2_to(c, "2026-08-11")
+    req = [r for r in store.list_requests(cid) if r["purpose"] == "콘텐츠 수정"][0]
+    if req["status"] == "대기":
+        ok(c.post(f"/api/requests/{req['id']}/reply", json={"actor": "캠페인 담당자", "text": "요청하신 대로 가능합니다.", "attachments": 0}))
+    todo = ok(c.get("/api/todo/캠페인 담당자"))
+    assert [r for r in todo["회신 대기"] if r["request_id"] == req["id"]] == []
+    assert len([t for t in todo["작업"] if t["title"] == "회신 사람 확인"]) == 1
