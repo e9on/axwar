@@ -13,6 +13,8 @@
   line-height: var(--lh-body);
 }
 .case-task > p { margin: 0; flex: 1 1 280px; }
+/* 기본 거부 이유: 도장색 띠(기본 거부에만 쓰는 색) */
+.deny-reason { display: block; background: var(--c-seal-soft); border-color: var(--c-seal); color: var(--c-ink); }
 /* 통보 초안은 읽을 글이라 서류처럼: 흰 바탕, 한 줄 72자 */
 .case-task.notice-draft { display: block; background: var(--c-sheet); border-color: var(--c-rule); border-left-color: var(--c-navy); }
 .case-task.notice-draft h3 { margin: 0 0 var(--s-2); font-size: var(--t-3); font-weight: var(--w-bold); }

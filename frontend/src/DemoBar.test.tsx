@@ -186,6 +186,20 @@ describe('메인의 시연 막대', () => {
     expect(bar).toHaveTextContent('할 일에서 먼저 할 수 있어요')
   })
 
+  it('마지막_승인일에_결재가_남았는데_진행하면_기본_거부된다고_확인을_받는다', async () => {
+    const { server } = mount('/', { scenario: 'scenario_1', waiting: { ...WAIT_NOW, due: '2026-07-16' }, next_date: '2026-07-20', date: '2026-07-16' })
+    const bar = await screen.findByRole('region', { name: '시연 진행' })
+    await userEvent.click(within(bar).getByRole('button', { name: '▶ 진행' }))
+    const dlg = await screen.findByRole('dialog')
+    expect(dlg).toHaveTextContent('오늘이 마지막 승인일')
+    expect(dlg).toHaveTextContent('내일 기본 거부')
+    await userEvent.click(within(dlg).getByRole('button', { name: '취소' }))
+    expect(server.calls.filter((c) => c.path === '/api/demo/advance')).toHaveLength(0)
+    await userEvent.click(within(bar).getByRole('button', { name: '다음 날' }))
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: '그래도 진행' }))
+    await waitFor(() => expect(server.calls.filter((c) => c.path === '/api/demo/advance')).toHaveLength(1))
+  })
+
   it('장면이_없으면_막대가_없다', async () => {
     mount('/')
     await screen.findByRole('region', { name: '할 일' })

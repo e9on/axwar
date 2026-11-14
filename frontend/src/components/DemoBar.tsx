@@ -25,10 +25,14 @@ export default function DemoBar({ demo }: { demo: Scene }) {
   const [asking, setAsking] = useState(false)
   const [failed, setFailed] = useState<string | null>(null)
   const [resetting, setResetting] = useState(false)
+  const [risky, setRisky] = useState<null | (() => void)>(null)
   if (!scene) return null
 
   const need = waiting?.ready
   const who = waiting?.actor ?? null
+  // 오늘이 결재의 마지막 승인일인데 아직 결정하지 않았으면, 날짜를 넘기기 전에 묻는다(넘기면 내일 기본 거부)
+  const lastDay = !!need && !!waiting?.due && !!date && date >= waiting.due
+  const guard = (go: () => void) => () => (lastDay && !running ? setRisky(() => go) : go())
   const lines = notice ? [...notice.applied, ...notice.actions.map((a) => actionLine({ ...a, text: plainLine(a.text, 80) }))] : []
 
   let message: string
@@ -58,13 +62,13 @@ export default function DemoBar({ demo }: { demo: Scene }) {
         <span>{scene.title}</span>
       </div>
       <div className="db-tools">
-        <button type="button" className="btn pri" onClick={demo.toggle} disabled={ended || (!running && busy)}>
+        <button type="button" className="btn pri" onClick={guard(demo.toggle)} disabled={ended || (!running && busy)}>
           {running ? '❚❚ 멈춤' : '▶ 진행'}
         </button>
-        <button type="button" className="btn" onClick={demo.nextDay} disabled={busy || running || ended}>
+        <button type="button" className="btn" onClick={guard(demo.nextDay)} disabled={busy || running || ended}>
           다음 날
         </button>
-        <button type="button" className="btn" onClick={demo.toNextEvent} disabled={busy || running || !nextDate} title="조용한 날을 건너뛰고 다음 일이 있는 날로 가요">
+        <button type="button" className="btn" onClick={guard(demo.toNextEvent)} disabled={busy || running || !nextDate} title="조용한 날을 건너뛰고 다음 일이 있는 날로 가요">
           다음 일까지
         </button>
         {ended && (
@@ -96,6 +100,19 @@ export default function DemoBar({ demo }: { demo: Scene }) {
             <li key={i}>{l}</li>
           ))}
         </ul>
+      )}
+      {risky && waiting && (
+        <FormDialog
+          title="오늘이 마지막 승인일이에요"
+          confirmLabel="그래도 진행"
+          tone="deny"
+          onConfirm={() => { const go = risky; setRisky(null); go() }}
+          onCancel={() => setRisky(null)}
+        >
+          <p>
+            {who ?? '시연자'}의 {ga(needWord(waiting))} 아직 남았어요. 날짜를 넘기면 내일 기본 거부되고 건은 확정 보류(철회)로 끝나요.
+          </p>
+        </FormDialog>
       )}
       {asking && (
         <FormDialog title="장면 불러오기" confirmLabel="초기화하고 시작" tone="deny" busy={resetting} error={failed} onConfirm={restart} onCancel={() => setAsking(false)}>

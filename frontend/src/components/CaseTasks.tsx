@@ -99,3 +99,20 @@ export function NoticeDraft({ detail, actor, onDone }: Props) {
     </section>
   )
 }
+
+const ST_DEFAULT_DENY = '기본 거부' // 서버 상태 이름
+
+/** 기본 거부로 끝난 건: 왜 그렇게 됐는지(서버 상태 변경 기록의 문장)와 승인하지 않은 결재 */
+export function DenyReason({ detail }: { detail: CaseDetailData }) {
+  if (detail.case.open) return null
+  const ev = [...detail.history].reverse().find((e) => e.kind === '상태변경' && e.detail.to === ST_DEFAULT_DENY)
+  if (!ev) return null
+  const note = typeof ev.detail.note === 'string' ? ev.detail.note : ''
+  const missing = detail.rule.required_roles.filter((r) => !detail.rule.approved_roles.includes(r))
+  return (
+    <p className="case-task deny-reason" role="note" aria-label="기본 거부된 이유">
+      <b>{koDate(ev.sim_date)}에 기본 거부됐어요.</b> {note}
+      {missing.length > 0 && <> · 승인하지 않은 결재: {missing.join('·')}</>}
+    </p>
+  )
+}

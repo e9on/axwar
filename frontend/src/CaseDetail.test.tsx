@@ -915,4 +915,20 @@ describe('승인 확인 창과 서버가 준 열린 여부·막힘', () => {
     expect(await screen.findByRole('region', { name: '조건변경 통보 초안' })).toHaveTextContent('혜인님께')
     expect(screen.queryByRole('button', { name: '통보 발송' })).toBeNull()
   })
+
+  it('기본_거부로_끝난_건은_왜_그렇게_됐는지와_승인하지_않은_결재를_보인다', async () => {
+    const over = {
+      case: { ...detailOf(NOT).case, status: '확정 보류', open: false, stage: '끝' },
+      rule: { approvers: ['CEO', '이사회'], hits: [], required_roles: ['CEO', '이사회'], approved_roles: ['CEO'], pending_roles: [] },
+      history: [
+        { id: 9, sim_date: '2026-07-14', kind: '상태변경', actor: '시스템', detail: { from: '승인 대기', to: '기본 거부', note: '마지막 승인일 7/13까지 승인 없음 — 확정 기한 7/17의 3일 전 기본 거부' } },
+        { id: 10, sim_date: '2026-07-14', kind: '상태변경', actor: '시스템', detail: { from: '기본 거부', to: '확정 보류', note: '확정 보류(철회)' } },
+      ],
+    }
+    Setup(NOT, '마케팅팀장', {}, over)
+    mount('마케팅팀장')
+    const why = await screen.findByRole('note', { name: '기본 거부된 이유' })
+    expect(why).toHaveTextContent('마지막 승인일 7/13까지 승인 없음')
+    expect(why).toHaveTextContent('승인하지 않은 결재: 이사회')
+  })
 })
