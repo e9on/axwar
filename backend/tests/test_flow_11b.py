@@ -184,13 +184,14 @@ def test_장면2_조건변경_SCM_일부허용(store):
     assert "콘텐츠 수정 요청" in r["gate"]["actions"] and r["gate"]["open"] is False
 
     # ---- 기준일 8/24: 1차 판매 실적 입력(주문 2,600·반품 250). 리뷰 잠금이 먼저라 2차 수량은 아직 그대로
-    r = eng.play(st[8])
+    eng.play(st[8]); eng.play(st[9])  # 8/20·8/21 2차 물류·SCM 회신
+    r = eng.play(st[10])
     assert r["action"] == "판매" and store.get_clock() == date(2026, 8, 24)
     f = store.get_case(cid)["facts"]
     assert f["sales"]["net"] == 2350 and f["phase2"]["qty"] == 12996 and "phase2_sellthrough" not in f
     assert store.events(cid, kind="판매율조절") == []
     # ---- 기준일 8/24: 모의 반품 색상불만 = 1차의 5% → 통계 기준(약 4.3%) 초과 → 2차 자동 보류
-    r = eng.play(st[9])
+    r = eng.play(st[11])
     assert store.get_clock() == date(2026, 8, 24)
     base = return_count_rate("INF-001", "색상불만")
     limit = return_stop_threshold(base, 3000)

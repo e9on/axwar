@@ -129,7 +129,7 @@ def test_건_상세는_근거_규칙판정_기록_권한이동을_담는다(stor
         "person": "그룹 CEO", "role": "CEO", "can_decide": False, "can_escalate": False,
         "can_escalate_phase2": False, "can_decide_phase2": False, "can_announce": False, "can_send_notice": False,
         "actions": [], "blocked": [], "actions_phase2": [], "blocked_phase2": [], "split_preview": None}
-    assert [r["dept"] for r in d["requests"]] == ["물류", "SCM"] and d["requests"][0]["replies"]
+    assert [r["dept"] for r in d["requests"]] == ["물류", "SCM", "물류", "SCM"] and d["requests"][0]["replies"]  # 뒤 둘은 2차 물류·SCM 요청
     assert any(e["kind"] == "상태변경" for e in d["history"]) and d["judgments"]
     assert d["briefing"] is None and d["counterpoints"] is None  # 읽기만으로는 AI를 부르지 않는다
 

@@ -120,6 +120,34 @@
       ]
     },
     {
+      "action": "회신",
+      "plan": "PLAN-001",
+      "date": "2026-08-20",
+      "dept": "물류",
+      "text": "2차 물량은 평소 처리량 안에서 전량 출고할 수 있습니다.",
+      "attachments": 0,
+      "ai": {
+        "stance": "수용",
+        "qty_limit": null,
+        "next_date": null,
+        "needs_human": false
+      }
+    },
+    {
+      "action": "회신",
+      "plan": "PLAN-001",
+      "date": "2026-08-21",
+      "dept": "SCM",
+      "text": "8/18~19 입고분으로 2차 수량을 확보할 수 있습니다.",
+      "attachments": 0,
+      "ai": {
+        "stance": "수용",
+        "qty_limit": null,
+        "next_date": null,
+        "needs_human": false
+      }
+    },
+    {
       "action": "판매",
       "plan": "PLAN-001",
       "date": "2026-08-24",

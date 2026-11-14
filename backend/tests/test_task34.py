@@ -147,7 +147,7 @@ def test_날짜를_한꺼번에_넘기면_도착일_순서로_적용하고_결�
     assert out["waiting"]["ready"] is False and out["waiting"]["due"] == "2026-07-13"  # 마지막 승인일까지는 멈추지 않는다
     assert case(c, "PLAN-001")["status"] == "재승인 대기"
     out = adv(c, "2026-08-24")  # 재승인 없이 날짜가 넘어가도 리뷰(8/10)·반품(8/24)은 도착일 순서로 들어오고, 기한 규칙은 그대로 돈다
-    assert [a.split()[0] for a in out["applied"]] == ["8/10", "8/24"]
+    assert [a.split()[0] for a in out["applied"]] == ["8/10", "8/20", "8/21", "8/24"]  # 8/20·8/21은 2차 물류·SCM 회신
     assert case(c, "PLAN-001")["status"] != "1차 집행"
     assert adv(c, "2026-08-24")["applied"] == []  # 같은 날을 다시 눌러도 같은 사건을 두 번 넣지 않는다
 
@@ -380,3 +380,42 @@ def test_공지를_못_한_채_1차_집행일이_지나면_시연이_공지를_�
     assert ok(c.get("/api/demo/state"))["waiting"]["action"] == "공지"
     out = adv(c, "2026-07-28")  # 1차 집행일(7/27)이 지났다: 공지는 더 할 수 없다
     assert out["waiting"] is None or out["waiting"]["action"] != "공지"
+
+
+# ---- 2차 부서 회신: 2차 관찰에 들어가면 물류·SCM에 2차 수량을 다시 묻고, 회신 전에는 2차를 열지 않는다(사용자 결정)
+
+def _to_phase1(c, scn):
+    reset(c, scn)
+    adv(c, "2026-07-13")
+    for _ in range(6):
+        w = ok(c.get("/api/demo/state"))["waiting"]
+        if not w or w["action"] not in ("결정", "공지") or w["step"].get("stage") == "2차":
+            break
+        ok(c.post("/api/demo/play", json={"step": w["step"]}))
+    adv(c, "2026-07-28")
+    return case(c, "PLAN-001")["id"]
+
+
+def test_2차_관찰에_들어가면_물류와_SCM에_2차_회신을_요청하고_회신_전에는_2차를_열지_않는다(store):
+    c, eng = fake_client(store)
+    cid = _to_phase1(c, "scenario_2_sales")
+    reqs = {r["purpose"]: r for r in store.list_requests(cid)}
+    assert reqs["2차 물류 처리"]["dept"] == "물류" and reqs["2차 물류 처리"]["status"] == "대기"
+    assert reqs["2차 재고 확보"]["dept"] == "SCM" and reqs["2차 재고 확보"]["status"] == "대기"
+    assert "2차" in reqs["2차 물류 처리"]["text"] and "개" in reqs["2차 재고 확보"]["text"]
+    assert any("2차 부서 회신 대기" in r for r in eng.phase2_status(cid).reasons)
+
+
+def test_2차_회신이_일부만_가능하면_2차_수량을_줄이고_거절하면_2차를_열지_않는다(store):
+    c, eng = fake_client(store)
+    cid = _to_phase1(c, "scenario_2_sales")
+    before = store.get_case(cid)["facts"]["phase2"]["qty"]
+    step = {"action": "회신", "plan": "PLAN-001", "dept": "SCM", "text": "입고분으로 8,000개까지 확보할 수 있습니다.",
+            "attachments": 0, "ai": {"stance": "조건부수용", "qty_limit": 8000, "next_date": None, "needs_human": False}}
+    ok(c.post("/api/demo/play", json={"step": step}))
+    p2 = store.get_case(cid)["facts"]["phase2"]
+    assert before > 8000 and p2["qty"] == 8000
+    step = {"action": "회신", "plan": "PLAN-001", "dept": "물류", "text": "2차는 처리할 수 없습니다.",
+            "attachments": 0, "ai": {"stance": "거절", "qty_limit": 0, "next_date": None, "needs_human": False}}
+    ok(c.post("/api/demo/play", json={"step": step}))
+    assert any("2차 부서 거절" in r for r in eng.phase2_status(cid).reasons)

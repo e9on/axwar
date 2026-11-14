@@ -54,7 +54,7 @@ def _blocked(v):
 # ---- 1. 2차 결정 권한 ----
 
 def test_반품_보류_건에서_캠페인_담당은_취소만_최고_승인권자는_예외_승인만(store):
-    eng, cid = _scene(store, "scenario_2_exception", 9)
+    eng, cid = _scene(store, "scenario_2_exception", 11)
     assert store.get_case(cid)["status"] == "2차 보류"
     v = _v(eng, cid, "캠페인 담당자")
     assert CANCEL in v["actions"] and EXC not in v["actions"] and CONT not in v["actions"]
@@ -69,7 +69,7 @@ def test_반품_보류_건에서_캠페인_담당은_취소만_최고_승인권�
 
 
 def test_actions_blocked는_각_엔진_메서드와_같은_결과(store):
-    eng, cid = _scene(store, "scenario_2_exception", 9)
+    eng, cid = _scene(store, "scenario_2_exception", 11)
     for who in ("캠페인 담당자", "Masil 대표", "마케팅팀장", "그룹 CEO"):
         v = _v(eng, cid, who)
         for act, call in ((CANCEL, lambda w=who: eng.cancel_phase2(cid, w, "")),
@@ -101,7 +101,7 @@ def test_반품_보류_사유가_남아_있으면_계속은_막힌다(store, mon
 
 
 def test_판매_실적_입력은_캠페인_담당에게만_열린다(store):
-    eng, cid = _scene(store, "scenario_2_sales", 8)
+    eng, cid = _scene(store, "scenario_2_sales", 10)
     assert eng.store.get_case(cid)["facts"].get("sales") is None
     assert SALES in _v(eng, cid, "캠페인 담당자")["actions"]
     b = _blocked(_v(eng, cid, "물류 담당자"))
@@ -112,7 +112,7 @@ def test_판매_실적_입력은_캠페인_담당에게만_열린다(store):
 
 
 def test_리뷰_반품_입력은_운영_모드에서_정책_역할만(store):
-    eng, cid = _scene(store, "scenario_2_sales", 8)
+    eng, cid = _scene(store, "scenario_2_sales", 10)
     assert {REVIEW, RET} <= set(_v(eng, cid, "물류 담당자")["actions"])  # 시연 모드는 누구나
     eng.set_mode("Masil 대표", "운영")
     low = _blocked(_v(eng, cid, "물류 담당자"))
@@ -126,7 +126,7 @@ def test_리뷰_반품_입력은_운영_모드에서_정책_역할만(store):
 
 
 def test_viewer_없으면_actions를_주지_않고_읽기는_저장하지_않는다(store):
-    eng, cid = _scene(store, "scenario_2_exception", 9)
+    eng, cid = _scene(store, "scenario_2_exception", 11)
     assert eng.phase2_view(cid)["viewer"] is None
     snap = (store.get_case(cid)["facts"], store.events(cid), store.get_case(cid)["status"], store.list_tasks(cid))
     for who in ("캠페인 담당자", "Masil 대표"):
@@ -135,7 +135,7 @@ def test_viewer_없으면_actions를_주지_않고_읽기는_저장하지_않는
 
 
 def test_건_상세의_phase2에도_viewer_결정_권한이_들어간다(store):
-    eng, cid = _scene(store, "scenario_2_exception", 9)
+    eng, cid = _scene(store, "scenario_2_exception", 11)
     d = eng.case_detail(cid, viewer="Masil 대표")
     assert EXC in d["phase2"]["viewer"]["actions"]
     assert eng.case_detail(cid)["phase2"]["viewer"] is None
@@ -144,7 +144,7 @@ def test_건_상세의_phase2에도_viewer_결정_권한이_들어간다(store):
 # ---- 2. 반품 기준 ----
 
 def test_반품_기준_숫자는_계산_함수와_2차_보류_사유와_일치(store):
-    eng, cid = _scene(store, "scenario_2_exception", 9)
+    eng, cid = _scene(store, "scenario_2_exception", 11)
     p2 = eng.phase2_view(cid)
     rc = p2["returns_check"]
     f = store.get_case(cid)["facts"]
@@ -168,7 +168,7 @@ def test_반품_기준_숫자는_계산_함수와_2차_보류_사유와_일치(s
 
 
 def test_반품_기준_근거_detail은_근거_API_모양이고_관찰_기간_정보가_있다(store):
-    eng, cid = _scene(store, "scenario_2_exception", 9)
+    eng, cid = _scene(store, "scenario_2_exception", 11)
     rc = eng.phase2_view(cid)["returns_check"]
     d = rc["items"][0]["detail"]
     assert set(d) == {"formula", "inputs", "sources", "policies"} and d["formula"] and d["inputs"] and d["sources"]
@@ -186,7 +186,7 @@ def test_반품을_아직_입력하지_않았으면_건수_0이고_entered는_Fa
 
 
 def test_예외_승인을_받은_건은_초과여도_보류_사유에서_빠졌음을_알린다(store):
-    eng, cid = _scene(store, "scenario_2_exception", 10)
+    eng, cid = _scene(store, "scenario_2_exception", 12)
     rc = eng.phase2_view(cid)["returns_check"]
     assert rc["exception_applied"] is True and any(i["over"] for i in rc["items"])
     assert not [r for r in eng.phase2_view(cid)["gate"]["reasons"] if "반품률" in r]
@@ -211,7 +211,7 @@ def test_같은_글_리뷰_둘이_각자_해석에_연결된다(store):
 
 
 def test_옛_리뷰는_해석이_null(store):
-    eng, cid = _scene(store, "scenario_2_sales", 8)
+    eng, cid = _scene(store, "scenario_2_sales", 10)
     rid = store.add_review(cid, "립", "옛 리뷰")  # 해석 기록에 review_id가 없는 옛 저장
     rv = eng.phase2_view(cid)["reviews"]
     assert [r["id"] for r in rv][-1] == rid and rv[-1]["judgment"] is None
@@ -223,7 +223,7 @@ def test_phase2_API가_viewer를_받아_actions_blocked_returns_check_reviews를
     from test_api import Scene, client, ok
     c, _, _ = client(store, ACCEPT, SCM_PART)
     sc = Scene(c, "scenario_2_exception")
-    for s in sc.steps[:9]:
+    for s in sc.steps[:11]:
         sc.play(s)
     cid = sc.case_id("PLAN-001")
     d = ok(c.get(f"/api/cases/{cid}/phase2", params={"viewer": "Masil 대표"}))
