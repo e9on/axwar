@@ -70,7 +70,7 @@ def test_반품률_분모는_1차_집행_수량이고_실제_주문_수는_따�
     assert all("orders" not in i and i["phase1_qty"] == rc["phase1_qty"] for i in rc["items"])
     assert rc["sales_orders"] is None  # 판매 실적 입력 전
     assert "1차 집행 수량" in rc["items"][0]["detail"]["formula"]
-    eng2, cid2 = _scene(store, "scenario_2_exception", 9)
+    eng2, cid2 = _scene(store, "scenario_2_exception", 11)
     sales = store.get_case(cid2)["facts"].get("sales")
     rc2 = eng2.phase2_view(cid2)["returns_check"]
     assert sales and rc2["sales_orders"] == sales["orders"] and rc2["phase1_qty"] != rc2["sales_orders"]
@@ -205,7 +205,7 @@ def test_등록되지_않은_viewer면_viewer_부분만_오류_표시(store):
 def test_API는_등록되지_않은_viewer에도_200(store):
     c, _, _ = client(store, ACCEPT, SCM_PART)
     sc = Scene(c, "scenario_2_exception")
-    for s in sc.steps[:9]:
+    for s in sc.steps[:11]:
         sc.play(s)
     cid = sc.case_id("PLAN-001")
     d = ok(c.get(f"/api/cases/{cid}/phase2", params={"viewer": "없는 사람"}))
@@ -275,7 +275,7 @@ def _same_as_engine(eng, cid, people):
 def test_사람마다_할_수_있는_관리_작업을_엔진_검사와_같게_준다(store):
     c, _, eng = client(store, ACCEPT, SCM_PART)
     sc = Scene(c, "scenario_2_sales")
-    for s in sc.steps[:8]:
+    for s in sc.steps[:10]:
         sc.play(s)
     cid = sc.case_id("PLAN-001")
     people = ok(c.get("/api/permissions"))

@@ -95,12 +95,14 @@ STAGE_END = "끝남"
 R_WAIT, R_HUMAN, R_DONE = "대기", "사람 확인", "처리됨"
 P_LOGISTICS, P_CONTENT = "물류 처리 능력", "콘텐츠 수정"
 P_STOCK, P_NOTICE = "안전재고 사용", "통보 회신"  # SCM의 안전재고 사용 응답 / 인플루언서 측의 통보 회신
+P_P2_LOGISTICS, P_P2_STOCK = "2차 물류 처리", "2차 재고 확보"  # 2차 관찰에 들어갈 때 2차 수량을 다시 묻는 요청(사용자 결정)
+P2_DEPT_WAIT, P2_DEPT_REFUSED = "2차 부서 회신 대기", "2차 부서 거절"  # 2차 게이트 사유
 
 # 역할
 SCM, MARKETING, PARTNER = "SCM", "마케팅팀", "인플루언서 측"
 LIVE = "라이브"  # 원본 판매 채널 값: 라이브 방송 판매는 전용 코드로 효과를 가른다
 # 거절이 "애매한 회신"이 아니라 그 부서의 결정인 요청 목적(SCM이 안전재고 사용을 거절하는 것은 정해진 답)
-DEFINITIVE_REFUSAL = (P_STOCK,)
+DEFINITIVE_REFUSAL = (P_STOCK, P_P2_LOGISTICS, P_P2_STOCK)  # 2차 물류·SCM의 거절도 그 부서의 결정
 # 값이 역할 목록(쉼표로 구분)인 정책 항목: 바꿀 때 모르는 역할을 넣을 수 없다
 ROLE_KEYS = ("roles.campaign", "roles.contract", "roles.logistics", "roles.cs", "roles.ceo", "roles.head")  # 값이 역할 하나인 정책 항목: 사람 목록에 있는 역할이어야 한다
 ROLE_LIST_KEYS = ("admin.policy_editors", "admin.review_inputters", "admin.return_inputters", "admin.registry_editors")
@@ -257,7 +259,8 @@ class Engine:
             people = scenarios.load_people(self.demo_dir / "people.json" if self.demo_dir is not None else None)
         self.people = people
         self._handlers = {P_LOGISTICS: self._on_logistics, P_CONTENT: self._on_content_fix,
-                          P_STOCK: self._on_stock, P_NOTICE: self._on_notice}
+                          P_STOCK: self._on_stock, P_NOTICE: self._on_notice,
+                          P_P2_LOGISTICS: self._on_phase2_reply, P_P2_STOCK: self._on_phase2_reply}
         self._lock = threading.RLock()
         self._check_roles()
 
@@ -1999,6 +2002,7 @@ class Engine:
         if f["phase2"]:
             self.store.set_status(case_id, S_PHASE2_LOCK, "시스템", OBSERVE_NOTE)
             self._phase2_preview(case_id)
+            self._phase2_ask(case_id)
             self._phase2_refresh(case_id)  # 갱신 미확정이고 2차가 계약 만료 뒤면 바로 차단
             return self.store.get_case(case_id)["status"]
         return S_PHASE1
@@ -2016,6 +2020,37 @@ class Engine:
                 "결과가 늦게 나오면 집행일이 그만큼 밀릴 수 있어요")
         for role in _required_roles(f, "2차"):
             self.store.add_event(case_id, EV_P2_PREVIEW, "시스템", {"target": role, "date": p2["date"], "text": text})
+
+    def _phase2_ask(self, case_id: int) -> None:
+        """2차 관찰에 들어갈 때 물류·SCM에 2차 수량을 다시 묻는다(사용자 결정: 1차 회신만으로 2차를 정하지 않음).
+        회신이 오기 전에는 2차 게이트가 열리지 않는다(_gate)."""
+        case = self.store.get_case(case_id)
+        p2 = case["facts"].get("phase2") or {}
+        if not p2.get("date") or not p2.get("qty"):
+            return
+        ref, qty, day = case["ref_id"], p2["qty"], _md(_d(p2["date"]))
+        self._request_once(case_id, self.logistics,
+                           f"{ref} 2차 {qty:,}개를 {day}에 출고할 수 있는지, 처리할 수 있는 수량을 알려 주세요", False, P_P2_LOGISTICS)
+        self._request_once(case_id, SCM,
+                           f"{ref} 2차 {qty:,}개({day})를 입고분으로 확보할 수 있는지, 확보할 수 있는 수량을 알려 주세요", False, P_P2_STOCK)
+
+    def _on_phase2_reply(self, case_id: int, req: dict, j: judge.ReplyJudgment, text: str) -> None:
+        """2차 물류·SCM 회신: 거절(또는 0개)이면 2차를 열지 않고, 일부만 가능하면 2차 수량을 그 수량으로 줄인다(금액도 같은 비율)."""
+        f = self.store.get_case(case_id)["facts"]
+        p2 = f.get("phase2")
+        if not p2:
+            return
+        if j.stance == "거절" or j.qty_limit == 0:
+            f["phase2_dept_refused"] = {"dept": req["dept"], "text": text, "at": self._today().isoformat()}
+            self.store.update_facts(case_id, f, "AI", f"{req['dept']} 2차 거절")
+        elif j.qty_limit is not None and 0 < j.qty_limit < p2["qty"]:
+            qty_b = p2["qty"]
+            amt_b = p2.get("amount_krw") or self._plan_amount_of(f, qty_b)
+            amt_a = self._plan_amount_of(f, j.qty_limit)
+            core = f"{req['dept']} 회신으로 2차 {qty_b:,}→{j.qty_limit:,}개, 금액 {amt_b:,}→{amt_a:,}원"
+            self._resize_phase2(f, case_id, amt_b, j.qty_limit, amt_a, f"{req['dept']} 2차 회신으로", core)
+            self.store.update_facts(case_id, f, "AI", core)
+        self._phase2_refresh(case_id)
 
     def _report(self, case: dict) -> None:
         for label in case["facts"]["approvers"]:
@@ -2137,7 +2172,16 @@ class Engine:
         """반품·리뷰·관찰·계약 만료 판정(_gate_core)에 1차 판매 실적 입력 여부를 더한다(추가 결정 8)."""
         g = self._gate_core(case)
         f = case["facts"]
-        if not f.get("phase2") or f.get("sales"):
+        if not f.get("phase2"):
+            return g
+        waiting = [r["dept"] for r in self.store.list_requests(case["id"])
+                   if r["purpose"] in (P_P2_LOGISTICS, P_P2_STOCK) and r["status"] != R_DONE]
+        if waiting:
+            g = replace(g, open=False, reasons=(*g.reasons, f"{P2_DEPT_WAIT}({'·'.join(waiting)})"),
+                        actions=(*g.actions, "2차 물류·SCM 회신"))
+        if f.get("phase2_dept_refused"):
+            g = replace(g, open=False, reasons=(*g.reasons, f"{P2_DEPT_REFUSED}({f['phase2_dept_refused']['dept']})"))
+        if f.get("sales"):
             return g
         return replace(g, open=False, reasons=(*g.reasons, NO_SALES), actions=(*g.actions, "1차 판매 실적 입력"))
 

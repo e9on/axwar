@@ -183,8 +183,9 @@ def test_장면2를_API만으로_끝까지(store):
 
     sc.play(sc.steps[6])  # 공지
     sc.play(sc.steps[7])  # 8/10 리뷰
-    sc.play(sc.steps[8])  # 8/24 판매 실적
-    r = sc.play(sc.steps[9])  # 반품 → 2차 자동 보류
+    sc.play(sc.steps[8]); sc.play(sc.steps[9])  # 8/20·8/21 2차 물류·SCM 회신
+    sc.play(sc.steps[10])  # 8/24 판매 실적
+    r = sc.play(sc.steps[11])  # 반품 → 2차 자동 보류
     assert r["gate"]["auto_stopped"] is True
     d = sc.detail("PLAN-001")
     assert d["case"]["status"] == "2차 보류" and d["phase2"]["gate"]["auto_stopped"] is True
