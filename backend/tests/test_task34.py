@@ -328,3 +328,20 @@ def test_SCM이_거절하면_1차가_막히고_이유_문장의_조사가_맞다
     f = store.get_case(case(c, "PLAN-001")["id"])["facts"]
     assert case(c, "PLAN-001")["status"] == "1차 차단"
     assert f["phase1_blocked"]["reason"].startswith("SCM 거절 — SCM이 안전재고 사용을 거절했고")
+
+
+def test_반품으로_2차가_보류되면_예외_승인할_사람의_할_일에도_보이고_예외_승인하면_닫힌다(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_2_exception")
+    adv(c, "2026-07-13")
+    for _ in range(6):  # 결재·공지(시연자 몫)를 차례로 처리
+        w = ok(c.get("/api/demo/state"))["waiting"]
+        if not w or w["action"] == "예외 승인":
+            break
+        ok(c.post("/api/demo/play", json={"step": w["step"]}))
+    out = adv(c, "2026-08-24")
+    assert case(c, "PLAN-001")["status"] == "2차 보류" and out["waiting"]["action"] == "예외 승인"
+    jobs = [t for t in ok(c.get("/api/todo/Masil 대표"))["작업"] if t["ref_id"] == "PLAN-001"]
+    assert len(jobs) == 1 and "예외 승인" in jobs[0]["title"]
+    ok(c.post("/api/demo/play", json={"step": out["waiting"]["step"]}))  # Masil 대표가 예외 승인
+    assert [t for t in ok(c.get("/api/todo/Masil 대표"))["작업"] if t["ref_id"] == "PLAN-001" and "예외 승인" in t["title"]] == []
