@@ -345,3 +345,23 @@ def test_반품으로_2차가_보류되면_예외_승인할_사람의_할_일에
     assert len(jobs) == 1 and "예외 승인" in jobs[0]["title"]
     ok(c.post("/api/demo/play", json={"step": out["waiting"]["step"]}))  # Masil 대표가 예외 승인
     assert [t for t in ok(c.get("/api/todo/Masil 대표"))["작업"] if t["ref_id"] == "PLAN-001" and "예외 승인" in t["title"]] == []
+
+
+# ---- 2차 예고: 2차 집행일은 미루지 않고, 1차 집행이 시작되면 2차 승인권자에게 미리 알린다(사용자 결정)
+
+def test_1차_집행이_시작되면_2차_승인권자에게_예고가_가고_2차_승인_대기가_시작되면_사라진다(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_2_sales")
+    adv(c, "2026-07-13")
+    for _ in range(6):
+        w = ok(c.get("/api/demo/state"))["waiting"]
+        if not w or w["step"].get("stage") == "2차":
+            break
+        ok(c.post("/api/demo/play", json={"step": w["step"]}))
+    adv(c, "2026-07-28")  # 1차 집행(7/27) 뒤: 2차 관찰
+    notes = [a for a in ok(c.get("/api/todo/Masil 대표"))["알림"] if a["ref_id"] == "PLAN-001" and a["kind"] == "2차예고"]
+    assert len(notes) == 1 and "2차 집행 예정" in notes[0]["text"] and "마지막 승인일" in notes[0]["text"]
+    assert [a for a in ok(c.get("/api/todo/그룹 재무"))["알림"] if a["kind"] == "2차예고"]
+    adv(c, "2026-08-24")  # 판매·반품 결과 → 2차 승인 대기
+    assert case(c, "PLAN-001")["status"] == "2차 승인 대기"
+    assert [a for a in ok(c.get("/api/todo/Masil 대표"))["알림"] if a["kind"] == "2차예고"] == []
