@@ -216,3 +216,11 @@ def test_승인을_미루면_엔진은_집행일이_아니라_확정_기한으�
     out = adv(c, "2026-08-11")  # 마지막 승인일: 경고 뒤 기본 거부
     assert case(c, "PLAN-014")["status"] == "확정 보류"
     assert any(a.get("action") == "기본거부" for a in out["actions"])
+
+
+def test_진행_상태는_장면_건들의_지금_상태를_결과로_준다(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_1")
+    assert ok(c.get("/api/demo/state"))["outcome"] == ["PLAN-014 회신 대기"]
+    ok(c.post("/api/demo/run", json={"scenario": "scenario_1"}))
+    assert ok(c.get("/api/demo/state"))["outcome"] == ["PLAN-014 1차 집행"]

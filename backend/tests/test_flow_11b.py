@@ -964,3 +964,43 @@ def test_장면2_판매율_변형_대본을_2차_승인_집행_완료까지_끝�
     t = {(x["dept"], x["title"]): (x["due"], x["detail"]) for x in store.list_tasks(cid)}
     assert t[("물류", "물류 출고(2차)")][0] == "2026-08-28" and "11,046개" in t[("물류", "물류 출고(2차)")][1]
     assert t[("CS", "CS 대비(2차)")][0] == "2026-08-28"
+
+
+# ---- 화면이 단추를 보일지: 공지·통보 발송을 지금 이 사람이 할 수 있는지(실제 처리와 같은 검사)
+
+def test_건_상세는_공지_가능_여부를_실제_공지와_같은_검사로_알려준다(store):
+    eng, _, cid, st = scene2(store, ACCEPT, SCM_PART)
+    to_scm_reply(eng, store, cid, st, "3,000개까지 허용합니다.")
+    assert eng.case_detail(cid, viewer="캠페인 담당자")["viewer"]["can_announce"] is False  # 승인 전
+    eng.play(st[4]); eng.play(st[5])
+    assert eng.case_detail(cid, viewer="캠페인 담당자")["viewer"]["can_announce"] is True
+    assert eng.case_detail(cid, viewer="그룹 CEO")["viewer"]["can_announce"] is False
+    f = store.get_case(cid)["facts"]
+    f["scm"]["allow"] = 2999  # 예약할 재고가 모자라면 공지도 막히므로 단추도 없다
+    store.update_facts(cid, f, "시험", "허용분 조작")
+    assert eng.case_detail(cid, viewer="캠페인 담당자")["viewer"]["can_announce"] is False
+    f["scm"]["allow"] = 3000
+    store.update_facts(cid, f, "시험", "허용분 되돌림")
+    eng.announce(cid, "캠페인 담당자")
+    assert eng.case_detail(cid, viewer="캠페인 담당자")["viewer"]["can_announce"] is False  # 이미 공지함
+
+
+def test_건_상세는_통보_발송_가능_여부와_초안을_알려준다(store):
+    eng, _, ids, st = scene3(store, NOTICE)
+    assert eng.case_detail(ids[3], viewer="계약 담당자")["viewer"]["can_send_notice"] is False  # 초안 전
+    eng.play(st[0]); eng.play(st[1])
+    d = eng.case_detail(ids[3], viewer="계약 담당자")
+    assert d["viewer"]["can_send_notice"] is True and d["facts"]["notice"]["text"]
+    assert eng.case_detail(ids[3], viewer="그룹 CEO")["viewer"]["can_send_notice"] is False
+    eng.send_notice(ids[3], "계약 담당자")
+    assert eng.case_detail(ids[3], viewer="계약 담당자")["viewer"]["can_send_notice"] is False
+
+
+def test_기본거부_조치에도_화면에_보일_문장이_있다(store):
+    eng, _, ids, st = scene3(store, NOTICE)
+    eng.play(st[0])
+    acts = [a for a in eng.play(st[1])["actions"] if a["action"] == "기본거부"]
+    assert len(acts) == 4
+    for a in acts:
+        ref = store.get_case(a["case_id"])["ref_id"]
+        assert a["text"].startswith(ref) and "기본 거부" in a["text"] and a["status"] in a["text"]

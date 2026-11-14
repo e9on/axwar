@@ -606,11 +606,12 @@ class Engine:
     def demo_state(self) -> dict:
         """시연 대본 진행 상태: 어느 장면(scenario·title)을 몇 단계(done)까지 돌렸는지, 전체 단계 수(total), 다음 단계(next_step), 끝났는지,
         지금 기준일. 날짜로 진행하는 화면용으로 waiting(지금 시연자가 할 결정), next_date(다음 바깥 사건의 도착일),
-        arrived(지금까지 도착한 바깥 사건 문장)도 준다. 서버가 저장해 새로고침·재시작 뒤에도 남는다. 초기화(seed)하면 0단계로 돌아간다. 시연 모드에서만."""
+        arrived(지금까지 도착한 바깥 사건 문장), outcome(장면 건마다 "번호 지금 상태")도 준다. 서버가 저장해 새로고침·재시작 뒤에도 남는다. 초기화(seed)하면 0단계로 돌아간다. 시연 모드에서만."""
         self._demo_only("시연 진행 상태 조회")
         prog = self.store.get_demo_progress()
         out = {"scenario": None, "title": None, "summary": "", "done": 0, "total": 0, "finished": False, "next_step": None,
-               "date": self.store.get_clock().isoformat(), "waiting": None, "next_date": None, "arrived": []}
+               "date": self.store.get_clock().isoformat(), "waiting": None, "next_date": None, "arrived": [],
+               "outcome": []}
         if not prog:
             return out
         out |= {"scenario": prog["scenario"], "done": prog["done"]}
@@ -626,7 +627,9 @@ class Engine:
         return out | {"title": sc.title, "summary": sc.summary, "total": total, "finished": prog["done"] >= total,
                       "next_step": sc.script[prog["done"]] if prog["done"] < total else None,
                       "waiting": self._demo_waiting(sc, applied), "next_date": min(later) if later else None,
-                      "arrived": [scenarios.arrival_text(sc.script[i]) for _, i in arrived]}
+                      "arrived": [scenarios.arrival_text(sc.script[i]) for _, i in arrived],
+                      "outcome": [f"{c['ref_id']} {c['status']}"
+                                  for c in sorted(self._cases(), key=lambda c: c["id"])]}
 
     def _demo_waiting(self, sc: scenarios.Scenario, applied: set[int]) -> dict | None:
         """지금 시연자가 할 일: 아직 적용하지 않은 첫 사람 단계(결정·공지·발송·상신·예외 승인). ready는 그 앞의 바깥 사건이 모두 도착했는지.
@@ -1060,7 +1063,8 @@ class Engine:
         if (case["status"] in APPROVAL_STATES and f.get(STAGES["1차"][2]) and not _pending_roles(f)
                 and not self._stock_open(case_id)):
             status = self._finalize(case_id, actor)
-            return [{"date": self._today().isoformat(), "case_id": case_id, "action": "확정", "status": status}]
+            return [{"date": self._today().isoformat(), "case_id": case_id, "action": "확정", "status": status,
+                     "text": f"{case['ref_id']} 필요한 승인이 모두 모여 확정 — {status}"}]
         return []
 
     def _warn(self, case: dict, d: date, stage: str = "1차") -> dict | None:
@@ -1280,7 +1284,8 @@ class Engine:
                             f"{case['ref_id']}: 기한 {deadline}까지 승인이 없어 확정하지 않음. 상대측에 보류·철회를 알림")
         else:
             status = self._draft_notice(case, d)
-        return {"date": d.isoformat(), "case_id": case["id"], "action": "기본거부", "status": status}
+        return {"date": d.isoformat(), "case_id": case["id"], "action": "기본거부", "status": status,
+                "text": f"{case['ref_id']} 기한 {deadline}까지 승인이 없어 기본 거부 — {status}"}
 
     def _notice_overdue(self, case: dict, d: date) -> list[dict]:
         """통보 초안이 통보 기한이 지나도록 발송되지 않았으면 계약 담당에게 경고하고(한 번), 정책 일수가 더 지나면 방치 올림.
@@ -1657,34 +1662,49 @@ class Engine:
         return {"case_id": case_id, "changed": True, "status": self.store.get_case(case_id)["status"]}
 
     @_locked
-    def announce(self, case_id: int, actor: str, qty: int | None = None) -> dict:
-        """캠페인 담당이 1차 수량을 소비자에게 공지한다. 시스템은 예약 가능 여부만 확인하고, 공지하면 그 수량을
-        재고·물류에서 먼저 떼어 잠근다(공지 수량 고정). 모자라면 공지를 막는다(공지 후 미배송은 소비자 피해)."""
-        role = self.role_of(actor)
+    def _announce_block(self, case: dict, actor: str, role: str, qty: int | None = None) -> tuple[str, str] | None:
+        """공지를 막는 이유: ("권한"|"이미"|"값", 문장), 막는 것이 없으면 None. announce와 건 상세의 can_announce가 같이 쓴다."""
         if role != self.campaign:
-            raise PermissionError(f"{actor}({role}){pick(role, '은는')} 공지할 수 없음 — 공지는 {josa(self.campaign, '이가')} 한다")
-        case = self.store.get_case(case_id)
+            return "권한", f"{actor}({role}){pick(role, '은는')} 공지할 수 없음 — 공지는 {josa(self.campaign, '이가')} 한다"
         f = case["facts"]
         if case["kind"] != KIND_PLAN or not f.get("phase1"):
-            raise ValueError("승인 뒤에만 공지할 수 있음")
-        base = {"case_id": case_id, "actor": actor}
+            return "값", "승인 뒤에만 공지할 수 있음"
         if f.get("announce"):
-            return {**base, "changed": False, "qty": f["announce"]["qty"], "message": "이미 공지함"}
+            return "이미", "이미 공지함"
         if case["status"] in TERMINAL[KIND_PLAN] or self._today() > _d(f["phase1"]["date"]):
-            raise ValueError("1차 집행일이 지났거나 끝난 건은 공지할 수 없음")
+            return "값", "1차 집행일이 지났거나 끝난 건은 공지할 수 없음"
         fixed = f["phase1"]["qty"]
         if qty is not None and qty != fixed:
-            raise ValueError(f"공지 수량은 1차 수량({fixed:,}개)으로 고정")
+            return "값", f"공지 수량은 1차 수량({fixed:,}개)으로 고정"
         d1, s = _d(f["phase1"]["date"]), f.get("stock")
         if s is not None:
             allow = (f.get("scm") or {}).get("allow") or 0
             others = [c["facts"]["announce"] for c in self._cases(KIND_PLAN)
-                      if c["id"] != case_id and (c["facts"].get("announce") or {}).get("date") == d1.isoformat()
+                      if c["id"] != case["id"] and (c["facts"].get("announce") or {}).get("date") == d1.isoformat()
                       and c["facts"]["announce"]["line"] == s["line"]]
             reserved = sum(a["qty"] for a in others)
             if not can_announce(case["ref_id"], d1, fixed, {case["ref_id"]: s["line"]}, {s["line"]: s["spare"] + allow},
                                 s["capacity"], {s["line"]: reserved}, reserved):
-                raise ValueError(f"공지할 수 없음: {fixed:,}개를 예약할 재고·물류가 모자람")
+                return "값", f"공지할 수 없음: {fixed:,}개를 예약할 재고·물류가 모자람"
+        return None
+
+    def announce(self, case_id: int, actor: str, qty: int | None = None) -> dict:
+        """캠페인 담당이 1차 수량을 소비자에게 공지한다. 시스템은 예약 가능 여부만 확인하고, 공지하면 그 수량을
+        재고·물류에서 먼저 떼어 잠근다(공지 수량 고정). 모자라면 공지를 막는다(공지 후 미배송은 소비자 피해)."""
+        role = self.role_of(actor)
+        case = self.store.get_case(case_id)
+        f = case["facts"]
+        base = {"case_id": case_id, "actor": actor}
+        block = self._announce_block(case, actor, role, qty)
+        if block:
+            kind, why = block
+            if kind == "권한":
+                raise PermissionError(why)
+            if kind == "이미":
+                return {**base, "changed": False, "qty": f["announce"]["qty"], "message": why}
+            raise ValueError(why)
+        fixed = f["phase1"]["qty"]
+        d1, s = _d(f["phase1"]["date"]), f.get("stock")
         f["announce"] = {"qty": fixed, "date": d1.isoformat(), "by": actor, "reserved": True,
                          "line": s["line"] if s else None,
                          "overflow_demand": max(0, s["want"] - fixed) if s else None}
@@ -1718,6 +1738,11 @@ class Engine:
         self._task_once(case["id"], self.contract_owner, "통보 발송", deadline if d <= deadline else d,
                         f"{case['ref_id']}: {note}(통보 기한 {_md(deadline)}까지)")
         return S_NOTICE_DRAFT
+
+    def _can_send_notice(self, case: dict, role: str) -> bool:
+        """지금 이 역할이 통보를 발송할 수 있는지(send_notice와 같은 권한·단계 검사). 건 상세의 can_send_notice."""
+        return (case["kind"] == KIND_CONTRACT and case["status"] == S_NOTICE_DRAFT
+                and self._can_handle(case["facts"], STALE_NOTICE, role, self.contract_owner))
 
     @_locked
     def send_notice(self, case_id: int, actor: str, text: str | None = None) -> dict:
@@ -3160,7 +3185,9 @@ class Engine:
                              "split_preview": self._split_outcome(f) if D_SPLIT in acts else None,
                              "can_escalate": self._can_escalate(case, role, "1차") and not lapsed,
                              "can_escalate_phase2": self._can_escalate(case, role, "2차"),
-                             "can_decide_phase2": bool(acts2)}
+                             "can_decide_phase2": bool(acts2),
+                             "can_announce": self._announce_block(case, viewer, role) is None,
+                             "can_send_notice": self._can_send_notice(case, role)}
         return out
 
     def _phase2_decide_view(self, case: dict, role: str) -> tuple[list[str], list[dict]]:
