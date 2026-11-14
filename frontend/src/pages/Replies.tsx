@@ -1,4 +1,4 @@
-import { fromTo } from '../copy'
+import { fromTo, modelLabel } from '../copy'
 import { useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
@@ -51,7 +51,7 @@ function judgmentLine(j: ReplyJudgment): string {
   if (j.qty_limit !== null && j.qty_limit !== undefined) parts.push(`수량 제한 ${num(j.qty_limit)}개`)
   if (j.next_date) parts.push(`다음 날짜 ${koDate(j.next_date)}`)
   if (j.confidence !== null && j.confidence !== undefined) parts.push(`확신도 ${pct(j.confidence)}`)
-  parts.push(j.model)
+  parts.push(modelLabel(j.model))
   parts.push(j.needs_human ? (j.human_confirmed ? `사람이 확인함${j.confirmed_by ? ` (${j.confirmed_by})` : ''}` : '사람 확인 필요') : '사람 확인 불필요')
   return parts.join(' · ')
 }
@@ -90,7 +90,7 @@ function SavedResult({ saved, now }: { saved: Saved; now: ReplyCase | null }) {
               <dt>확신도</dt>
               <dd>{j.confidence !== null && j.confidence !== undefined ? pct(j.confidence) : '없음'}</dd>
               <dt>모델</dt>
-              <dd>{j.model}</dd>
+              <dd>{modelLabel(j.model)}</dd>
             </dl>
           ) : (
             <p className="muted">해석 기록이 없어요</p>

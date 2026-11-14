@@ -110,7 +110,7 @@ describe('회신 입력', () => {
     expect(r.getByText('3,000개')).toBeInTheDocument()
     expect(r.getByText('9월 20일')).toBeInTheDocument()
     expect(r.getByText('85%')).toBeInTheDocument()
-    expect(r.getByText('fake-해석기')).toBeInTheDocument()
+    expect(r.getByText('시연용 해석')).toBeInTheDocument()
     expect(r.getByText(/사람 확인 필요/)).toBeInTheDocument()
     expect(r.getByText('아니오')).toBeInTheDocument()
     // 바뀐 상태: 건 상태, 새 작업, 집행일 변경

@@ -1,4 +1,4 @@
-import { fromTo } from '../copy'
+import { fromTo, modelLabel, noArrow } from '../copy'
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useViewer } from '../state/viewer'
@@ -34,12 +34,7 @@ const LABELS: Record<string, string> = {
   stage: '단계', deadline: '기한', due: '기한', status: '상태', actor: '처리한 사람', role: '역할', opinion: '의견',
   choice: '판단', qty_before: '바꾸기 전 수량', qty_after: '바꾼 수량', date: '날짜', cause: '원인',
 }
-const FAKE_MODEL = /^fake/i // 서버의 시연용 해석기 이름
 const DATE_KEYS = ['deadline', 'due', 'date'] // 날짜 값은 "7월 17일"로
-/** AI 모델 이름: 시연용 해석기는 쉬운 말로 */
-function modelName(m: string): string {
-  return FAKE_MODEL.test(m) ? '시연용 해석' : m
-}
 
 /** 이벤트 상세를 "이전에서 이후로"와 쉬운 말 항목으로. AI 판정은 판정 종류와 해석기(시연용 해석·모델 이름)만 */
 function detailParts(detail: Record<string, unknown>): { change: string | null; rest: string } {
@@ -47,7 +42,7 @@ function detailParts(detail: Record<string, unknown>): { change: string | null; 
   const change = pair ? fromTo(anyValue(detail[pair[0]]), anyValue(detail[pair[1]])) : null
   const parts: string[] = []
   if (typeof detail.kind === 'string' && 'model' in detail) {
-    parts.push(detail.kind, modelName(String(detail.model)))
+    parts.push(detail.kind, modelLabel(String(detail.model)))
     if (detail.needs_human === true) parts.push('사람 확인 필요')
   }
   for (const [k, v] of Object.entries(detail)) {
@@ -57,7 +52,7 @@ function detailParts(detail: Record<string, unknown>): { change: string | null; 
     else if (LABELS[k] && typeof v !== 'object') parts.push(`${LABELS[k]}: ${anyValue(v)}`)
     else if (LABELS[k] && Array.isArray(v) && v.every((x) => typeof x !== 'object')) parts.push(`${LABELS[k]}: ${v.join(', ')}`)
   }
-  return { change, rest: parts.join(' · ') }
+  return { change, rest: noArrow(parts.join(' · ')) }
 }
 
 function Events() {
@@ -180,7 +175,7 @@ function AiCalls() {
                   <Badge kind="AI" />
                   {c.kind}
                 </span>{' '}
-                · {modelName(c.model)}
+                · {modelLabel(c.model)}
                 {c.case_id !== null && (
                   <>
                     {' '}

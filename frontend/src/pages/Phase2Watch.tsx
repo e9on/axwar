@@ -1,4 +1,4 @@
-import { fromTo } from '../copy'
+import { fromTo, modelLabel } from '../copy'
 import { useId, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api } from '../api'
@@ -77,7 +77,7 @@ function ReviewBox({ c, p2 }: { c: ObserveCase; p2: Phase2Observe }) {
                       <span className="tag">{j.reason ?? '사유 없음'}</span> <span className="tag">{j.sentiment ?? '감정 없음'}</span>
                       {j.content_gap && <span className="tag">콘텐츠 차이</span>}
                       {j.confidence !== null ? ` · 확신도 ${pct(j.confidence)}` : ' · 확신도 없음'}
-                      {j.needs_human && ' · 사람 확인 필요'} · {j.model}
+                      {j.needs_human && ' · 사람 확인 필요'} · {modelLabel(j.model)}
                     </p>
                   ) : (
                     <p className="sub over">

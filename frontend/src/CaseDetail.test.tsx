@@ -335,7 +335,7 @@ describe('건 상세', () => {
     const reply = text.closest('.reply') as HTMLElement
     expect(within(reply).queryByText('회신')).toBeNull()
     expect(within(reply).getByText(/해석: 수용/)).toBeInTheDocument()
-    expect(within(reply).getByText(/fake-해석기 · 사람 확인 불필요/)).toBeInTheDocument()
+    expect(within(reply).getByText(/시연용 해석 · 사람 확인 불필요/)).toBeInTheDocument()
   })
 
   it('결재선_변경_이력이_보인다', async () => {
