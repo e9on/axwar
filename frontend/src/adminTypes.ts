@@ -15,6 +15,8 @@ export type Scenario = {
   name: string
   title: string
   description: string
+  /** 한 줄 요약(서버 대본에 있을 때) */
+  summary?: string
   plans: string[]
   contracts: string[]
   script: ScenarioStep[]
@@ -112,3 +114,29 @@ export type ContractRow = {
 
 export type RegisterReply = { plan_id?: string; influencer_code?: string; case_id: number | null; open_error: string | null }
 export type PlanImport = { added: number; updated: number; unchanged: number; skipped: { plan_id: string; reason: string; source_changed: string[] }[]; warnings: string[]; actions: ServerAction[] }
+
+/** GET /api/permissions?person= — 관리 동작마다 해도 되는지와 안 될 때의 이유 */
+export type AdminKey = 'registry' | 'policy' | 'mode' | 'review' | 'return'
+export type Permission = { allowed: boolean; reason: string | null }
+export type PersonPermissions = { name: string; role: string; admin: Record<AdminKey, Permission> }
+
+/** GET /api/demo/state — 시연 진행 위치(서버가 기억한다) */
+export type DemoState = {
+  scenario: string | null
+  title: string | null
+  done: number
+  total: number
+  finished: boolean
+  next_step: ScenarioStep | null
+  date: string
+  /** 지금 시연자가 할 일(없으면 null). ready는 앞의 바깥 사건이 모두 도착했는지 */
+  waiting?: DemoWaiting | null
+  /** 다음 바깥 사건이 도착하는 날(없으면 null) */
+  next_date?: string | null
+  arrived?: string[]
+}
+
+export type DemoWaiting = { index: number; action: string; actor: string | null; target: string | null; text: string; ready: boolean; step: ScenarioStep }
+
+/** POST /api/demo/advance — 날짜로 진행한 결과(상태 항목과 함께) */
+export type AdvanceReply = Partial<DemoState> & { applied: string[]; skipped: string[]; actions: ServerAction[] }

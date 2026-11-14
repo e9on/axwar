@@ -26,9 +26,10 @@ export const DEMO_MODE = '시연'
 export const OPERATION_MODE = '운영'
 /** 정책 출처 글이 이 말로 시작하면 가정(backend 정책 파일 규칙) */
 export const ASSUMPTION_PREFIX = '가정'
-/** 정책 항목 키(backend policy.toml). 값은 서버에서 읽는다. */
-export const POLICY_CAMPAIGN_ROLE = 'roles.campaign'
-export const POLICY_REVIEW_INPUTTERS = 'admin.review_inputters'
-export const POLICY_RETURN_INPUTTERS = 'admin.return_inputters'
-export const POLICY_STOP_Z = 'split.stop_z'
-export const POLICY_OBSERVE_DAYS = 'split.return_observe_days'
+/** 2차 관찰의 viewer.actions·blocked 동작 이름(backend flow.CHOICE_*, A_*). 서버 값과 같아야 한다. */
+export const ACT_CONTINUE = '2차 계속'
+export const ACT_CANCEL = '2차 취소'
+export const ACT_EXCEPTION = '예외 승인'
+export const ACT_SALES = '판매 실적 입력'
+export const ACT_REVIEW = '리뷰 입력'
+export const ACT_RETURN = '반품 입력'

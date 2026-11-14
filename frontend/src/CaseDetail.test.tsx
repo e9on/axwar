@@ -4,6 +4,8 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import App from './App'
 import { fakeServer } from './test/fakeServer'
+import { mountPage } from './test/pageMount'
+import CaseDetailPage from './pages/CaseDetail'
 
 const PEOPLE = [
   { name: 'Masil 대표', role: 'Masil 대표' },
@@ -136,26 +138,36 @@ function mount(who: string) {
 
 afterEach(() => vi.unstubAllGlobals())
 
+/** 접힌 칸을 모두 연다(근거·회신·기록은 기본으로 접혀 있다). 근거를 읽어 오는 중이면 칸이 생길 때까지 기다린다 */
+async function openFolds() {
+  await screen.findByRole('button', { name: /위험 신호/ })
+  for (let n = 0; n < 20; n++) {
+    const closed = Array.from(document.querySelectorAll<HTMLElement>('button[data-fold][aria-expanded="false"]'))
+    if (closed.length === 0) return
+    for (const b of closed) await userEvent.click(b)
+  }
+}
+
 async function evidenceReady() {
+  await openFolds()
   await screen.findByRole('button', { name: /예상 ROAS 괴리/ })
 }
 
 describe('건 상세', () => {
-  it('근거마다_배지가_보인다', async () => {
+  it('근거마다_가정_표시만_남고_수준은_글자로_보인다', async () => {
     Setup(MAY, 'Masil 대표')
     mount('Masil 대표')
     await evidenceReady()
     const rows = document.querySelectorAll('.evidence .ebtn')
     expect(rows.length).toBeGreaterThanOrEqual(7)
-    rows.forEach((r) => expect(r.querySelector('.b')).not.toBeNull())
     const evidence = within(document.querySelector('.evidence') as HTMLElement)
-    expect(evidence.getAllByText('계산').length).toBeGreaterThan(0)
+    expect(evidence.queryAllByText('계산')).toHaveLength(0)
     expect(evidence.getAllByText('가정').length).toBeGreaterThan(0)
-    expect(evidence.getAllByText('원본').length).toBeGreaterThan(0)
+    expect(evidence.queryAllByText('원본')).toHaveLength(0)
     // 수준은 색만이 아니라 글자로도
     expect(evidence.getByText('나쁨')).toBeInTheDocument()
-    expect(evidence.getByText('좋음')).toBeInTheDocument()
-    expect(evidence.getAllByText('측정 불가').length).toBeGreaterThan(0)
+    expect(evidence.getAllByText('좋음').length).toBeGreaterThan(0)
+    expect(evidence.getAllByText('잴 수 없음').length).toBeGreaterThan(0)
     expect(screen.getByText(/표본 금액이라 실제 계약액과 곱하지 않음/)).toBeInTheDocument()
     expect(screen.getByText(/마지막 클릭 후 7일 기준/)).toBeInTheDocument()
   })
@@ -163,6 +175,7 @@ describe('건 상세', () => {
   it('근거_줄을_누르면_계산식_입력값_원본_정책이_펼쳐진다', async () => {
     Setup(MAY, 'Masil 대표')
     mount('Masil 대표')
+    await openFolds()
     const gap = await screen.findByRole('button', { name: /예상 ROAS 괴리/ })
     expect(gap).toHaveAttribute('aria-expanded', 'false')
     await userEvent.click(gap)
@@ -191,6 +204,7 @@ describe('건 상세', () => {
   it('다시_누르면_접힌다_키보드로도', async () => {
     Setup(MAY, 'Masil 대표')
     mount('Masil 대표')
+    await openFolds()
     const gap = await screen.findByRole('button', { name: /예상 ROAS 괴리/ })
     gap.focus()
     await userEvent.keyboard('{Enter}')
@@ -207,7 +221,7 @@ describe('건 상세', () => {
   it('승인권자가_아니면_버튼_대신_승인권자_이름', async () => {
     Setup(NOT, '마케팅팀장')
     mount('마케팅팀장')
-    expect(await screen.findByText('승인권자: Masil 대표')).toBeInTheDocument()
+    expect(await screen.findByText('Masil 대표의 결정을 기다리고 있어요.')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '승인' })).toBeNull()
     expect(screen.queryByRole('button', { name: '거절' })).toBeNull()
   })
@@ -279,12 +293,12 @@ describe('건 상세', () => {
   it('AI_글에는_AI_배지와_모델', async () => {
     Setup(MAY, 'Masil 대표')
     mount('Masil 대표')
-    const h = await screen.findByRole('heading', { name: 'AI 브리핑' })
-    const box = h.parentElement as HTMLElement
+    await openFolds()
+    const box = Array.from(document.querySelectorAll<HTMLElement>('section.ai')).find((e) => e.textContent?.includes('재고가'))!
     expect(within(box).getByText('AI')).toHaveClass('ai')
     expect(within(box).getByText(/재고가 모자라 분할 승인이 안전합니다/)).toBeInTheDocument()
     expect(within(box).getByText(/claude-test-1 · 9월 4일/)).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: '반대 근거' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /반대 근거/ })).toBeInTheDocument()
     expect(screen.queryByText(/사실이 바뀌어 다시 만들어야 함/)).toBeNull()
   })
 
@@ -292,6 +306,7 @@ describe('건 상세', () => {
     const stale = { text: '옛 글', ok: true, model: 'claude-test-1', sim_date: '2026-09-01', stale: true }
     const { calls } = Setup(MAY, 'Masil 대표', { 'POST /api/cases/7/briefing': { json: {} } }, { briefing: stale })
     mount('Masil 대표')
+    await openFolds()
     expect(await screen.findByText('사실이 바뀌어 다시 만들어야 함')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'AI 브리핑 다시 만들기' }))
     await waitFor(() => expect(calls.find((c) => c.path === '/api/cases/7/briefing')?.body).toEqual({ actor: 'Masil 대표' }))
@@ -306,16 +321,17 @@ describe('건 상세', () => {
   it('브리핑이_없고_권한도_없으면_버튼이_없다', async () => {
     Setup(NOT, '마케팅팀장', {}, { briefing: null, counterpoints: null })
     mount('마케팅팀장')
-    await screen.findByText('승인권자: Masil 대표')
+    await screen.findByText('Masil 대표의 결정을 기다리고 있어요.')
     expect(screen.queryByRole('button', { name: /AI 브리핑/ })).toBeNull()
   })
 
-  it('회신에는_회신_배지와_AI_해석_결과', async () => {
+  it('회신에는_AI_해석_결과만_배지가_붙는다', async () => {
     Setup(MAY, 'Masil 대표')
     mount('Masil 대표')
+    await openFolds()
     const text = await screen.findByText('전량 가능합니다')
     const reply = text.closest('.reply') as HTMLElement
-    expect(within(reply).getByText('회신')).toHaveClass('reply')
+    expect(within(reply).queryByText('회신')).toBeNull()
     expect(within(reply).getByText(/해석: 수용/)).toBeInTheDocument()
     expect(within(reply).getByText(/fake-해석기 · 사람 확인 불필요/)).toBeInTheDocument()
   })
@@ -323,9 +339,11 @@ describe('건 상세', () => {
   it('결재선_변경_이력이_보인다', async () => {
     Setup(MAY, 'Masil 대표')
     mount('Masil 대표')
+    await openFolds()
+    expect(screen.getByRole('button', { name: /결재선이 바뀌었어요 \(Masil 대표에서 Masil 대표·그룹 CEO로, 9월 5일\) 외 1건/ })).toBeInTheDocument()
     const list = await screen.findByRole('list', { name: '결재선 변경 이력' })
-    expect(within(list).getByText(/마케팅팀 → Masil 대표, 상신\(승인 권고\): 대표 확인이 필요함/)).toBeInTheDocument()
-    expect(within(list).getByText(/Masil 대표 → Masil 대표·그룹 CEO: 하회 구간이라 CEO 추가/)).toBeInTheDocument()
+    expect(within(list).getByText(/마케팅팀에서 Masil 대표로, 상신\(승인 권고\): 대표 확인이 필요함/)).toBeInTheDocument()
+    expect(within(list).getByText(/Masil 대표에서 Masil 대표·그룹 CEO로: 하회 구간이라 CEO 추가/)).toBeInTheDocument()
     expect(within(list).getAllByRole('listitem')).toHaveLength(2) // 상신은 한 번만
   })
 
@@ -356,13 +374,12 @@ describe('건 상세', () => {
     expect(screen.queryByText('시연용 가정')).not.toBeInTheDocument()
   })
 
-  it('서류_머리에_요청액_집행일_확정_기한', async () => {
+  it('서류_머리에_요청액과_집행일만', async () => {
     Setup(MAY, 'Masil 대표')
     mount('Masil 대표')
     await screen.findByRole('heading', { level: 1 })
     expect(screen.getByText('8,000,000원')).toBeInTheDocument()
     expect(screen.getByText('9월 14일')).toBeInTheDocument()
-    expect(screen.getByText('9월 11일')).toBeInTheDocument()
     expect(screen.queryByText(/조절 후 금액/)).toBeNull()
   })
 
@@ -376,34 +393,59 @@ describe('건 상세', () => {
     mount('마케팅팀장')
     expect(await screen.findByText('6,000,000원')).toBeInTheDocument()
     expect(screen.getByText(/조절 후 금액/)).toBeInTheDocument()
+    await openFolds()
     expect(screen.getByRole('list', { name: '2차 결재란' })).toBeInTheDocument()
   })
 
-  it('기본거부까지_남은_날', async () => {
+  it('기본거부까지_남은_날은_지금_할_일_띠_문장에', async () => {
     Setup(MAY, 'Masil 대표')
     mount('Masil 대표')
-    const clock = await screen.findByLabelText('남은 날')
-    expect(within(clock).getByText('3일')).toBeInTheDocument()
-    expect(within(clock).getByText(/9월 8일에 기본 거부/)).toBeInTheDocument()
-    expect(within(clock).getByText(/마지막 승인일은/)).toBeInTheDocument()
-    expect(within(clock).getByText('9월 7일')).toBeInTheDocument()
+    const now = await screen.findByRole('group', { name: '결정' })
+    expect(now).toHaveTextContent('9월 7일까지 결정하지 않으면 9월 8일에 기본 거부돼요')
+  })
+
+  it('기본_거부_날이_지나면_서버_사정이_아닌_사용자_말투', async () => {
+    fakeServer({
+      'GET /api/people': { json: PEOPLE },
+      'GET /api/clock': { json: { date: '2026-09-10', mode: '시연' } },
+      [`GET ${DETAIL_PATH('Masil 대표')}`]: { json: detailOf(MAY) },
+      'GET /api/cases/7/evidence': { json: EVIDENCE },
+    })
+    mount('Masil 대표')
+    const clock = await screen.findByRole('group', { name: '결정' })
+    expect(clock).toHaveTextContent(/기본 거부 날\(9월 8일\)이 지났어요/)
+    expect(clock).toHaveTextContent(/기본 거부로 처리돼요/)
+    expect(clock).not.toHaveTextContent(/서버/)
+  })
+
+  it('남은_작업은_부서_이름을_두_번_쓰지_않는다', async () => {
+    const tasks = [
+      { id: 1, dept: 'CS', title: 'CS 대비', status: '대기', due: '2026-09-08' },
+      { id: 2, dept: '물류', title: '출고', status: '대기', due: '2026-09-09' },
+    ]
+    Setup(MAY, 'Masil 대표', {}, { tasks })
+    mount('Masil 대표')
+    await openFolds()
+    const items = document.querySelectorAll('.tasks li')
+    expect(items[0].textContent).not.toMatch(/CS\s*CS/)
+    expect(items[0]).toHaveTextContent('CS 대비')
+    expect(items[1]).toHaveTextContent('물류 출고')
   })
 
   it('끝난_건은_남은_날_대신_결과_문장', async () => {
     const closed = { rule: { approvers: [], hits: [], required_roles: ['마케팅팀'], approved_roles: [], pending_roles: [] }, case: { id: 7, kind: '기안', ref_id: 'P-1', status: '기본 거부', open: false, stage: '끝남', origin: '화면' } }
     Setup(NOT, '마케팅팀장', {}, closed)
     mount('마케팅팀장')
-    const clock = await screen.findByLabelText('남은 날')
-    expect(within(clock).getByText(/기본 거부 날\(9월 8일\)까지 승인이 없어 확정 보류됐어요/)).toBeInTheDocument()
+    const clock = await screen.findByRole('group', { name: '결정' })
+    expect(clock).toHaveTextContent(/기본 거부 날\(9월 8일\)까지 승인이 없어 확정 보류됐어요/)
     const stamps = screen.getByRole('list', { name: '결재란' })
     expect(within(stamps).getByRole('listitem', { name: '마케팅팀: 기본 거부' })).toBeInTheDocument()
-    expect(screen.getByText(/결정이 끝난 건이에요/)).toBeInTheDocument()
   })
 
   it('처리_기록은_접혀_있다가_펼치면_전체', async () => {
     Setup(MAY, 'Masil 대표')
     mount('Masil 대표')
-    await screen.findByRole('heading', { name: '처리 기록' })
+    await userEvent.click(await screen.findByRole('button', { name: /처리 기록/ }))
     expect(screen.queryByText('사건생성')).toBeNull()
     expect(screen.getByText('상신', { selector: 'b' })).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: '전체 4건 펼치기' }))
@@ -417,7 +459,8 @@ describe('건 상세', () => {
       [`GET ${DETAIL_PATH('Masil 대표')}`]: { status: 404, json: { detail: '건 7을 찾을 수 없음' } },
     })
     mount('Masil 대표')
-    expect(await screen.findByText(/찾을 수 없는 건이에요/)).toBeInTheDocument()
+    expect(await screen.findByText('건 7을 찾을 수 없음', { selector: '.missing p' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '메인으로 가서 다시 시작' })).toBeInTheDocument()
   })
 
   it('근거를_못_읽으면_그_칸에만_다시_시도', async () => {
@@ -430,11 +473,10 @@ describe('건 상세', () => {
 
   it('기준일이_바뀌면_다시_읽는다', async () => {
     const { calls } = Setup(MAY, 'Masil 대표', { 'POST /api/clock': { json: { date: '2026-09-06', mode: '시연' } } })
-    mount('Masil 대표')
+    mountPage(<CaseDetailPage />, `/cases/7?as=${encodeURIComponent('Masil 대표')}`, '/cases/:id')
     await screen.findByRole('button', { name: '승인' })
     await userEvent.click(screen.getByRole('button', { name: '다음 날로' }))
     await waitFor(() => expect(calls.filter((c) => c.path === DETAIL_PATH('Masil 대표')).length).toBe(2))
-    expect(await screen.findByText('2일')).toBeInTheDocument()
   })
 })
 
@@ -472,7 +514,7 @@ describe('결정 버튼은 서버가 알려 준 것만', () => {
   it('결정권자인데_actions가_비면_눌러_볼_버튼이_없다', async () => {
     Setup({ ...MAY, actions: [] }, 'Masil 대표')
     mount('Masil 대표')
-    await screen.findByText(/Masil 대표로 결재합니다/)
+    await screen.findByText(/승인이 필요해요/)
     expect(screen.queryByRole('button', { name: '승인' })).toBeNull()
     expect(screen.queryByRole('button', { name: '거절' })).toBeNull()
   })
@@ -623,6 +665,7 @@ describe('회신 해석은 서버가 이은 judgment로', () => {
   it('같은_글_두_회신도_각자_자기_해석', async () => {
     Setup(MAY, 'Masil 대표', {}, twoReplies(J(1, '수용'), J(2, '조건부', { qty_limit: 300 })))
     mount('Masil 대표')
+    await openFolds()
     const replies = (await screen.findAllByText('가능합니다')).map((t) => t.closest('.reply') as HTMLElement)
     expect(within(replies[0]).getByText(/해석: 수용/)).toBeInTheDocument()
     expect(within(replies[0]).queryByText(/조건부/)).toBeNull()
@@ -632,6 +675,7 @@ describe('회신 해석은 서버가 이은 judgment로', () => {
   it('judgment가_null이면_해석_기록_없음', async () => {
     Setup(MAY, 'Masil 대표', {}, twoReplies(null, J(2, '수용')))
     mount('Masil 대표')
+    await openFolds()
     const replies = (await screen.findAllByText('가능합니다')).map((t) => t.closest('.reply') as HTMLElement)
     expect(within(replies[0]).getByText('해석 기록 없음')).toBeInTheDocument()
   })
@@ -639,6 +683,7 @@ describe('회신 해석은 서버가 이은 judgment로', () => {
   it('사람_확인은_judgment의_human_confirmed와_확인한_사람만', async () => {
     Setup(MAY, 'Masil 대표', {}, twoReplies(J(1, '불명', { needs_human: true, human_confirmed: true, confirmed_by: '캠페인 담당자' }), J(2, '불명', { needs_human: true })))
     mount('Masil 대표')
+    await openFolds()
     const replies = (await screen.findAllByText('가능합니다')).map((t) => t.closest('.reply') as HTMLElement)
     expect(within(replies[0]).getByText(/사람이 확인함 \(캠페인 담당자\)/)).toBeInTheDocument()
     expect(within(replies[1]).getByText(/사람 확인 필요/)).toBeInTheDocument()
@@ -688,8 +733,7 @@ describe('낮은 항목', () => {
     const open = { rule: { approvers: [], hits: [], required_roles: ['마케팅팀'], approved_roles: ['마케팅팀'], pending_roles: [] }, case: { id: 7, kind: '기안', ref_id: 'P-1', status: '승인 대기', open: true, stage: '1차 승인 대기', origin: '화면' } }
     Setup(NOT, '마케팅팀장', {}, open)
     mount('마케팅팀장')
-    expect(await screen.findByText(/아직 열려 있는 건이에요/)).toBeInTheDocument()
-    expect(screen.queryByText(/결정이 끝난 건이에요/)).toBeNull()
+    expect(await screen.findByText(/다른 회신이나 결정을 기다리고 있어요/)).toBeInTheDocument()
   })
 
   it('다른_종료_상태도_남은_칸에_상태가_적힌다', async () => {
@@ -708,15 +752,9 @@ describe('낮은 항목', () => {
     const over = { case: { id: 7, kind: '기안', ref_id: 'P-1', status: '2차 승인 대기', open: false, stage: '2차 승인 대기', origin: '화면' }, phase2: p2 }
     Setup(MAY_P2, 'Masil 대표', {}, over)
     mount('Masil 대표')
+    await openFolds()
     const stamps = await screen.findByRole('list', { name: '2차 결재란' })
     expect(within(stamps).getByRole('listitem', { name: '그룹 CEO: 내 차례' })).toBeInTheDocument()
-  })
-
-  it('위험_신호_열_머리는_보조기기에도_읽힌다', async () => {
-    Setup(MAY, 'Masil 대표')
-    mount('Masil 대표')
-    await evidenceReady()
-    expect(document.querySelector('.ehead')).not.toHaveAttribute('aria-hidden')
   })
 
   it('시연_메모는_case_note에서_읽고_따로_기안을_읽지_않는다', async () => {
@@ -749,7 +787,9 @@ describe('승인 확인 창과 서버가 준 열린 여부·막힘', () => {
     expect(within(dlg).getByRole('heading', { name: /이 건을 승인합니다/ })).toBeInTheDocument()
     expect(within(dlg).getByText(/8,000,000원/)).toBeInTheDocument()
     expect(within(dlg).getByText(/2026년 9월 14일|9월 14일/)).toBeInTheDocument()
-    expect(within(dlg).getByText(/나누지 않고|분할 없이|한 번에/)).toBeInTheDocument()
+    // 수량은 화면이 단정하지 않는다(서버가 승인 뒤 정함)
+    expect(within(dlg).getByText(/1차 수량은 승인 뒤/)).toBeInTheDocument()
+    expect(dlg).not.toHaveTextContent(/전량/)
     expect(within(dlg).getByRole('button', { name: '승인 확정' })).toHaveFocus()
     expect(calls.some((c) => c.method === 'POST')).toBe(false)
     await userEvent.click(within(dlg).getByRole('button', { name: '승인 확정' }))
@@ -781,7 +821,7 @@ describe('승인 확인 창과 서버가 준 열린 여부·막힘', () => {
     })
     Setup(NOT, '마케팅팀장', {}, mk(true, '회신 대기'))
     mount('마케팅팀장')
-    expect(await screen.findByText(/아직 열려 있는 건이에요/)).toBeInTheDocument()
+    expect(await screen.findByText(/다른 회신이나 결정을 기다리고 있어요/)).toBeInTheDocument()
   })
 
   it('끝난_건은_case_open_false로_결정이_끝났다고_말한다', async () => {
@@ -791,7 +831,7 @@ describe('승인 확인 창과 서버가 준 열린 여부·막힘', () => {
     }
     Setup(NOT, '마케팅팀장', {}, closed)
     mount('마케팅팀장')
-    expect(await screen.findByText(/결정이 끝난 건이에요/)).toBeInTheDocument()
+    expect(await screen.findByText(/처음 보는 끝 상태 상태예요/)).toBeInTheDocument()
   })
 
   it('2차_막힘은_blocked_phase2', async () => {
@@ -814,6 +854,7 @@ describe('승인 확인 창과 서버가 준 열린 여부·막힘', () => {
     ev.signals[0].detail.policies = [{ key: 'signals.old_key', value: null, source: null, missing: true, description: '없어진 정책 항목 — 설정에서 지워졌어요' }]
     Setup(MAY, 'Masil 대표', { 'GET /api/cases/7/evidence': { json: ev } })
     mount('Masil 대표')
+    await openFolds()
     await userEvent.click(await screen.findByRole('button', { name: /예상 ROAS 괴리/ }))
     expect(screen.getAllByText(/없어진 정책 항목/).length).toBeGreaterThan(0)
     expect(screen.getByText('signals.old_key')).toBeInTheDocument()

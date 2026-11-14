@@ -1,5 +1,6 @@
 import { useId, useState, type ReactNode } from 'react'
 import Badge from './Badge'
+import Fold from './Fold'
 import { anyValue, splitPath, unitValue } from '../format'
 import type { Detail, EvidenceData, IndicatorLine, SignalLine } from '../caseTypes'
 import './EvidenceList.css'
@@ -8,10 +9,10 @@ const LEVEL: Record<SignalLine['level'], { text: string; cls: string }> = {
   red: { text: '나쁨', cls: 'red' },
   yellow: { text: '주의', cls: 'yel' },
   green: { text: '좋음', cls: 'grn' },
-  unmeasurable: { text: '측정 불가', cls: 'none' },
+  unmeasurable: { text: '잴 수 없음', cls: 'none' },
 }
 
-function DetailPanel({ detail, note }: { detail: Detail | undefined; note?: string }) {
+export function DetailPanel({ detail, note }: { detail: Detail | undefined; note?: string }) {
   const d = detail ?? { formula: '', inputs: [], sources: [], policies: [] }
   const empty = !d.formula && d.inputs.length === 0 && d.sources.length === 0 && d.policies.length === 0 && !note
   if (empty) return <p className="muted">자세한 근거가 아직 없어요</p>
@@ -34,7 +35,7 @@ function DetailPanel({ detail, note }: { detail: Detail | undefined; note?: stri
             {d.inputs.map((i) => (
               <div key={i.label}>
                 <dt>{i.label}</dt>
-                <dd>{anyValue(i.value)}</dd>
+                <dd>{typeof i.value === 'number' && i.unit ? unitValue(i.value, i.unit) : anyValue(i.value)}</dd>
               </div>
             ))}
           </dl>
@@ -93,7 +94,7 @@ type RowProps = {
 }
 
 /** 줄 하나 = 펼침 버튼 + 펼쳐지는 칸. 누르면 아래가 열리고 다시 누르면 닫힌다. */
-function Row({ id, open, toggle, detail, note, kind, assumed, superseded, children }: RowProps) {
+export function Row({ id, open, toggle, detail, note, kind, assumed, superseded, children }: RowProps) {
   const panel = `${id}-detail`
   return (
     <li className="erow" data-open={open} data-assumed={assumed ? 'true' : undefined} data-superseded={superseded ? 'true' : undefined}>
@@ -104,20 +105,43 @@ function Row({ id, open, toggle, detail, note, kind, assumed, superseded, childr
         </span>
       </button>
       <div id={panel} className="epanel" hidden={!open}>
+        <p className="dh basis">계산 근거</p>
         <DetailPanel detail={detail} note={note} />
       </div>
     </li>
   )
 }
 
-function signalValue(s: SignalLine): string {
+/** 줄 하나의 모양: 결론 표시 + 굵은 이름(+ 작은 값), 아래에 설명 문장. 설명이 없으면 값만 */
+export function Line({ mark, label, value, tag, badge, explain, fallback }: { badge?: string; mark?: { text: string; cls: string }; label: string; value?: string; tag?: string; explain?: string | null; fallback?: ReactNode }) {
+  const sentence = explain?.trim()
+  return (
+    <span className="eline">
+      <span className="ehead-line">
+        {mark && <span className={`ecell lv ${mark.cls}`}>{mark.text}</span>}
+        {badge && <Badge kind={badge} />}
+        <b className="elabel">{label}</b>
+        {value && <span className="eval">{value}</span>}
+        {tag && <span className="muted"> · {tag}</span>}
+      </span>
+      {sentence ? <span className="explain">{sentence}</span> : fallback ? <span className="explain fallback muted">{fallback}</span> : null}
+    </span>
+  )
+}
+
+export function signalValue(s: SignalLine): string {
   return s.value === null || s.level === 'unmeasurable' ? '측정 불가' : unitValue(s.value, s.unit)
 }
 
-function indicatorValue(i: IndicatorLine): string {
+export function indicatorValue(i: IndicatorLine): string {
   if (i.value === null) return '측정 불가'
   const v = typeof i.value === 'boolean' ? (i.value ? '있음' : '없음') : unitValue(i.value, i.unit)
   return i.rank !== null && i.of !== null ? `${v} (${i.rank}위/${i.of})` : v
+}
+
+function signalSummary(signals: SignalLine[]): string {
+  const n = (lv: SignalLine['level']) => signals.filter((s) => s.level === lv).length
+  return `나쁨 ${n('red')}건 · 주의 ${n('yellow')}건 · 좋음 ${n('green')}건`
 }
 
 export default function EvidenceList({ data }: { data: EvidenceData }) {
@@ -141,117 +165,98 @@ export default function EvidenceList({ data }: { data: EvidenceData }) {
     ...data.rule.indicator_hits.map((h) => ({ ...h, group: 'i' })),
   ]
 
+  // 지표 근거 줄이 위험 신호 줄과 같은 설명이면 결재 이유 칸에서는 설명을 빼고 한 줄 요약만 둔다
+  const signalSentences = new Set(data.signals.map((x) => x.explain?.trim()).filter((x): x is string => !!x))
+  const sameAsSignal = (h: { group: string; explain?: string | null }) => h.group === 'i' && !!h.explain?.trim() && signalSentences.has(h.explain.trim())
+  const hasSameIndicator = ruleLines.some(sameAsSignal)
+
   return (
     <div className="evidence">
-      <section aria-labelledby={rid('h-rule')}>
-        <h3 id={rid('h-rule')}>왜 이 사람이 결재하나</h3>
+      <p className="muted asm-note">가정 = 원본에 없어 정한 값</p>
+      <Fold title="결재 이유" summary={ruleLines.length === 0 ? '이유가 아직 없어요' : `${ruleLines.length}개`}>
         {ruleLines.length === 0 ? (
           <p className="muted">결재선 이유가 아직 없어요</p>
         ) : (
           <ul className="elist rule-box">
+            {hasSameIndicator && <li className="rule-summary muted">성과 지표가 나빠 결재가 더 붙었어요</li>}
             {ruleLines.map((h, i) => (
               <Row key={`${h.group}${i}`} {...props(`rule-${h.group}${i}`)} detail={h.detail} kind="rule" assumed={h.badge === '가정'} superseded={h.superseded}>
-                <span className="ecell text">
-                  <Badge kind={h.badge} />
-                  {h.superseded && <span className="stage">처음 판정 </span>}
-                  {h.group === 'p2' && <span className="stage">2차 </span>}
-                  {h.group === 'i' && <span className="stage">지표 </span>}
-                  {h.text}
+                <span className="eline">
+                  <span className="ehead-line">
+                    <Badge kind={h.badge} />
+                    {h.superseded && <span className="stage">처음 판정 </span>}
+                    {h.group === 'p2' && <span className="stage">2차 </span>}
+                    {h.group === 'i' && <span className="stage">지표 </span>}
+                    <b className="elabel">{h.text}</b>
+                  </span>
+                  {h.explain?.trim() && !sameAsSignal(h) && <span className="explain">{h.explain.trim()}</span>}
+                  <span className="esrc muted">{h.source}</span>
                 </span>
-                <span className="ecell src muted">{h.source}</span>
               </Row>
             ))}
           </ul>
         )}
-      </section>
+      </Fold>
 
       {!data.available ? (
-        <section>
-          <h3>지표 근거</h3>
+        <Fold title="지표 근거" summary="만들 수 없어요">
           <p className="muted">{data.reason ?? '이 건은 지표 근거를 만들 수 없어요'}</p>
-        </section>
+        </Fold>
       ) : (
         <>
-          <section aria-labelledby={rid('h-sig')}>
-            <h3 id={rid('h-sig')}>위험 신호</h3>
-            <div className="ehead signal">
-              <span>신호</span>
-              <span>지표</span>
-              <span className="n">값</span>
-              <span>비교·근거</span>
-              <span />
-            </div>
+          <Fold title="위험 신호" summary={signalSummary(data.signals)}>
             <ul className="elist">
               {data.signals.map((s) => {
                 const lv = LEVEL[s.level] ?? LEVEL.unmeasurable
                 const note = s.exclude_reason || (s.level === 'unmeasurable' ? s.compare : undefined)
                 return (
                   <Row key={s.key} {...props(`sig-${s.key}`)} detail={s.detail} kind="signal" assumed={s.badge === '가정'} note={note}>
-                    <span className={`ecell lv ${lv.cls}`}>{lv.text}</span>
-                    <span className="ecell">{s.label}</span>
-                    <span className="ecell n">{signalValue(s)}</span>
-                    <span className="ecell cmp">
-                      <Badge kind={s.badge} />
-                      {s.compare}
-                      {s.judgment === '참고' && <span className="muted"> · 판정에는 쓰지 않음</span>}
-                    </span>
+                    <Line mark={lv} label={s.label} badge={s.badge} tag={s.judgment === '참고' ? '참고용' : undefined} explain={s.explain} fallback={s.level === 'unmeasurable' ? undefined : signalValue(s)} />
                   </Row>
                 )
               })}
             </ul>
-          </section>
+          </Fold>
 
-          <section aria-labelledby={rid('h-key')}>
-            <h3 id={rid('h-key')}>핵심 지표</h3>
+          <Fold title="핵심 지표" summary={`${data.key_indicators.length}개`}>
             <ul className="elist">
               {data.key_indicators.map((k) => (
                 <Row key={k.key} {...props(`key-${k.key}`)} detail={k.detail} kind="indicator" assumed={k.badge === '가정'}>
-                  <span className="ecell">{k.label}</span>
-                  <span className="ecell n">{indicatorValue(k)}</span>
-                  <span className="ecell cmp">
-                    <Badge kind={k.badge} />
-                    {k.compare_label && k.compare_value !== null && `${k.compare_label} ${unitValue(k.compare_value, k.compare_unit ?? k.unit)}`}
-                  </span>
+                  <Line label={k.label} badge={k.badge} value={indicatorValue(k)} explain={k.explain} />
                 </Row>
               ))}
             </ul>
-          </section>
+          </Fold>
 
-          <section aria-labelledby={rid('h-cost')}>
-            <h3 id={rid('h-cost')}>비용 분해</h3>
+          <Fold title="비용 분해" summary={`${data.cost_breakdown.rows.length}개 항목`}>
             <p className="note">{data.cost_breakdown.note}</p>
             <ul className="elist">
               {data.cost_breakdown.rows.map((r) => (
                 <Row key={r.key} {...props(`cost-${r.key}`)} detail={r.detail} kind="cost" assumed={r.badge === '가정'}>
-                  <span className="ecell">{r.label}</span>
-                  <span className="ecell n">{unitValue(r.amount, r.unit ?? 'krw')}</span>
-                  <span className="ecell cmp">
-                    <Badge kind={r.badge} />
-                  </span>
+                  <Line label={r.label} badge={r.badge} value={r.explain?.trim() ? undefined : unitValue(r.amount, r.unit ?? 'krw')} explain={r.explain} />
                 </Row>
               ))}
             </ul>
-          </section>
-
-          {data.breakeven && (
-            <section aria-labelledby={rid('h-be')}>
-              <h3 id={rid('h-be')}>본전 조건</h3>
-              <ul className="elist">
+            {data.breakeven && (
+              <>
+                <p className="dh-line">본전 조건</p>
+                <ul className="elist">
                 <Row {...props('be')} detail={data.breakeven.detail} kind="indicator" assumed={data.breakeven.badge === '가정'}>
-                  <span className="ecell">{data.breakeven.label}</span>
-                  <span className="ecell n">{data.breakeven.value === null ? '측정 불가' : unitValue(data.breakeven.value, data.breakeven.unit ?? 'ratio')}</span>
-                  <span className="ecell cmp">
-                    <Badge kind={data.breakeven.badge} />
-                    {data.breakeven.compare}
-                  </span>
+                  <Line
+                    mark={LEVEL[data.breakeven.level] ?? LEVEL.unmeasurable}
+                    label={data.breakeven.label}
+                    badge={data.breakeven.badge}
+                    explain={data.breakeven.explain}
+                    fallback={data.breakeven.value === null ? undefined : unitValue(data.breakeven.value, data.breakeven.unit ?? 'ratio')}
+                  />
                 </Row>
-              </ul>
-            </section>
-          )}
+                </ul>
+              </>
+            )}
+            {data.attribution_note && <p className="limit">측정 한계: {data.attribution_note}</p>}
+          </Fold>
         </>
       )}
-
-      {data.attribution_note && <p className="limit">측정 한계: {data.attribution_note}</p>}
     </div>
   )
 }

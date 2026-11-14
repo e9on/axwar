@@ -132,7 +132,7 @@ export type CaseDetailData = {
 
 export type Detail = {
   formula: string
-  inputs: { label: string; value: unknown }[]
+  inputs: { label: string; value: unknown; unit?: string | null }[]
   sources: string[]
   policies: { key: string; value: unknown; source: string | null; description: string; /** 정책 파일에서 없어진 항목 */ missing?: boolean }[]
 }
@@ -147,6 +147,8 @@ export type SignalLine = {
   badge: string
   judgment: string
   exclude_reason: string
+  /** 서버가 주는 쉬운 설명 문장(옛 서버는 없음) */
+  explain?: string | null
   detail: Detail
 }
 export type IndicatorLine = {
@@ -160,10 +162,11 @@ export type IndicatorLine = {
   compare_value: number | null
   compare_unit?: string | null
   badge: string
+  explain?: string | null
   detail: Detail
 }
-export type CostRow = { key: string; label: string; amount: number; unit?: string | null; badge: string; detail: Detail }
-export type RuleLine = { rule_id: string; text: string; source: string; badge: string; stage?: string; superseded?: boolean; detail: Detail }
+export type CostRow = { key: string; label: string; amount: number; unit?: string | null; badge: string; explain?: string | null; detail: Detail }
+export type RuleLine = { rule_id: string; text: string; source: string; badge: string; stage?: string; superseded?: boolean; explain?: string | null; detail: Detail }
 
 export type EvidenceData = {
   available: boolean
@@ -175,3 +178,6 @@ export type EvidenceData = {
   attribution_note: string
   rule: { approver_hits: RuleLine[]; indicator_hits: RuleLine[]; phase2_approver_hits: RuleLine[] }
 }
+
+/** 건 목록(GET /api/cases) 한 줄 */
+export type CaseListRow = { id: number; kind: string; ref_id: string; title?: string; status: string }

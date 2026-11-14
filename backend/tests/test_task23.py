@@ -32,6 +32,7 @@ def _snapshot(store, cid):
             store.get_case(cid)["status"])
 
 
+@pytest.mark.usefixtures("legacy_scenes")
 def test_viewer를_줘도_저장된_사실_이벤트_권한이동은_그대로이고_판정만_새_값_기준(store):
     eng = Engine(store)
     cid = eng.seed("scenario_1_escalate")[0]
@@ -90,6 +91,7 @@ def _esc(store, upto):
     return eng, cid
 
 
+@pytest.mark.usefixtures("legacy_scenes")
 def test_브리핑_입력은_상신_뒤_지금_결재선을_쓰고_옛_전결_문장은_처음_판정으로만(store):
     eng, cid = _esc(store, 2)
     before = eng._brief_basis(store.get_case(cid))

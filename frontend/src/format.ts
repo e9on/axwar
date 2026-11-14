@@ -1,6 +1,21 @@
+// hardcode-allow: 44032 55203 (유니코드 한글 음절 범위 — 조사 고르기용 받침 판단)
 import { koDate } from './date'
 
 /** 화면에 보이는 숫자·값 글자 만들기 */
+const HANGUL_FIRST = 44032 // 한글 음절 시작(가)
+const FINALS = 28 // 받침 종류 수(없음 포함)
+const FINAL_RIEUL = 8 // 받침 ㄹ의 번호
+const HANGUL_LAST = 55203 // 한글 음절 끝(힣)
+
+/** 이름·동작 뒤에 받침에 맞는 조사를 붙인다. 한글이 아닌 글자로 끝나면 받침 없는 것으로 본다 */
+export function josa(word: string, kind: '로' | '은' | '을'): string {
+  const code = word.charCodeAt(word.length - 1)
+  const final = code >= HANGUL_FIRST && code <= HANGUL_LAST ? (code - HANGUL_FIRST) % FINALS : 0
+  if (kind === '로') return `${word}${final === 0 || final === FINAL_RIEUL ? '로' : '으로'}`
+  if (kind === '을') return `${word}${final === 0 ? '를' : '을'}`
+  return `${word}${final === 0 ? '는' : '은'}`
+}
+
 const PERCENT = 100 // 비율(0~1) → 백분율 단위 변환
 export function num(v: number): string {
   return Number.isInteger(v) ? v.toLocaleString('ko-KR') : v.toLocaleString('ko-KR', { maximumFractionDigits: 3 })

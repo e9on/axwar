@@ -48,6 +48,7 @@
 .scene:hover { background: var(--c-navy-soft); }
 .scene[aria-pressed="true"] { border-left-color: var(--c-navy); background: var(--c-navy-soft); }
 .scene .k { font-weight: var(--w-bold); }
+.scene .go-start { justify-self: start; color: var(--c-navy); font-weight: var(--w-bold); font-size: var(--t-1); }
 .scene .sub { color: var(--c-ink-2); font-size: var(--t-1); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
 .scene-desc { color: var(--c-ink-2); font-size: var(--t-1); max-width: 72ch; }
 .steps .no { font-family: var(--f-doc); font-weight: var(--w-heavy); font-size: var(--t-4); }
@@ -77,3 +78,26 @@
   .ledger .acts { justify-content: flex-start; }
   .ledger .label { display: inline; color: var(--c-ink-3); font-size: var(--t-1); margin-right: var(--s-2); }
 }
+
+/* 화면 첫 줄 도구: 기준일 이동(시연 조작판), 모드 줄(정책) */
+.date-line, .mode-line { display: flex; flex-wrap: wrap; gap: var(--s-2) var(--s-3); align-items: center; margin: 0 0 var(--s-3); color: var(--c-ink-2); }
+.date-line b { color: var(--c-ink); }
+.date-line input[type="date"] { padding: var(--s-1) var(--s-2); border: 1px solid var(--c-rule); border-radius: var(--r-2); background: var(--c-sheet); }
+.scene-more { margin: 0 0 var(--s-2); }
+.scene-more summary { cursor: pointer; color: var(--c-navy); font-size: var(--t-1); }
+.guide { display: flex; flex-wrap: wrap; gap: var(--s-2) var(--s-3); align-items: center; margin: var(--s-3) 0; padding: var(--s-2) var(--s-3); border-left: 3px solid var(--c-navy); background: var(--c-navy-soft); }
+.steps li[data-done="true"] .k { color: var(--c-ink-3); }
+.steps li[data-done="true"] .no { color: var(--c-ok); }
+
+/* 시연 날짜 띠와 알림 */
+.date-strip { list-style: none; display: flex; flex-wrap: wrap; gap: var(--s-2); margin: var(--s-3) 0; padding: var(--s-2) 0; border-top: 1px solid var(--c-rule); border-bottom: 1px solid var(--c-rule); }
+.date-strip li { display: flex; }
+.date-strip .dot-btn, .date-strip .dot-now { display: grid; gap: 2px; justify-items: center; padding: var(--s-1) var(--s-3); border: 1px solid var(--c-rule); border-radius: var(--r-2); background: var(--c-sheet); color: var(--c-ink); font: inherit; }
+.date-strip .dot-btn { cursor: pointer; }
+.date-strip .dot-btn:hover:not(:disabled) { background: var(--c-navy-soft); }
+.date-strip .dot-btn:disabled { color: var(--c-ink-2); opacity: 0.6; cursor: default; }
+.date-strip .dot-now { border-color: var(--c-navy); background: var(--c-navy-soft); }
+.date-strip .ev { font-size: var(--t-1); color: var(--c-ink-2); }
+.advance-notice { margin: var(--s-3) 0; padding: var(--s-2) var(--s-3); border-left: 3px solid var(--c-rule); }
+.advance-notice ul { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s-1); }
+.auto-run .btn { margin-top: var(--s-1); }

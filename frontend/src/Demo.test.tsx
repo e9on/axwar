@@ -11,28 +11,60 @@ const PEOPLE = [
 ]
 
 const STEPS = [
-  { action: '회신', plan: 'PLAN-019', dept: '물류', text: '전량 가능합니다', attachments: 0 },
-  { action: '회신', plan: 'PLAN-019', dept: 'SCM', text: '전량 허용합니다', attachments: 0 },
-  { action: '결정', plan: 'PLAN-019', date: '2026-09-07', actor: 'Masil 대표', decision: '승인', comment: '좋아요' },
+  { action: '회신', plan: 'PLAN-014', date: '2026-07-03', dept: '물류', text: '전량 가능합니다', attachments: 0 },
+  { action: '결정', plan: 'PLAN-014', actor: 'Masil 대표', decision: '승인', comment: '좋아요' },
+  { action: '기준일', date: '2026-07-20' },
 ]
 const SCENARIOS = [
-  { name: 'scenario_1', title: '장면 1. 정상', description: '정상으로 승인되는 장면', plans: ['PLAN-019'], contracts: [], script: STEPS },
-  { name: 'scenario_2', title: '장면 2. 조건 변경', description: '일부 허용', plans: ['PLAN-020'], contracts: [], script: [STEPS[0]] },
+  { name: 'scenario_1', title: '장면 1. 정상', description: '정상으로 승인되는 장면', summary: '7월 기안 PLAN-014 — 회신이 오면 대표가 승인해요.', plans: ['PLAN-014'], contracts: [], script: STEPS },
+  { name: 'scenario_2', title: '장면 2. 조건 변경', description: '일부 허용', summary: '', plans: ['PLAN-020'], contracts: [], script: [STEPS[0]] },
 ]
-const OUT = [
-  { action: '회신', actions: [], request_id: 1, case_id: 1, changed: true, status: '승인 대기', judgment: { stance: '수용' } },
-  { action: '회신', actions: [], request_id: 2, case_id: 1, changed: false, status: '승인 대기', judgment: null },
-  { action: '승인', actions: [{ date: '2026-09-07', case_id: 1, action: '조기경고', targets: ['Masil 대표'], text: '미승인 경고 문장' }], case_id: 1, status: '1차 집행', changed: true },
-]
+const WAIT_NOW = { index: 1, action: '결정', actor: 'Masil 대표', target: 'PLAN-014', text: 'Masil 대표가 PLAN-014를 승인해요', ready: true, step: STEPS[1] }
+const WAIT_LATER = { ...WAIT_NOW, ready: false }
+const CASES = [{ id: 7, ref_id: 'PLAN-014', title: '7월 기안 — 혜인' }]
 
-function mount(mode = '시연') {
+type Pos = { scenario: string | null; done: number; waiting: unknown; next_date: string | null; date: string; arrived: string[] }
+type AdvanceReply = (to: string, pos: Pos) => Record<string, unknown>
+
+/** 서버가 기억하는 시연 진행 위치(새로고침해도 유지). init으로 이미 진행한 상태에서 시작할 수 있다 */
+function mount(mode = '시연', init: Partial<Pos> = {}, advanceReply?: AdvanceReply) {
+  const pos: Pos = { scenario: null, done: 0, waiting: null, next_date: null, date: '2026-07-01', arrived: [], ...init }
+  const stateReply = () => {
+    const total = pos.scenario ? SCENARIOS.find((x) => x.name === pos.scenario)!.script.length : 0
+    return {
+      json: {
+        scenario: pos.scenario, title: pos.scenario ? '장면' : null, summary: '', done: pos.done, total, finished: !!pos.scenario && pos.done >= total,
+        next_step: null, date: pos.date, waiting: pos.waiting, next_date: pos.next_date, arrived: pos.arrived,
+      },
+    }
+  }
   const server = fakeServer({
     'GET /api/people': { json: PEOPLE },
-    'GET /api/clock': { json: { date: '2026-07-01', mode } },
+    'GET /api/cases': { json: CASES },
+    'GET /api/clock': () => ({ json: { date: pos.date, mode } }),
     'GET /api/demo/scenarios': { json: SCENARIOS },
-    'POST /api/demo/reset': { json: { scenario: 'scenario_1', case_ids: [1], date: '2026-07-01' } },
-    'POST /api/demo/play': () => ({ json: OUT[server.calls.filter((c) => c.path === '/api/demo/play').length - 1] }),
-    'POST /api/demo/run': { json: OUT },
+    'GET /api/demo/state': stateReply,
+    'POST /api/demo/reset': () => {
+      pos.scenario = 'scenario_1'
+      pos.done = 0
+      pos.waiting = WAIT_LATER
+      pos.next_date = '2026-07-03'
+      return { json: { scenario: 'scenario_1', case_ids: [1], date: '2026-07-01' } }
+    },
+    'POST /api/demo/advance': () => {
+      const to = (server.calls.filter((c) => c.path === '/api/demo/advance').slice(-1)[0].body as { date: string }).date
+      const custom = advanceReply?.(to, pos)
+      if (custom) return { json: custom }
+      pos.date = to
+      pos.done = 1
+      pos.waiting = WAIT_NOW
+      pos.next_date = '2026-07-20'
+      return { json: { date: to, applied: ['7/3 물류 회신이 도착했어요'], skipped: [], actions: [], waiting: WAIT_NOW, next_date: '2026-07-20' } }
+    },
+    'POST /api/demo/run': () => {
+      pos.done = 3
+      return { json: [{ action: '회신', actions: [], changed: true, status: '승인 대기' }] }
+    },
     'POST /api/clock': { json: { date: '2026-09-04', mode: '시연', actions: [] } },
   })
   render(
@@ -43,26 +75,23 @@ function mount(mode = '시연') {
   return server
 }
 
-async function start() {
-  const server = mount()
+/** 조작판에서 장면 1을 시작한다(시작하면 메인으로 간다) */
+async function start(advanceReply?: AdvanceReply) {
+  const server = mount('시연', {}, advanceReply)
   await userEvent.click(await screen.findByRole('button', { name: /장면 1\. 정상/ }))
   const dlg = await screen.findByRole('dialog')
   await userEvent.click(within(dlg).getByRole('button', { name: '초기화하고 시작' }))
-  await screen.findByRole('list', { name: '대본 단계' })
+  await screen.findByRole('region', { name: '시연 진행' })
   return server
 }
-
-/** 단계 줄(결과 안의 작은 목록은 빼고 바로 아래 줄만) */
-const stepItems = () => Array.from(screen.getByRole('list', { name: '대본 단계' }).children) as HTMLElement[]
 
 afterEach(() => vi.unstubAllGlobals())
 
 describe('시연 조작판', () => {
   it('시연_초기화와_장면선택', async () => {
     const { calls } = mount()
-    expect(await screen.findByText('정상으로 승인되는 장면')).toBeInTheDocument()
+    expect(await screen.findByText('7월 기안 PLAN-014 — 회신이 오면 대표가 승인해요.')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: /장면 1\. 정상/ }))
-    // 확인 창: 취소하면 아무것도 보내지 않는다
     let dlg = await screen.findByRole('dialog')
     expect(dlg).toHaveTextContent('시연 데이터가 지워져요')
     await userEvent.click(within(dlg).getByRole('button', { name: '취소' }))
@@ -72,78 +101,51 @@ describe('시연 조작판', () => {
     await userEvent.click(screen.getByRole('button', { name: /장면 1\. 정상/ }))
     dlg = await screen.findByRole('dialog')
     await userEvent.click(within(dlg).getByRole('button', { name: '초기화하고 시작' }))
-    const steps = await screen.findByRole('list', { name: '대본 단계' })
+    await screen.findByRole('region', { name: '시연 진행' })
     expect(calls).toContainEqual({ method: 'POST', path: '/api/demo/reset', body: { scenario: 'scenario_1' } })
-    const items = within(steps).getAllByRole('listitem')
-    expect(items).toHaveLength(3)
-    expect(items[0]).toHaveTextContent('1')
-    expect(items[0]).toHaveTextContent('회신')
-    expect(items[0]).toHaveTextContent('물류')
-    expect(items[2]).toHaveTextContent('결정')
-    expect(items[2]).toHaveTextContent('2026-09-07')
-    expect(items[2]).toHaveTextContent('Masil 대표')
-    // 초기화 뒤 기준일을 다시 읽는다(다른 화면이 새 날짜로 다시 읽게)
-    expect(calls.filter((c) => c.path === '/api/clock' && c.method === 'GET').length).toBeGreaterThanOrEqual(2)
+    expect(calls.some((c) => c.method === 'GET' && c.path === '/api/demo/state')).toBe(true)
   })
 
-  it('한_단계_진행과_끝까지', async () => {
-    const { calls } = await start()
-    await userEvent.click(screen.getByRole('button', { name: '한 단계 진행' }))
-    await waitFor(() => expect(calls).toContainEqual({ method: 'POST', path: '/api/demo/play', body: { step: STEPS[0] } }))
-    await screen.findByRole('list', { name: '대본 단계' })
-    const first = stepItems()[0]
-    expect(await within(first).findByText('진행함')).toBeInTheDocument()
-    expect(first).toHaveTextContent('건 상태: 승인 대기')
-    expect(first).toHaveTextContent('AI 해석: 수용')
-
-    // 끝까지: 이미 진행한 단계가 있으면 남은 단계를 차례로 진행한다(처음부터 다시 돌리지 않음)
-    await userEvent.click(screen.getByRole('button', { name: '끝까지' }))
-    await waitFor(() => expect(calls.filter((c) => c.path === '/api/demo/play')).toHaveLength(3))
-    expect(calls.some((c) => c.path === '/api/demo/run')).toBe(false)
-    const plays = calls.filter((c) => c.path === '/api/demo/play').map((c) => c.body)
-    expect(plays[1]).toEqual({ step: STEPS[1] })
-    expect(plays[2]).toEqual({ step: STEPS[2] })
-    const last = stepItems()[2]
-    expect(await within(last).findByText(/미승인 경고 문장/)).toBeInTheDocument()
-    expect(last).toHaveTextContent('건 상태: 1차 집행')
-    // 다 끝나면 진행 버튼이 잠긴다
-    expect(screen.getByRole('button', { name: '한 단계 진행' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: '끝까지' })).toBeDisabled()
+  it('시작하면_첫_결정권자로_바꿔_메인으로_간다', async () => {
+    await start()
+    expect((screen.getByLabelText('보는 사람') as HTMLSelectElement).value).toBe('Masil 대표')
+    expect(screen.queryByRole('heading', { name: '시연 조작판' })).toBeNull()
   })
 
-  it('처음부터_끝까지는_run_한_번으로', async () => {
-    const { calls } = await start()
-    await userEvent.click(screen.getByRole('button', { name: '끝까지' }))
-    await waitFor(() => expect(calls).toContainEqual({ method: 'POST', path: '/api/demo/run', body: { scenario: 'scenario_1' } }))
-    await screen.findByRole('list', { name: '대본 단계' })
-    await waitFor(() => expect(within(stepItems()[2]).getByText('진행함')).toBeInTheDocument())
-    expect(calls.some((c) => c.path === '/api/demo/play')).toBe(false)
+  it('조작판에는_진행_기능이_없고_메인으로_안내한다', async () => {
+    mount('시연', { scenario: 'scenario_1', done: 1, waiting: WAIT_NOW, next_date: '2026-07-20', date: '2026-07-03' })
+    expect(await screen.findByText(/지금 진행 중인 장면/)).toBeInTheDocument()
+    expect(screen.getByText('메인에서 진행하세요.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '메인으로' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '처음부터' })).toBeInTheDocument()
+    for (const gone of [/다음 날짜로/, '다음 날로', '날짜로 이동', '끝까지 진행', '다음 단계']) {
+      expect(screen.queryByRole('button', { name: gone })).toBeNull()
+    }
+    expect(screen.queryByRole('list', { name: '날짜 띠' })).toBeNull()
+    expect(screen.queryByRole('list', { name: '대본 단계' })).toBeNull()
+  })
+
+  it('메인으로_버튼은_메인에_막대를_보인다', async () => {
+    mount('시연', { scenario: 'scenario_1', done: 1, waiting: WAIT_NOW, next_date: '2026-07-20', date: '2026-07-03' })
+    await userEvent.click(await screen.findByRole('button', { name: '메인으로' }))
+    expect(await screen.findByRole('region', { name: '시연 진행' })).toBeInTheDocument()
   })
 
   it('처음부터는_확인_뒤_다시_초기화한다', async () => {
-    const { calls } = await start()
-    await userEvent.click(screen.getByRole('button', { name: '한 단계 진행' }))
-    await screen.findByText('진행함')
-    await userEvent.click(screen.getByRole('button', { name: '처음부터' }))
+    const { calls } = mount('시연', { scenario: 'scenario_1', done: 1, waiting: WAIT_NOW, next_date: '2026-07-20', date: '2026-07-03' })
+    await userEvent.click(await screen.findByRole('button', { name: '처음부터' }))
     const dlg = await screen.findByRole('dialog')
     await userEvent.click(within(dlg).getByRole('button', { name: '초기화하고 시작' }))
-    await waitFor(() => expect(calls.filter((c) => c.path === '/api/demo/reset')).toHaveLength(2))
-    await waitFor(() => expect(screen.queryByText('진행함')).toBeNull())
+    await waitFor(() => expect(calls.filter((c) => c.path === '/api/demo/reset')).toHaveLength(1))
   })
 
-  it('기준일_바로_이동_버튼', async () => {
-    const { calls } = await start()
-    await userEvent.click(screen.getByRole('button', { name: /2026-09-07.*이동/ }))
-    await waitFor(() => expect(calls).toContainEqual({ method: 'POST', path: '/api/clock', body: { date: '2026-09-07' } }))
-  })
-
-  it('진행_실패는_문장을_보이고_다시_누를_수_있다', async () => {
+  it('시작_실패는_문장을_보인다', async () => {
     fakeServer({
       'GET /api/people': { json: PEOPLE },
       'GET /api/clock': { json: { date: '2026-07-01', mode: '시연' } },
       'GET /api/demo/scenarios': { json: SCENARIOS },
-      'POST /api/demo/reset': { json: { scenario: 'scenario_1', case_ids: [1], date: '2026-07-01' } },
-      'POST /api/demo/play': { status: 409, json: { detail: '서버 거절 문장' } },
+      'GET /api/demo/state': { json: { scenario: null, title: null, done: 0, total: 0, finished: false, next_step: null, date: '2026-07-01' } },
+      'POST /api/demo/reset': { status: 409, json: { detail: '서버 거절 문장' } },
     })
     render(
       <MemoryRouter initialEntries={['/demo']}>
@@ -152,9 +154,7 @@ describe('시연 조작판', () => {
     )
     await userEvent.click(await screen.findByRole('button', { name: /장면 1\. 정상/ }))
     await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: '초기화하고 시작' }))
-    await userEvent.click(await screen.findByRole('button', { name: '한 단계 진행' }))
     expect((await screen.findAllByText(/서버 거절 문장/)).length).toBeGreaterThan(0)
-    expect(screen.getByRole('button', { name: '한 단계 진행' })).toBeEnabled()
   })
 
   it('운영_모드에서는_시연_조작판이_없다', async () => {
@@ -169,6 +169,7 @@ describe('시연 조작판', () => {
     fakeServer({
       'GET /api/people': { json: PEOPLE },
       'GET /api/clock': { json: { date: '2026-07-01', mode: '시연' } },
+      'GET /api/demo/state': { json: { scenario: null, title: null, done: 0, total: 0, finished: false, next_step: null, date: '2026-07-01' } },
       'GET /api/demo/scenarios': { status: 500, json: { detail: '대본을 못 읽음' } },
     })
     render(

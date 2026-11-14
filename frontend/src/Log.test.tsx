@@ -25,11 +25,11 @@ const USAGE = {
   calls: [{ id: 1, ts: '2026-11-13T05:10:00+00:00', day: '2026-11-13', case_id: 3, kind: '회신해석', model: 'fake-model', in_tok: 120, out_tok: 30, usd: 0.0012, confidence: 0.85, summary: '물류 회신: 전량 가능', state: '정산' }],
 }
 
-function mount() {
+function mount(events = EVENTS) {
   fakeServer({
     'GET /api/people': { json: PEOPLE },
     'GET /api/clock': { json: { date: '2026-07-01', mode: '시연' } },
-    'GET /api/events': { json: EVENTS },
+    'GET /api/events': { json: events },
     'GET /api/assumptions': { json: ASSUMPTIONS },
     'GET /api/ai/usage': { json: USAGE },
   })
@@ -43,13 +43,25 @@ function mount() {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('처리 기록·가정 목록', () => {
+  it('기록이_길면_처음_몇_줄만_보이고_더_보기로_늘린다', async () => {
+    const many = Array.from({ length: 45 }, (_, i) => ({ id: 100 + i, ts: '2026-11-13T05:06:55+00:00', sim_date: '2026-07-01', case_id: null, kind: '초기화', actor: '시연', detail: {} }))
+    mount(many)
+    const list = await screen.findByRole('list', { name: '처리 기록' })
+    expect(within(list).getAllByRole('listitem')).toHaveLength(20)
+    await userEvent.click(screen.getByRole('button', { name: '더 보기' }))
+    expect(within(screen.getByRole('list', { name: '처리 기록' })).getAllByRole('listitem')).toHaveLength(40)
+    await userEvent.click(screen.getByRole('button', { name: '더 보기' }))
+    expect(within(screen.getByRole('list', { name: '처리 기록' })).getAllByRole('listitem')).toHaveLength(45)
+    expect(screen.queryByRole('button', { name: '더 보기' })).toBeNull()
+  })
+
   it('처리_기록_거르기', async () => {
     mount()
     const list = await screen.findByRole('list', { name: '처리 기록' })
     expect(within(list).getAllByRole('listitem')).toHaveLength(4)
     // 이전/이후 상태와 건 링크
     const moved = within(list).getAllByRole('listitem').find((li) => li.textContent?.includes('회신 대기')) as HTMLElement
-    expect(moved).toHaveTextContent('기안 → 회신 대기')
+    expect(moved).toHaveTextContent('기안에서 회신 대기로')
     expect(moved).toHaveTextContent('시스템')
     expect(within(moved).getByRole('link', { name: /건 #3/ })).toHaveAttribute('href', expect.stringContaining('/cases/3'))
 
@@ -59,7 +71,7 @@ describe('처리 기록·가정 목록', () => {
     await userEvent.selectOptions(screen.getByLabelText('건으로 거르기'), '4')
     const rows = within(screen.getByRole('list', { name: '처리 기록' })).getAllByRole('listitem')
     expect(rows).toHaveLength(1)
-    expect(rows[0]).toHaveTextContent('승인 대기 → 1차 집행')
+    expect(rows[0]).toHaveTextContent('승인 대기에서 1차 집행으로')
 
     await userEvent.selectOptions(screen.getByLabelText('종류로 거르기'), '')
     await userEvent.selectOptions(screen.getByLabelText('건으로 거르기'), '')

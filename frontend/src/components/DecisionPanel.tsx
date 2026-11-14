@@ -1,8 +1,9 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { api } from '../api'
-import { D_APPROVE, D_REJECT, D_SPLIT, KIND_CONTRACT, OPINIONS, ST_PHASE2_WAIT } from '../decisions'
-import { koDate } from '../date'
-import { num, won } from '../format'
+import { D_APPROVE, D_REJECT, D_SPLIT, KIND_CONTRACT, OPINIONS, ST_PHASE2_WAIT, S_DEFAULT_DENY } from '../decisions'
+import { daysBetween, koDate } from '../date'
+import { useClock } from '../state/clock'
+import { josa, num, won } from '../format'
 import type { CaseDetailData, SplitPreview } from '../caseTypes'
 import './DecisionPanel.css'
 
@@ -42,7 +43,7 @@ function SplitDiff({ preview, approveBlocked }: { preview: SplitPreview; approve
         <p>일반 승인은 지금 할 수 없어요: {approveBlocked.reason}</p>
       ) : (
         <p>
-          <b>일반 승인</b>: 2차 없이 한 번에 집행해요.
+          <b>일반 승인</b>: 2차 없이 1차만 집행해요. 1차 수량은 승인 뒤 재고·물류 몫에 따라 정해져요.
         </p>
       )}
       <p>
@@ -111,7 +112,8 @@ export default function DecisionPanel({ detail, actor, onDone }: Props) {
     if (el.isConnected && !(el as HTMLButtonElement).disabled) el.focus()
   }, [dialog, busy])
 
-  const phase2 = detail.case.stage === ST_PHASE2_WAIT
+  const c = detail.case
+  const phase2 = c.stage === ST_PHASE2_WAIT
   const v = detail.viewer
   const canDecide = phase2 ? !!v?.can_decide_phase2 : !!v?.can_decide
   const canEscalate = phase2 ? !!v?.can_escalate_phase2 : !!v?.can_escalate
@@ -175,27 +177,56 @@ export default function DecisionPanel({ detail, actor, onDone }: Props) {
   const blockedList =
     blocked.length > 0 ? (
       <ul className="blocked" aria-label="지금 할 수 없는 결정">
-        {groupBlocked(blocked).map((g) => (
-          <li key={g.reason}>
-            <b>{g.actions.join('·')}</b>은 지금 할 수 없어요 · {g.reason}
-          </li>
-        ))}
+        {groupBlocked(blocked).map((g) => {
+          const names = g.actions.join('·')
+          return (
+            <li key={g.reason}>
+              <b>{names}</b>{josa(names, '은').slice(names.length)} 지금 할 수 없어요 · {g.reason}
+            </li>
+          )
+        })}
       </ul>
     ) : null
-  const c = detail.case
   const amount = detail.facts.amount_krw
   const execDate = phase2 ? detail.phase2?.plan?.date : (detail.facts.phase1_date ?? detail.facts.settlement_date ?? detail.facts.expiry)
+  const { date: today } = useClock()
+  const p2 = phase2 ? detail.phase2 : null
+  const deny = p2 ? p2.deny_date : detail.deny_date
+  const last = p2 ? p2.approval_deadline : detail.approval_deadline
+  const prefix = phase2 ? '2차 ' : ''
+  const overdue = !!deny && !!today && daysBetween(today, deny) < 0
+  let lead: string
+  if (overdue) lead = `${prefix}기본 거부 날(${koDate(deny as string)})이 지났어요. 기한이 지나 결정할 수 없고 기본 거부로 처리돼요.`
+  else if (canDecide) {
+    lead = `${prefix}승인이 필요해요.`
+    if (deny) lead += last ? ` ${koDate(last)}까지 결정하지 않으면 ${koDate(deny)}에 기본 거부돼요.` : ` 결정하지 않으면 ${koDate(deny)}에 기본 거부돼요.`
+  } else if (pending.length > 0) lead = `${pending.join('·')}의 결정을 기다리고 있어요.`
+  else if (c.open || phase2) lead = `${c.status} 상태예요. 다른 회신이나 결정을 기다리고 있어요.`
+  else if (c.status === S_DEFAULT_DENY && deny) lead = `기본 거부 날(${koDate(deny)})까지 승인이 없어 확정 보류됐어요.`
+  else lead = `${c.status} 상태예요.`
+  const mine = detail.tasks.filter((t) => t.status === '대기' && t.dept === v?.role)
+  if (!canDecide && !overdue && mine.length > 0) lead += ` 내 작업: ${mine.map((t) => `${t.title} (${koDate(t.due)}까지)`).join(', ')}`
   return (
-    <div className="bar" role="group" aria-label="결정" aria-busy={busy}>
-      {canDecide ? (
+    <div className="bar now" role="group" aria-label="결정" aria-busy={busy}>
+      <p className="lead-now">
+        {lead}
+        {busy && <span className="muted"> · 보내는 중…</span>}
+        {!busy && notice && <span className="muted"> · {notice}</span>}
+      </p>
+      {canDecide && (
         <>
-          <p>
-            {v?.role}로 결재합니다
-            {busy && <span className="muted"> · 보내는 중…</span>}
-            {!busy && notice && <span className="muted"> · {notice}</span>}
-          </p>
           {blockedList}
           <div className="btns">
+            {actions.includes(D_APPROVE) && (
+              <button type="button" className="btn pri" disabled={busy} onClick={() => open('approve')}>
+                승인
+              </button>
+            )}
+            {showSplit && preview && (
+              <button type="button" className="btn" disabled={busy} onClick={() => open('split')}>
+                분할 승인 (1차 {num(preview.phase1_qty)}개)
+              </button>
+            )}
             {actions.includes(D_REJECT) && (
               <button type="button" className="btn deny" disabled={busy} onClick={() => open('reject')}>
                 거절
@@ -206,27 +237,8 @@ export default function DecisionPanel({ detail, actor, onDone }: Props) {
                 위로 올리기
               </button>
             )}
-            {showSplit && preview && (
-              <button type="button" className="btn" disabled={busy} onClick={() => open('split')}>
-                분할 승인 (1차 {num(preview.phase1_qty)}개)
-              </button>
-            )}
-            {actions.includes(D_APPROVE) && (
-              <button type="button" className="btn pri" disabled={busy} onClick={() => open('approve')}>
-                승인
-              </button>
-            )}
           </div>
         </>
-      ) : (
-        <p>
-          {pending.length > 0
-            ? `승인권자: ${pending.join(' · ')}`
-            : c.open || phase2
-              ? `아직 열려 있는 건이에요 — 다른 회신이나 결정을 기다리고 있어요 (${detail.case.status})`
-              : `결정이 끝난 건이에요 (${detail.case.status})`}
-          {notice && <span className="muted"> · {notice}</span>}
-        </p>
       )}
       {!canDecide && blockedList}
       {error && !dialog && (
@@ -246,7 +258,7 @@ export default function DecisionPanel({ detail, actor, onDone }: Props) {
                     {phase2 ? '2차 집행 ' : '요청액 '}
                     <b>{(phase2 ? detail.phase2?.plan?.amount_krw : amount) !== undefined ? won((phase2 ? detail.phase2?.plan?.amount_krw : amount) as number) : '금액 미정'}</b> · 집행일 <b>{dateText(execDate)}</b>
                   </p>
-                  <p>{phase2 ? `2차 ${num(detail.phase2?.plan?.qty ?? 0)}개를 집행해요.` : c.kind === KIND_CONTRACT ? '이 결정을 확정해요.' : '분할 없이 전량을 1차로 한 번에 집행해요.'}</p>
+                  <p>{phase2 ? `2차 ${num(detail.phase2?.plan?.qty ?? 0)}개를 집행해요.` : c.kind === KIND_CONTRACT ? '이 결정을 확정해요.' : '2차 없이 1차만 집행해요. 1차 수량은 승인 뒤 재고·물류 몫에 따라 정해져요.'}</p>
                 </div>
               </>
             )}

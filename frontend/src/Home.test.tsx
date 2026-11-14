@@ -6,6 +6,8 @@ import App from './App'
 import css from './pages/Home.css?raw'
 import { DOT_PAD_PX } from './timelineLayout'
 import { fakeServer } from './test/fakeServer'
+import { mountPage } from './test/pageMount'
+import Home from './pages/Home'
 
 const PEOPLE = [
   { name: '마케팅팀장', role: '마케팅팀장' },
@@ -59,6 +61,11 @@ function narrow(matches: boolean) {
 
 afterEach(() => vi.unstubAllGlobals())
 
+/** 기본 일정 띠는 내 차례와 기한·집행일만. 나머지는 이 버튼으로 */
+async function showAll() {
+  await userEvent.click(await screen.findByRole('button', { name: '모든 일정 보기' }))
+}
+
 describe('메인 화면', () => {
   it('할일은_칸별로_나뉘고_빈_칸은_숨는다', async () => {
     fakeServer(routes({
@@ -68,14 +75,44 @@ describe('메인 화면', () => {
       알림: [item(1, 'P-1', { kind: '마감 알림', stage: '1차', text: '내일 기본 거부돼요' })],
     }))
     mount()
-    expect(await screen.findByRole('heading', { name: '승인 대기' })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: '작업' })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: '알림' })).toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: '회신 대기' })).toBeNull()
-    expect(screen.queryByRole('heading', { name: '권한 이동' })).toBeNull()
-    expect(screen.getByText('내일 기본 거부돼요')).toBeInTheDocument()
-    const heads = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent)
-    expect(heads).toEqual(['승인 대기', '알림', '작업'])
+    const list = await screen.findByRole('list', { name: '할 일 목록' })
+    expect(screen.getByRole('heading', { name: '할 일 3건' })).toBeInTheDocument()
+    expect(screen.getAllByText('내일 기본 거부돼요').length).toBeGreaterThan(0)
+    // 칸 순서대로 한 줄씩, 빈 칸은 줄이 없다
+    const cols = within(list).getAllByRole('listitem').map((li) => li.getAttribute('data-column'))
+    expect(cols).toEqual(['승인 대기', '알림', '작업'])
+  })
+
+  it('할일_줄_이름은_서버_title이고_번호는_작게_따로_보인다', async () => {
+    fakeServer(routes({
+      ...EMPTY_TODO,
+      '승인 대기': [item(1, 'PLAN-019', { title: '봄 선케어 캠페인 · 혜인' }), item(3, 'PLAN-020')],
+      작업: [item(2, 'PLAN-021', { task_id: 5, title: '물량 입력', detail: '', due: '2026-07-14' })],
+    }))
+    mount()
+    const rows = within(await screen.findByRole('list', { name: '할 일 목록' })).getAllByRole('listitem')
+    const named = rows[0]
+    expect(within(named).getByText('봄 선케어 캠페인 · 혜인')).toHaveClass('name')
+    expect(within(named).getByText('PLAN-019')).toHaveClass('ref')
+    // title이 없으면 번호가 이름이고 같은 글을 두 번 쓰지 않는다
+    const bare = rows[1]
+    expect(within(bare).getAllByText('PLAN-020')).toHaveLength(1)
+    expect(within(bare).getByText('PLAN-020')).toHaveClass('name')
+    // 작업은 서버가 title에 작업 이름을 준다
+    const task = rows[2]
+    expect(task).toHaveTextContent('7월 14일까지')
+    expect(task).not.toHaveTextContent('2026-07-14')
+    expect(within(task).getByText('물량 입력')).toHaveClass('name')
+    expect(within(task).getByText('PLAN-021')).toHaveClass('ref')
+  })
+
+  it('회신_대기_링크_끝에_화살표가_없다', async () => {
+    fakeServer(routes({ ...EMPTY_TODO, '회신 대기': [item(4, 'P-4')] }))
+    mount()
+    const go = await screen.findByRole('button', { name: /회신하기/ })
+    expect(go.textContent).not.toMatch(/→/)
+    await userEvent.click(go)
+    await waitFor(() => expect(screen.getByTestId('url').textContent).toMatch(/^\/replies\?as=/))
   })
 
   it('할_일이_모두_없으면_한_줄', async () => {
@@ -87,7 +124,7 @@ describe('메인 화면', () => {
   it('할일_줄을_누르면_건_상세로_간다', async () => {
     fakeServer(routes({ ...EMPTY_TODO, '승인 대기': [item(7, 'P-7')] }))
     mount()
-    await userEvent.click(await screen.findByRole('button', { name: /P-7/ }))
+    await userEvent.click(await screen.findByRole('button', { name: /P-7 열기/ }))
     await waitFor(() => expect(screen.getByTestId('url').textContent).toMatch(/^\/cases\/7\?as=/))
   })
 
@@ -116,6 +153,39 @@ describe('메인 화면', () => {
     expect(screen.getByTestId('today')).toBeInTheDocument()
   })
 
+  it('하회_구간_이름표는_표시_줄_위의_전용_줄을_쓰도록_표시된다', async () => {
+    fakeServer(routes())
+    mount()
+    await screen.findByTestId('band')
+    // 띠가 있을 때만 이름표 줄만큼 표시 시작 위치를 내린다(실제 겹침은 브라우저 e2e에서 잰다)
+    expect(document.querySelector('.track-wrap')).toHaveAttribute('data-bands', 'true')
+    expect(css).toMatch(/\.track-wrap\[data-bands="true"\]\s*\{[^}]*--tl-top/)
+  })
+
+  it('넓은_띠에서도_지난_일정은_흐리게_하고_붉은_알림_강조를_뺀다', async () => {
+    fakeServer(routes(EMPTY_TODO, [
+      ev('2026-07-10', '알림', 'P-9 마지막 승인일(내일 기본 거부)', 9, []),
+      ev('2026-07-15', '알림', 'P-1 마지막 승인일', 1, []),
+    ]))
+    mount()
+    await showAll()
+    const past = await screen.findByRole('button', { name: /P-9 마지막 승인일/ })
+    expect(past).toHaveAttribute('data-past', 'true')
+    expect(past).toHaveAttribute('data-alert', 'false')
+    const future = screen.getByRole('button', { name: /P-1 마지막 승인일/ })
+    expect(future).toHaveAttribute('data-past', 'false')
+    expect(future).toHaveAttribute('data-alert', 'true')
+    expect(css).toMatch(/\.dot\[data-past="true"\]\s*\{[^}]*--c-ink-3/)
+  })
+
+  it('승인_대기_줄의_마지막_승인일도_한국어_날짜다', async () => {
+    fakeServer(routes({ ...EMPTY_TODO, '승인 대기': [item(1, 'P-1')] }))
+    mount()
+    const row = (await within(screen.getByRole('region', { name: '할 일' })).findAllByRole('listitem'))[0]
+    expect(row).toHaveTextContent('7월 16일까지')
+    expect(row).not.toHaveTextContent('2026-07-16')
+  })
+
   it('겹치는_일정은_다른_줄로_간다', async () => {
     fakeServer(routes(EMPTY_TODO, [
       ev('2026-07-15', '알림', 'P-1 마지막 승인일', 1, []),
@@ -123,6 +193,7 @@ describe('메인 화면', () => {
       ev('2026-09-30', '집행일', 'P-5 집행일', 5, []),
     ]))
     mount()
+    await showAll()
     const a = await screen.findByRole('button', { name: /P-1 마지막 승인일/ })
     const b = screen.getByRole('button', { name: /P-4 집행일/ })
     const far = screen.getByRole('button', { name: /P-5 집행일/ })
@@ -155,7 +226,7 @@ describe('메인 화면', () => {
       ...routes(),
       'POST /api/clock': { json: { date: '2026-07-13', mode: '시연', actions: [] } },
     })
-    mount()
+    mountPage(<Home />, '/?as=' + encodeURIComponent('마케팅팀장'))
     await screen.findByRole('button', { name: /P-1 확정 기한/ })
     const count = (path: string) => calls.filter((c) => c.method === 'GET' && c.path === path).length
     expect(count(TODO_PATH)).toBe(1)
@@ -174,7 +245,7 @@ describe('메인 화면', () => {
     expect(await screen.findAllByText('불러오지 못했어요')).not.toHaveLength(0)
     fail = false
     await userEvent.click(screen.getAllByRole('button', { name: '다시 시도' })[0])
-    expect(await screen.findByRole('heading', { name: '승인 대기' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '할 일 1건' })).toBeInTheDocument()
   })
   it('일정_표시의_접근_이름에_날짜와_내용이_있다', async () => {
     fakeServer(routes())
@@ -234,10 +305,10 @@ describe('메인 화면', () => {
       ['GET ' + other]: { json: { ...EMPTY_TODO, 작업: [item(2, 'P-2', { title: '물량 입력', due: '2026-07-14' })] } },
     })
     mount()
-    expect(await screen.findByRole('heading', { name: '승인 대기' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '할 일 1건' })).toBeInTheDocument()
     await userEvent.selectOptions(screen.getByLabelText('보는 사람'), 'Masil 대표')
-    expect(await screen.findByRole('heading', { name: '작업' })).toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: '승인 대기' })).toBeNull()
+    expect(await screen.findByText('물량 입력')).toBeInTheDocument()
+    expect(screen.queryByText('P-1')).toBeNull()
     expect(calls.filter((c) => c.path === other)).toHaveLength(1)
   })
 
@@ -250,8 +321,8 @@ describe('메인 화면', () => {
       ],
     }))
     mount()
-    expect((await screen.findByText('내일 기본 거부돼요')).dataset.seal).toBe('true')
-    expect(screen.getByText('참고하세요').dataset.seal).toBe('false')
+    expect((await screen.findAllByText('내일 기본 거부돼요'))[0].closest('details')?.dataset.seal).toBe('true')
+    expect(screen.getAllByText('참고하세요')[0].closest('details')?.dataset.seal).toBe('false')
   })
 
   it('기준일을_바꿔도_묶음_펼침이_유지된다', async () => {
@@ -259,7 +330,7 @@ describe('메인 화면', () => {
       ...routes(EMPTY_TODO, [1, 2, 3].map((n) => ev('2026-07-16', '확정 기한', `P-${n} 확정 기한`, n, []))),
       'POST /api/clock': { json: { date: '2026-07-13', mode: '시연', actions: [] } },
     })
-    mount()
+    mountPage(<Home />, '/?as=' + encodeURIComponent('마케팅팀장'))
     await userEvent.click(await screen.findByRole('button', { name: /확정 기한 3건/ }))
     expect(screen.getByRole('list', { name: /목록/ })).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: '다음 날로' }))
@@ -272,6 +343,7 @@ describe('메인 화면', () => {
     const long = 'P-9 마지막 승인일 내일 기본 거부 됩니다 꼭 확인하세요'
     fakeServer(routes(EMPTY_TODO, [ev('2026-07-15', '알림', long, 9, [])]))
     mount()
+    await showAll()
     const b = await screen.findByRole('button', { name: new RegExp(long) })
     const track = b.parentElement as HTMLElement
     expect(track.style.getPropertyValue('--dot-px')).toBe(`${DOT_PAD_PX}px`)
@@ -295,9 +367,9 @@ describe('메인 화면', () => {
   it('제목_단계가_h1_h2_h3_순서다', async () => {
     fakeServer(routes({ ...EMPTY_TODO, '승인 대기': [item(1, 'P-1')] }))
     mount()
-    await screen.findByRole('heading', { name: '승인 대기' })
+    await screen.findByRole('heading', { name: '할 일 1건' })
     expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument()
-    expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual(['일정', '할 일'])
+    expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual(['할 일 1건', '일정'])
   })
 
   it('스타일: 초점이_잘리지_않고_지난_일정은_투명도를_쓰지_않는다', () => {

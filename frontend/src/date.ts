@@ -28,3 +28,8 @@ const DAY_MS = parse('1970-01-02').getTime() - parse('1970-01-01').getTime() // 
 export function daysBetween(from: string, to: string): number {
   return Math.round((parse(to).getTime() - parse(from).getTime()) / DAY_MS)
 }
+
+/** "7월 3일 (금)" 모양 */
+export function koDateWeekday(iso: string): string {
+  return `${koDate(iso)} (${WEEKDAYS[parse(iso).getUTCDay()]})`
+}

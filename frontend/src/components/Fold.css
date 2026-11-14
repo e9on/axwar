@@ -1,0 +1,17 @@
+.fold { border-bottom: 1px solid var(--c-rule); }
+.doc .fold h3 { margin: 0; font-size: var(--t-3); }
+.fold h3 button {
+  display: grid; grid-template-columns: minmax(7em, 11em) minmax(0, 1fr) var(--s-4); gap: var(--s-3); align-items: baseline;
+  width: 100%; text-align: left; border: 0; background: none; color: inherit; padding: var(--s-3) var(--s-1);
+}
+.fold h3 button:hover { background: var(--c-navy-soft); }
+.fold h3 button:focus-visible { outline: 2px solid var(--c-navy); outline-offset: 2px; }
+.fold h3 button[data-line="true"] { grid-template-columns: minmax(0, 1fr) var(--s-4); }
+.fold .ft { font-weight: var(--w-bold); }
+.fold .fs { font-size: var(--t-2); font-weight: var(--w-medium); color: var(--c-ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fold .chev { color: var(--c-ink-3); text-align: right; }
+.fold .fbody { padding: var(--s-1) var(--s-1) var(--s-4); }
+@media (max-width: 760px) {
+  .fold h3 button { grid-template-columns: minmax(0, 1fr) var(--s-4); }
+  .fold .fs { grid-column: 1; white-space: normal; }
+}

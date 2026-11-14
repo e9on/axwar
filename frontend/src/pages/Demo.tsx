@@ -1,109 +1,77 @@
 import { useRef, useState } from 'react'
-import { api } from '../api'
+import { useNavigate } from 'react-router-dom'
 import { useClock } from '../state/clock'
-import { useDemoRun } from '../state/demoRun'
+import { useStartScene } from '../state/demoScene'
+import { useViewer } from '../state/viewer'
 import { useLoad } from '../state/useLoad'
 import { DEMO_MODE } from '../decisions'
-import { koDate } from '../date'
-import { actionLine } from '../format'
-import type { Scenario, ScenarioStep, StepOutcome } from '../adminTypes'
+import { sceneSummary } from '../copy'
+import { josa } from '../format'
+import type { DemoState, Scenario } from '../adminTypes'
 import FormDialog from '../components/FormDialog'
 import LoadFailed from '../components/LoadFailed'
 import './Admin.css'
 
-/** 단계 하나의 결과를 몇 줄 글로. 서버 응답에 있는 항목만 쓴다 */
-function outcomeLines(o: StepOutcome): string[] {
-  const lines: string[] = []
-  if (o.ignored) lines.push(`저장하지 않았어요: ${o.reason ?? '이미 처리된 요청'}`)
-  if (o.status) lines.push(`건 상태: ${o.status}${o.changed === false ? ' (그대로)' : ''}`)
-  if (o.judgment?.stance) lines.push(`AI 해석: ${o.judgment.stance}`)
-  for (const a of o.actions ?? []) lines.push(actionLine(a))
-  if (lines.length === 0) lines.push('바뀐 것이 없어요')
-  return lines
-}
-
-function who(step: ScenarioStep): string {
-  return step.actor ?? step.dept ?? '—'
-}
-
-function target(step: ScenarioStep): string {
-  return step.plan ?? step.contract ?? ''
-}
-
 function DemoPanel() {
-  const { date, refresh, advance } = useClock()
-  const { run, setRun } = useDemoRun()
+  const { person } = useViewer()
+  const navigate = useNavigate()
+  const start = useStartScene()
   const scenes = useLoad<Scenario[]>('/api/demo/scenarios', [])
+  const position = useLoad<DemoState>('/api/demo/state', [])
   const [asking, setAsking] = useState<Scenario | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const guard = useRef(false)
 
-  const active = scenes.data?.find((s) => s.name === run.scenario) ?? null
-  const script = active?.script ?? []
-  const finished = !!active && run.done >= script.length
-  const dates = Array.from(new Set(script.map((s) => s.date).filter((d): d is string => !!d))).sort()
+  // 진행 위치는 서버가 기억한다(새로고침해도 그대로)
+  const where = position.data
+  const active = scenes.data?.find((s) => s.name === where?.scenario) ?? null
 
-  async function guarded(job: () => Promise<void>, onError?: (message: string) => void) {
+  async function begin(scene: Scenario) {
     if (guard.current) return
     guard.current = true
     setBusy(true)
     setError(null)
     try {
-      await job()
+      await start(scene.name, scene.script ?? [])
     } catch (e) {
-      const message = (e as Error).message
-      setError(message)
-      onError?.(message)
+      setError((e as Error).message)
     } finally {
       guard.current = false
       setBusy(false)
     }
   }
 
-  const reset = (scene: Scenario) =>
-    guarded(
-      async () => {
-        await api.post('/api/demo/reset', { scenario: scene.name })
-        setRun({ scenario: scene.name, done: 0, outcomes: [] })
-        setAsking(null)
-        await refresh()
-      },
-      () => undefined,
-    )
-
-  const playOne = () =>
-    guarded(async () => {
-      if (!active || finished) return
-      const out = await api.post<StepOutcome>('/api/demo/play', { step: script[run.done] })
-      setRun((r) => ({ ...r, done: r.done + 1, outcomes: [...r.outcomes, out] }))
-      await refresh()
-    })
-
-  const playAll = () =>
-    guarded(async () => {
-      if (!active || finished) return
-      try {
-        if (run.done === 0) {
-          // 처음부터면 서버가 대본을 한 번에 돌린다
-          const outs = await api.post<StepOutcome[]>('/api/demo/run', { scenario: active.name })
-          setRun((r) => ({ ...r, done: outs.length, outcomes: outs }))
-        } else {
-          // 이미 진행했으면 남은 단계를 차례로(처음부터 다시 돌리면 같은 일이 두 번 일어난다)
-          for (let i = run.done; i < script.length; i++) {
-            const out = await api.post<StepOutcome>('/api/demo/play', { step: script[i] })
-            setRun((r) => ({ ...r, done: i + 1, outcomes: [...r.outcomes, out] }))
-          }
-        }
-      } finally {
-        await refresh() // 중간에 멈춰도 지금까지의 날짜로 다른 화면을 다시 읽게
-      }
-    })
+  const toMain = () => navigate('/' + (person ? `?as=${encodeURIComponent(person.name)}` : ''))
 
   return (
     <main className="admin">
       <h1>시연 조작판</h1>
-      <p className="lead">장면을 고르면 시연 데이터를 지우고 처음부터 시작해요. 한 단계씩 또는 끝까지 진행하면 메인과 건 상세가 새 기준일로 다시 읽혀요.</p>
+      <p className="lead">장면을 고르고 시작하면 메인 화면으로 가요. 날짜는 메인에서 하루씩 넘기고, 결정할 때 멈춰요.</p>
+
+      {active && (
+        <section aria-label="진행">
+          <h2>지금 진행 중인 장면: {active.title}</h2>
+          <p className="muted">메인에서 진행하세요.</p>
+          <details className="scene-more">
+            <summary>자세히</summary>
+            <p className="scene-desc">{active.description}</p>
+          </details>
+          <div className="bar-tools">
+            <button type="button" className="btn pri" onClick={toMain}>
+              메인으로
+            </button>
+            <button type="button" className="btn deny" disabled={busy} onClick={() => setAsking(active)}>
+              처음부터
+            </button>
+          </div>
+        </section>
+      )}
+      {error && !asking && (
+        <p className="err" role="alert">
+          {error}
+        </p>
+      )}
 
       <section aria-label="장면 목록">
         <h2>장면</h2>
@@ -119,88 +87,16 @@ function DemoPanel() {
           <ul className="scenes">
             {scenes.data.map((s) => (
               <li key={s.name}>
-                <button type="button" className="scene" aria-pressed={s.name === run.scenario} disabled={busy} onClick={() => setAsking(s)}>
+                <button type="button" className="scene" aria-pressed={s.name === where?.scenario} disabled={busy} onClick={() => setAsking(s)}>
                   <span className="k">{s.title}</span>
-                  <span className="sub" title={s.description}>{s.description}</span>
+                  <span className="sub">{s.summary?.trim() || sceneSummary(s.name, s.description)}</span>
+                  <span className="go-start">시작</span>
                 </button>
               </li>
             ))}
           </ul>
         )}
       </section>
-
-      {active && (
-        <section aria-label="진행">
-          <h2>{active.title}</h2>
-          <p className="scene-desc">{active.description}</p>
-          <div className="bar-tools">
-            <button type="button" className="btn pri" disabled={busy || finished} onClick={playOne}>
-              한 단계 진행
-            </button>
-            <button type="button" className="btn" disabled={busy || finished} onClick={playAll}>
-              끝까지
-            </button>
-            <button type="button" className="btn deny" disabled={busy} onClick={() => setAsking(active)}>
-              처음부터
-            </button>
-            <span className="muted" role="status">
-              {busy ? '진행 중…' : `${run.done} / ${script.length}단계 진행`}
-            </span>
-          </div>
-          {error && (
-            <p className="err" role="alert">
-              {error}
-            </p>
-          )}
-
-          {dates.length > 0 && (
-            <div className="bar-tools">
-              <span className="muted">기준일 바로 이동</span>
-              <span className="dates">
-                {dates.map((d) => (
-                  <button
-                    key={d}
-                    type="button"
-                    className="btn small"
-                    disabled={busy || (!!date && d < date)}
-                    aria-label={`기준일을 ${d}로 이동`}
-                    onClick={() => advance(d)}
-                  >
-                    {koDate(d)}
-                  </button>
-                ))}
-              </span>
-            </div>
-          )}
-
-          <ul className="ledger steps" aria-label="대본 단계">
-            {script.map((s, i) => {
-              const out = run.outcomes[i]
-              const next = i === run.done
-              return (
-                <li key={i} data-next={next}>
-                  <span className="no">{i + 1}</span>
-                  <div>
-                    <span className="k">{s.action}</span>
-                    {out && <span className="state">진행함</span>}
-                    {next && !finished && <span className="next">다음</span>}
-                    <div className="sub">
-                      {[s.date ? s.date : '날짜 그대로', who(s), target(s)].filter(Boolean).join(' · ')}
-                    </div>
-                    {out && (
-                      <ul className="result">
-                        {outcomeLines(out).map((line, j) => (
-                          <li key={j}>{line}</li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                </li>
-              )
-            })}
-          </ul>
-        </section>
-      )}
 
       {asking && (
         <FormDialog
@@ -209,14 +105,14 @@ function DemoPanel() {
           tone="deny"
           busy={busy}
           error={error}
-          onConfirm={() => reset(asking)}
+          onConfirm={() => begin(asking)}
           onCancel={() => {
             setAsking(null)
             setError(null)
           }}
         >
           <p>
-            <b>{asking.title}</b>을(를) 시작하면 시연 데이터가 지워져요. 지금까지 진행한 것은 사라지고 장면 처음으로 돌아가요.
+            <b>{asking.title}</b>{josa(asking.title, '을').slice(asking.title.length)} 시작하면 시연 데이터가 지워져요. 지금까지 진행한 것은 사라지고 장면 처음으로 돌아가요.
           </p>
         </FormDialog>
       )}

@@ -26,7 +26,7 @@
 .tbl th, .tbl td { text-align: left; padding: var(--s-2) var(--s-3) var(--s-2) 0; border-bottom: 1px solid var(--c-rule); font-weight: var(--w-regular); vertical-align: top; }
 .tbl thead th { font-size: var(--t-1); color: var(--c-ink-3); border-bottom: 2px solid var(--c-rule-strong); }
 .tbl tbody th { font-weight: var(--w-bold); }
-.tbl .over { color: var(--c-seal); font-weight: var(--w-medium); }
+.tbl .over, .obs .over { color: var(--c-seal); font-weight: var(--w-medium); }
 .stop { margin-top: var(--s-2); }
 .decided { background: var(--c-warn-soft); border: 1px solid var(--c-warn); padding: var(--s-2) var(--s-3); }
 
