@@ -9,7 +9,7 @@ from app import config, policy
 from app.ai.providers import BudgetedProvider, FakeProvider
 from app.engine import flow, scenarios
 from app.calc import inventory
-from app.engine.flow import Engine
+from app.engine.flow import Engine, _decide_by
 from app.store.db import MODE_OPERATION, open_db
 
 # 이 파일의 대부분은 승인·기한·등록부 흐름(11a)을 본다. 사용자 결정 2(모든 건이 재고 장부를 거침) 뒤에는 시연 데이터의 라인 여유가 0이라
@@ -251,7 +251,7 @@ def test_기한_전_조기경고는_남은_승인권자_본인에게_한번만(s
     eng, _, cid = seeded(store, ACCEPT)
     eng.play(steps()[0])
     early = policy.get("deadline.early_warning_days")
-    deadline = date.fromisoformat(store.get_case(cid)["facts"]["deadline"])
+    deadline = date.fromisoformat(_decide_by(store.get_case(cid)["facts"])[0])  # 결재 기한(확정 기한과 1차 집행일 중 이른 날)
     buffer = policy.get("deadline.buffer_days")
     run = deadline - timedelta(days=buffer)  # 기본 거부 실행일: 조기 경고 창은 여기서 센다
     acts = eng.advance(run - timedelta(days=early))
@@ -550,7 +550,7 @@ def test_운영모드에서는_역할_이름으로_사람을_대신할_수_없�
 def test_경고_뒤_승인권자가_바뀌면_새_대상에게_다시_경고(store):
     eng, _, cid = seeded(store, ACCEPT)
     eng.play(steps()[0])
-    deadline = date.fromisoformat(store.get_case(cid)["facts"]["deadline"])
+    deadline = date.fromisoformat(_decide_by(store.get_case(cid)["facts"])[0])
     eng.advance(deadline - timedelta(days=policy.get("deadline.early_warning_days")))
     store.change_policy("approval.total_limit_krw", 1000000000, "관리자", "시험")
     acts = eng.advance(store.get_clock() + timedelta(days=1))

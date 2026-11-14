@@ -207,13 +207,13 @@ def test_장면_1_PLAN_014의_엔진_판정(store):
     assert ("집행일", "2026-07-20") in kinds and ("확정 기한", "2026-08-14") in kinds
 
 
-def test_승인을_미루면_엔진은_집행일이_아니라_확정_기한으로_경고하고_기본_거부한다(store):
+def test_승인을_미루면_1차_집행일_기준으로_경고하고_기본_거부한다(store):
     c, _ = fake_client(store)
     reset(c, "scenario_1")
     adv(c, "2026-07-03")
-    out = adv(c, "2026-07-25")  # 집행일(7/20)이 지나도 승인 대기 그대로 — 엔진 기한 규칙은 확정 기한(8/14) 기준
-    assert case(c, "PLAN-014")["status"] == "승인 대기" and not out["actions"]
-    out = adv(c, "2026-08-11")  # 마지막 승인일: 경고 뒤 기본 거부
+    out = adv(c, "2026-07-16")  # 마지막 승인일(집행일 7/20의 기본 거부 실행일 7/17 전날): 아직 승인 대기, 알림만
+    assert case(c, "PLAN-014")["status"] == "승인 대기" and any(a.get("action") == "마감알림" for a in out["actions"])
+    out = adv(c, "2026-07-17")
     assert case(c, "PLAN-014")["status"] == "확정 보류"
     assert any(a.get("action") == "기본거부" for a in out["actions"])
 
@@ -244,3 +244,24 @@ def test_화면에서_상신하면_시연이_다음_결정을_기다린다(store
               json={"actor": "마케팅팀장", "stage": "1차", "opinion": "승인 권고", "reason": "대표 확인"}))
     w = ok(c.get("/api/demo/state"))["waiting"]
     assert w["action"] == "결정" and w["actor"] == "Masil 대표"
+
+
+# ---- 1차 결재 기한: 확정 기한과 1차 집행일 중 이른 날 기준(사용자 결정 2026-11-14)
+
+def test_집행일이_확정_기한보다_앞이면_결재_기한은_집행일_기준(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_1")  # PLAN-014: 집행 7/20, 확정 기한 8/14
+    cid = case(c, "PLAN-014")["id"]
+    d = ok(c.get(f"/api/cases/{cid}?viewer=Masil 대표"))
+    assert d["deadline"] == "2026-08-14"  # 확정 기한 표시는 그대로
+    assert (d["deny_date"], d["approval_deadline"]) == ("2026-07-17", "2026-07-16")
+    adv(c, "2026-07-17")
+    assert case(c, "PLAN-014")["status"] == "확정 보류"
+
+
+def test_확정_기한이_집행일보다_앞이면_결재_기한은_그대로(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_2")  # PLAN-001: 집행 7/27, 확정 기한 7/17
+    cid = case(c, "PLAN-001")["id"]
+    d = ok(c.get(f"/api/cases/{cid}?viewer=그룹 CEO"))
+    assert (d["deadline"], d["deny_date"], d["approval_deadline"]) == ("2026-07-17", "2026-07-14", "2026-07-13")
