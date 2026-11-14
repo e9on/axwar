@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>시안 B 일정판</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Gothic+A1:wght@400;500;700;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#EEF2F6; --surface:#FFFFFF; --ink:#0F2235; --ink-2:#465A70; --ink-3:#7C8DA0; --line:#D3DCE6;
+  --blue:#1D5FD1; --blue-soft:#E3ECFB; --band:#F2B544; --band-ink:#7A5200; --alarm:#C2410C; --alarm-soft:#FDECE3; --ok:#1A7F37;
+  --b-src:#1f6feb; --b-calc:#8250df; --b-asm:#d4a72c; --b-reply:#1a7f37; --b-op:#6e7781; --b-ai:#cf222e;
+  --f:'Gothic A1',sans-serif;
+  --t-1:12px; --t-2:13.5px; --t-3:15px; --t-4:18px; --t-5:22px; --t-6:30px;
+  --s-1:4px; --s-2:8px; --s-3:12px; --s-4:16px; --s-5:24px; --s-6:32px; --s-7:48px; --s-8:64px;
+  --r-1:6px; --r-2:10px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--f);font-size:var(--t-2);line-height:1.6;font-variant-numeric:tabular-nums}
+button{font:inherit;cursor:pointer}
+button:focus-visible,select:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+.top{display:flex;align-items:center;gap:var(--s-4);padding:var(--s-3) var(--s-5);background:var(--ink);color:#fff}
+.top b{font-weight:800;font-size:var(--t-3)}
+.top .sp{margin-left:auto}
+.top select{font:inherit;background:transparent;color:#fff;border:1px solid #4A6077;border-radius:var(--r-1);padding:2px var(--s-2)}
+.top select option{color:var(--ink)}
+.step{display:flex;align-items:center;gap:var(--s-2)}
+.step button{border:1px solid #4A6077;background:transparent;color:#fff;border-radius:var(--r-1);padding:0 var(--s-2)}
+/* 일정 띠 */
+.tl{background:var(--surface);border-bottom:1px solid var(--line);padding:var(--s-4) var(--s-5) var(--s-5)}
+.tl-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:var(--s-3)}
+.tl-head h2{font-size:var(--t-3);font-weight:700}
+.tl-head span{color:var(--ink-3);font-size:var(--t-1)}
+.track{position:relative;height:150px}
+.months{position:absolute;inset:0 0 auto 0;display:grid;grid-template-columns:31fr 31fr 30fr;color:var(--ink-3);font-size:var(--t-1)}
+.months div{border-left:1px solid var(--line);padding-left:var(--s-1);height:150px}
+.band{position:absolute;top:22px;bottom:0;left:21.7%;width:35.9%;background:repeating-linear-gradient(135deg,rgba(242,181,68,.28) 0 6px,rgba(242,181,68,.12) 6px 12px);border-left:2px solid var(--band);border-right:2px solid var(--band)}
+.band span{position:absolute;top:var(--s-1);left:var(--s-2);font-size:var(--t-1);font-weight:700;color:var(--band-ink)}
+.today{position:absolute;top:18px;bottom:0;left:12.0%;border-left:2px solid var(--ink)}
+.today span{position:absolute;top:-2px;left:var(--s-1);font-size:var(--t-1);font-weight:700;background:var(--ink);color:#fff;padding:0 var(--s-1);border-radius:3px;white-space:nowrap}
+.row{position:absolute;left:0;right:0;height:26px}
+.row i{position:absolute;top:8px;height:2px;background:var(--line)}
+.dot{position:absolute;top:2px;transform:translateX(-50%);border:0;border-radius:var(--r-1);font-size:11px;font-weight:700;padding:1px 6px;white-space:nowrap;background:var(--surface);border:1px solid var(--line);color:var(--ink-2)}
+.dot.mine{background:var(--blue);border-color:var(--blue);color:#fff}
+.dot.deny{background:var(--alarm);border-color:var(--alarm);color:#fff}
+.dot.exec{background:var(--surface);border:2px solid var(--ink);color:var(--ink)}
+.r1{top:50px}.r2{top:80px}.r3{top:110px}
+/* 아래 두 칸 */
+.body{display:grid;grid-template-columns:320px 1fr 340px;gap:0;align-items:start}
+.todo{padding:var(--s-5)}
+.todo h3{font-size:var(--t-2);color:var(--ink-2);margin:var(--s-5) 0 var(--s-2)}
+.todo h3:first-child{margin-top:0}
+.todo button{display:flex;justify-content:space-between;gap:var(--s-2);width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--line);padding:var(--s-2) 0;color:var(--ink)}
+.todo button em{font-style:normal;color:var(--ink-3);white-space:nowrap}
+.todo button.on{color:var(--blue);font-weight:700}
+.todo button.al em{color:var(--alarm);font-weight:700}
+.case{background:var(--surface);border-left:1px solid var(--line);border-right:1px solid var(--line);padding:var(--s-5) var(--s-6);min-height:640px}
+.case .kind{color:var(--ink-3);font-size:var(--t-1)}
+.case h1{font-size:var(--t-5);font-weight:800;line-height:1.3;margin:var(--s-1) 0 var(--s-3)}
+.kv{display:grid;grid-template-columns:repeat(3,auto);justify-content:start;gap:0 var(--s-6);margin-bottom:var(--s-4)}
+.kv dt{font-size:var(--t-1);color:var(--ink-3)} .kv dd{font-size:var(--t-4);font-weight:700}
+h4{font-size:var(--t-3);font-weight:700;margin:var(--s-5) 0 var(--s-2)}
+table{width:100%;border-collapse:collapse}
+td,th{padding:var(--s-2) var(--s-1);border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{font-weight:500;color:var(--ink-3);font-size:var(--t-1)}
+td.n{text-align:right;white-space:nowrap;font-weight:700}
+.lamp{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:var(--s-1)}
+.lamp.r{background:var(--alarm)} .lamp.y{background:var(--band)}
+.b{display:inline-block;font-size:11px;font-weight:700;color:#fff;padding:0 6px;border-radius:3px;margin-right:var(--s-1);vertical-align:1px}
+.b.src{background:var(--b-src)} .b.calc{background:var(--b-calc)} .b.asm{background:var(--b-asm);color:#222} .b.reply{background:var(--b-reply)} .b.op{background:var(--b-op)} .b.ai{background:var(--b-ai)}
+.limit{font-size:var(--t-1);color:var(--ink-3);margin-top:var(--s-2)}
+.side{position:sticky;top:0;padding:var(--s-5)}
+.due{background:var(--alarm-soft);border-radius:var(--r-2);padding:var(--s-4)}
+.due strong{display:block;font-size:var(--t-6);font-weight:800;color:var(--alarm);line-height:1.1}
+.due p{color:var(--ink-2);margin-top:var(--s-1)}
+.side h4:first-of-type{margin-top:var(--s-5)}
+.side p.rule+p.rule{margin-top:var(--s-2)}
+.brief{margin-top:var(--s-2);color:var(--ink-2)}
+.conf{display:block;font-size:var(--t-1);color:var(--ink-3);margin-top:var(--s-1)}
+.acts{display:grid;gap:var(--s-2);margin-top:var(--s-5)}
+.btn{border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:var(--r-1);padding:var(--s-2) var(--s-3);font-weight:700}
+.btn.pri{background:var(--blue);border-color:var(--blue);color:#fff}
+.btn.deny{color:var(--alarm)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:var(--s-2)}
+@media (max-width:1100px){.body{grid-template-columns:1fr 340px}.todo{display:none}}
+@media (max-width:760px){
+  .body{grid-template-columns:1fr}
+  .case{border:0;padding:var(--s-4)}
+  .side{position:static;padding:var(--s-4)}
+  .track{overflow-x:auto}
+  .tl{padding:var(--s-3) var(--s-4)}
+  .top{flex-wrap:wrap;padding:var(--s-2) var(--s-4)}
+  .kv{grid-template-columns:repeat(2,auto)}
+  .dot{font-size:10px;padding:0 4px}
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <b>캠페인 집행 일정판</b>
+  <label class="sp">보는 사람 <select><option>그룹 CEO</option><option>Masil 대표</option></select></label>
+  <div class="step"><button aria-label="하루 전">‹</button><span>2026-07-12 (일)</span><button aria-label="하루 뒤">›</button></div>
+</header>
+<section class="tl" aria-label="7월에서 9월 일정">
+  <div class="tl-head"><h2>7월부터 9월까지</h2><span>파란 표시가 내 차례입니다</span></div>
+  <div class="track">
+    <div class="months"><div>7월</div><div>8월</div><div>9월</div></div>
+    <div class="band"><span>현금 하회 구간 7/21~8/22 (CEO 승인 우선)</span></div>
+    <div class="today"><span>오늘 7/12</span></div>
+    <div class="row r1"><button class="dot mine" style="left:13.0%">7/13 마지막 승인일</button><button class="dot exec" style="left:28.3%">7/27 1차 집행</button></div>
+    <div class="row r2"><button class="dot deny" style="left:14.1%">7/14 기본 거부</button></div>
+    <div class="row r3"><button class="dot" style="left:17.4%">7/17 확정 기한</button><button class="dot" style="left:52.2%">8/18 기초 입고</button><button class="dot" style="left:66.3%">8/31 계약 만료</button><button class="dot" style="left:78.3%">9/11 확정 기한 8건</button></div>
+  </div>
+</section>
+<div class="body">
+  <nav class="todo" aria-label="할 일">
+    <h3>승인 대기</h3>
+    <button class="on">혜인 기초·라이브 확대<em>7/14 거부</em></button>
+    <button>혜인 색조·마켓플레이스<em>7/14 거부</em></button>
+    <button>혜인 전속계약 갱신<em>7/14 거부</em></button>
+    <h3>알림</h3>
+    <button class="al">내일이 마지막 승인일<em>3건</em></button>
+    <button>PLAN-004 집행일 8/10으로<em>어제</em></button>
+  </nav>
+  <article class="case">
+    <span class="kind">PLAN-001 캠페인 확대 기안</span>
+    <h1>혜인 기초 라이브 방송 확대</h1>
+    <dl class="kv"><div><dt>요청액</dt><dd>18,962,703원</dd></div><div><dt>집행일</dt><dd>7/27</dd></div><div><dt>확정 기한</dt><dd>7/17</dd></div></dl>
+    <h4>위험 신호</h4>
+    <table>
+      <thead><tr><th>지표</th><th class="n">값</th><th>근거</th></tr></thead>
+      <tbody>
+        <tr><td><span class="lamp r"></span>실질 ROAS</td><td class="n">−0.198 (9위/10)</td><td><span class="b calc">계산</span>공헌이익 ÷ 마케팅비</td></tr>
+        <tr><td><span class="lamp r"></span>광고비 비중</td><td class="n">40.6% (1위)</td><td><span class="b calc">계산</span>성과 순위와 반대</td></tr>
+        <tr><td><span class="lamp y"></span>단순변심 반품률</td><td class="n">3.58% / 1.75%</td><td><span class="b calc">계산</span>다른 인플루언서 대비</td></tr>
+        <tr><td><span class="lamp y"></span>1차 수량</td><td class="n">1,800 / 2,600개</td><td><span class="b reply">회신</span>물류 일 처리량</td></tr>
+      </tbody>
+    </table>
+    <p class="limit">측정 한계: 마지막 클릭 후 7일 기준이라 클릭 없이 나중에 산 구매는 빠지고, 광고 없이도 샀을 구매는 들어갑니다.</p>
+    <h4>비용 분해 (표본 금액)</h4>
+    <table><tbody>
+      <tr><td>매출(GMV)</td><td class="n">422,424,676원</td></tr>
+      <tr><td>마케팅 전 공헌이익</td><td class="n">248,666,838원</td></tr>
+    </tbody></table>
+  </article>
+  <aside class="side" aria-label="결정">
+    <div class="due"><strong>7/14 기본 거부</strong><p>마지막 승인일은 내일 7/13입니다.</p></div>
+    <h4>결재선</h4>
+    <p class="rule"><span class="b calc">계산</span>집행일이 하회 구간 안이라 그룹 CEO 승인</p>
+    <p class="rule"><span class="b src">원본</span>성과와 반대인 확대라 이사회 의결 추가</p>
+    <h4>AI 브리핑</h4>
+    <p class="brief"><span class="b ai">AI</span>1차 1,800개만 열고 나머지 800개는 입고 뒤 2차로 나누는 분할 승인이 손실을 줄입니다.<span class="conf">확신도 0.82, 반대 근거: 라이브는 클릭 없는 구매가 많음</span></p>
+    <div class="acts">
+      <button class="btn pri">승인</button>
+      <button class="btn">분할 승인 (1차 1,800개)</button>
+      <div class="two"><button class="btn">위로 올리기</button><button class="btn deny">거절</button></div>
+    </div>
+  </aside>
+</div>
+</body>
+</html>

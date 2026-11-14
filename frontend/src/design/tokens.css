@@ -1,0 +1,128 @@
+/* 디자인 토큰 — 방향: A 결재판 + B 일정 띠 (작업노트/디자인_방향.md, 사용자 결정 2026-11-12)
+   화면의 색·글꼴·크기·간격·모서리·그림자는 이 파일의 값만 쓴다. */
+
+:root {
+  /* 색: 종이와 글씨 */
+  --c-paper: #F6F7F9;        /* 화면 바탕 */
+  --c-sheet: #FFFFFF;        /* 서류·표 바탕 */
+  --c-ink: #1B2433;          /* 본문 글씨, 서류 굵은 선 */
+  --c-ink-2: #4A5568;        /* 보조 글씨 */
+  --c-ink-3: #636D7D;        /* 흐린 글씨(흰 바탕 대비 4.5:1 이상) */
+  --c-rule: #D6DBE2;         /* 가는 선 */
+  --c-rule-strong: #1B2433;  /* 결재란·서류 머리 선 */
+
+  /* 색: 뜻이 있는 색 */
+  --c-navy: #23408E;         /* 주 버튼, 선택, 초점 */
+  --c-navy-soft: #E6ECF7;
+  --c-seal: #B42318;         /* 도장·거부·기본 거부 남은 날. 다른 데 쓰지 않음 */
+  --c-seal-soft: #FBEDEB;
+  --c-warn: #8A5200;         /* 주의, 내 차례 칸 글씨 */
+  --c-warn-soft: #FFF4E0;    /* 내 차례 칸 바탕 */
+  --c-ok: #1A7F37;           /* 좋음 */
+  --c-band: #E9A23B;         /* 현금 하회 구간 빗금 */
+  --c-band-ink: #6B4500;
+
+  /* 근거 배지 6색 — 설계 PDF(tools/md2pdf.py)와 같은 색 */
+  --c-b-src: #1F6FEB;   /* 원본 */
+  --c-b-calc: #8250DF;  /* 계산 */
+  --c-b-asm: #D4A72C;   /* 가정 (글씨는 어두운 색) */
+  --c-b-reply: #1A7F37; /* 회신 */
+  --c-b-op: #6E7781;    /* 의견 */
+  --c-b-ai: #CF222E;    /* AI */
+  --c-b-ink: #FFFFFF;   /* 배지 글씨(가정 배지만 어두운 글씨) */
+  --c-b-asm-ink: #1B2433;
+
+  /* 글꼴 */
+  --f-doc: 'Gowun Batang', serif;            /* 서류 제목, 큰 남은 날 숫자 */
+  --f-ui: 'IBM Plex Sans KR', sans-serif;    /* 본문, 표, 숫자(고정폭 숫자) */
+
+  /* 글자 크기 6단계 */
+  --t-1: 12px;  /* 표 머리, 측정 한계, 작은 설명 */
+  --t-2: 14px;  /* 본문 */
+  --t-3: 15px;  /* 강조 본문, 버튼 */
+  --t-4: 18px;  /* 절 제목 */
+  --t-5: 24px;  /* 서류 제목 */
+  --t-6: 32px;  /* 남은 날 */
+  --lh-body: 1.6;
+  --lh-title: 1.3;
+  --w-regular: 400;
+  --w-medium: 500;
+  --w-bold: 600;
+  --w-heavy: 700;   /* 서류 제목(고운바탕) */
+
+  /* 간격 8단계 */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+  --s-8: 64px;
+
+  /* 근거 표 열 너비와 대화창 크기 */
+  --col-lv: 5.5em;       /* 수준 글자 열 */
+  --col-name: 8em;       /* 이름 열 최소 */
+  --col-num: 6em;        /* 값 열 최소 */
+  --col-cmp: 10em;       /* 비교·근거 열 최소 */
+  --col-chev: 1em;       /* 펼침 표시 열 */
+  --dlg-w: 520px;        /* 대화창 너비 */
+  --dlg-h: 90vh;         /* 대화창 최대 높이 */
+  --bw-1: 1px;           /* 가는 선 두께(화면 읽기 전용 글자 포함) */
+
+  /* 모서리 */
+  --r-0: 0;     /* 서류, 결재란 */
+  --r-1: 3px;   /* 배지 */
+  --r-2: 4px;   /* 버튼, 입력칸 */
+
+  /* 그림자: 떠 있는 것(펼친 메뉴, 알림)에만 */
+  --sh-float: 0 8px 24px rgba(27, 36, 51, 0.16);
+
+  /* 움직임 */
+  --m-fast: 120ms;
+  --m-open: 180ms;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --c-paper: #151A22;
+    --c-sheet: #1C222C;
+    --c-ink: #E6E9EE;
+    --c-ink-2: #B3BBC7;
+    --c-ink-3: #959EAC;
+    --c-rule: #2E3644;
+    --c-rule-strong: #C9D0DA;
+    --c-navy: #8FA8F0;
+    --c-navy-soft: #243150;
+    --c-seal: #F07A6E;
+    --c-seal-soft: #3A1E1C;
+    --c-warn: #E7B45C;
+    --c-warn-soft: #3A2C12;
+    --c-ok: #57C27A;
+    --c-band-ink: #F0C27A;
+    --sh-float: 0 8px 24px rgba(0, 0, 0, 0.5);
+  }
+}
+
+:root[data-theme="dark"] {
+  --c-paper: #151A22;
+  --c-sheet: #1C222C;
+  --c-ink: #E6E9EE;
+  --c-ink-2: #B3BBC7;
+  --c-ink-3: #959EAC;
+  --c-rule: #2E3644;
+  --c-rule-strong: #C9D0DA;
+  --c-navy: #8FA8F0;
+  --c-navy-soft: #243150;
+  --c-seal: #F07A6E;
+  --c-seal-soft: #3A1E1C;
+  --c-warn: #E7B45C;
+  --c-warn-soft: #3A2C12;
+  --c-ok: #57C27A;
+  --c-band-ink: #F0C27A;
+  --sh-float: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --m-fast: 0ms; --m-open: 0ms; }
+}
