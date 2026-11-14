@@ -1593,7 +1593,7 @@ class Engine:
         last = max(inventory.line_last_inbound(s["line"]), first)
         path = inventory.spare_path(s["line"], first, last)
         found = next(((d, q) for d, q in path if q >= qty), None)
-        base = f"SCM가 안전재고 사용을 거절했고 입고({_md(restock)}) 다음 날부터 장부를 돌려도"
+        base = f"SCM이 안전재고 사용을 거절했고 입고({_md(restock)}) 다음 날부터 장부를 돌려도"
         if found is None:
             best = max(path, key=lambda x: x[1]) if path else None
             peak = f" (가장 큰 여유 {best[1]:,}개, {_md(best[0])})" if best else ""
