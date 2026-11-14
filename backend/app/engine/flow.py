@@ -3027,7 +3027,7 @@ class Engine:
             if c and e["detail"]["target"] == role and c["status"] == S_PHASE2_LOCK:
                 out["알림"].append({**self._item(c), "kind": EV_P2_PREVIEW, "stage": "2차", "text": e["detail"]["text"]})
         for r in self.store.all_requests(dept=role):
-            if r["status"] != R_DONE and r["case_id"] in cases:
+            if r["status"] == R_WAIT and r["case_id"] in cases:  # 사람 확인 중인 요청은 '회신 사람 확인' 작업 한 줄로 보인다
                 out["회신 대기"].append({**self._item(cases[r["case_id"]]), "request_id": r["id"], "text": r["text"],
                                       "request_status": r["status"], "attach_required": r["attach_required"]})
         for t in self.store.all_tasks(dept=role):
