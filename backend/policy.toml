@@ -16,6 +16,11 @@ value = 1000000000
 source = "approval_authority_policy.md 인플루언서 연간 전속계약 체결·갱신"
 description = "전속계약 연 금액이 이 금액을 넘으면 CEO·이사회, 이하면 Masil 대표"
 
+[approval.wait_for_scm]
+value = "예"
+source = "사용자 결정(2026-11-14): 임시 분할안으로 승인했다가 SCM 회신으로 분할안이 바뀌어 다시 승인하는 일이 없게"
+description = "SCM 안전재고 회신을 기다리는 동안 승인·분할 승인을 막을지(예/아니오). 아니오면 먼저 승인할 수 있고, 회신으로 분할안이 바뀌면 받은 승인을 무효로 하고 재승인을 받는다. 거절은 언제나 가능"
+
 [deadline.buffer_days]
 value = 3
 source = "사용자 지정(2026-11-12): 기한 당일 통보는 상대에게 급하므로 3일 여유"
@@ -33,7 +38,7 @@ description = "담당에게 첫 경고(또는 작업 생성) 뒤 이 일수가 �
 
 [split.return_observe_days]
 value = 28
-source = "가정: 원본에 없음. 1차 집행 뒤 반품이 거의 나타나는 기간을 4주로 봄"
+source = "원본 mkt_returns_ms.csv 1,719건 계산: 주문일부터 환불 완료까지 91.6%가 28일 안(중앙값 18일, 95%는 30일). 원본에 정해진 관찰 기간은 없음"
 description = "2차 집행 전 1차 반품을 관찰하는 기간(일)"
 
 [split.stop_z]

@@ -309,14 +309,21 @@ def _fake_briefing(f: dict[str, str]) -> str:
     rule, bad = f.get("규칙 근거", ""), f.get("지표 판정") == "반대 근거 있음"
     split = re.search(r"1차 수량 ([\d,]+); .*2차 수량 ([\d,]+)", f.get("분할안", ""))
     contract = f.get("종류") == "계약"
+    escalate = not split and not bad and f.get("전결 건") == "예" and bool(f.get("참고 위험 신호"))
     if split:
         rec = "분할 승인으로 결재하길 권해요."
     elif bad:
         rec = "거절하는 쪽을 먼저 검토하길 권해요."
+    elif escalate:
+        rec = "전결하기보다 위로 올려 상급자 확인을 받길 권해요."
     else:
         rec = "승인하길 권해요."
     lines = [f"권고: {rec}"]
-    lines += [f"이유: {w}" for w in _fake_reasons(f, rule, bad, contract)]
+    reasons = _fake_reasons(f, rule, bad, contract)
+    if escalate:  # 실적 줄 하나 + 참고 신호 줄(예상 매출은 승인 근거가 될 수 없다는 규정)
+        reasons = reasons[:1] + ["기안의 예상 매출이 지금까지 가장 잘 번 인플루언서의 실적보다도 높게 잡혀 있어요.",
+                                 "예상 매출은 승인 근거가 될 수 없어 실적과 따로 상급자가 확인하는 편이 안전해요."]
+    lines += [f"이유: {w}" for w in reasons]
     lines += [f"주의: {c}" for c in _fake_cares(f, split)]
     return "\n".join(lines)
 
