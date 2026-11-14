@@ -40,7 +40,9 @@ def make_split(
         observe_days = policy.get("split.return_observe_days")
     phase1 = max(0, min(logistics_limit, spare_stock, requested_qty))
     phase2 = requested_qty - phase1
-    candidates = [restock_date + timedelta(days=1), phase1_date + timedelta(days=observe_days)]
+    # 반품 관찰이 끝난 뒤 승인할 여유(기본 거부 여유 + 최소 승인 일수)까지 둔 날 이후로 계획한다(중간에 2차 집행일을 미루지 않게)
+    approval_room = policy.get("deadline.buffer_days") + policy.get("phase2.min_approval_days")
+    candidates = [restock_date + timedelta(days=1), phase1_date + timedelta(days=observe_days + approval_room)]
     if windows:
         candidates.append(max(w.end for w in windows) + timedelta(days=1))
     p2_date: date | None = max(candidates) if phase2 > 0 else None

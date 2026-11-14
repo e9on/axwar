@@ -239,10 +239,9 @@ def test_장면2는_2차_승인_마감_8_24_기본_거부_8_25_집행_8_28(store
     eng, cid = to_wait(store)
     f = facts(store, cid)
     assert f["phase2_deadline"] == "2026-08-28" and f["phase2"]["date"] == "2026-08-28"
-    assert f["phase2_date"] == "2026-08-28" and f["phase2_planned_date"] == "2026-08-24"
+    assert f["phase2_date"] == "2026-08-28" and "phase2_planned_date" not in f  # 처음부터 8/28로 계획(미루지 않음)
     ev = store.events(cid, kind="2차집행일연기")
-    assert len(ev) == 1 and "2차 집행일 연기(승인 기간 확보)" in ev[0]["detail"]["text"]
-    assert (ev[0]["detail"]["from"], ev[0]["detail"]["to"]) == ("2026-08-24", "2026-08-28")
+    assert ev == []  # 처음부터 승인 여유를 둔 날로 계획해 연기가 없다
     eng.decide_phase2(cid, "Masil 대표", "승인")
     eng.decide_phase2(cid, "그룹 재무", "승인")
     due = {x["title"]: x["due"] for x in store.list_tasks(cid) if "(2차)" in x["title"]}

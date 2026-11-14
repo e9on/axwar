@@ -131,7 +131,7 @@ def test_장면2_조건변경_SCM_일부허용(store):
     assert r["status"] == "재승인 대기" and r["needs_human"] is False
     f = store.get_case(cid)["facts"]
     assert f["split"]["phase1_qty"] == 3000 and f["split"]["phase1_date"] == "2026-07-27"
-    assert f["split"]["phase2_qty"] == 12996 and f["split"]["phase2_date"] == "2026-08-24"  # 하루 수량 − 1차
+    assert f["split"]["phase2_qty"] == 12996 and f["split"]["phase2_date"] == "2026-08-28"  # 하루 수량 − 1차, 날짜는 1차 + 관찰 28일 + 승인 여유 4일
     assert f["scm"]["state"] == "일부 허용" and f["scm"]["allow"] == 3000
     assert f["approved_roles"] == []
     alerts = [e["detail"]["text"] for e in store.events(cid, kind="재승인알림")]
@@ -147,13 +147,13 @@ def test_장면2_조건변경_SCM_일부허용(store):
     assert statuses(store, cid) == ["회신 대기", "승인 대기", "재승인 대기", "분할 승인", "1차 집행", "2차 잠금"]
     f = store.get_case(cid)["facts"]
     assert f["phase1"] == {"qty": 3000, "date": "2026-07-27"}
-    assert f["phase2"]["qty"] == 12996 and f["phase2"]["date"] == "2026-08-24"
+    assert f["phase2"]["qty"] == 12996 and f["phase2"]["date"] == "2026-08-28"
     assert f["phase2"]["amount_krw"] == f["amount_krw"] * 12996 // f["volume"]["units"]  # 계획 2차 금액
     assert sorted(t for t in tasks(store, cid) if t[0] in ("물류", "CS")) == [("CS", "CS 대비"), ("물류", "물류 출고")]
-    # 2차 집행일 8/24는 하회 구간(7/21~8/22) 밖 → 2차 승인권자 Masil 대표로 이동, 권한 이동 1건
+    # 2차 집행일 8/28은 하회 구간(7/21~8/22) 밖 → 2차 승인권자 Masil 대표로 이동, 권한 이동 1건
     ch = store.get_approver_changes(cid)
     assert len(ch) == 1 and ch[0].after[0] == "Masil 대표" and ch[0].before == ("CEO", "이사회", "이사회 의결")
-    assert ch[0].at == date(2026, 8, 24) and "8/24" in ch[0].reason
+    assert ch[0].at == date(2026, 8, 28) and "8/28" in ch[0].reason
     assert f["phase2_approvers"] == ["Masil 대표", "그룹 보고", "그룹 확인"]
     assert f["approvers"] == ["CEO", "이사회", "이사회 의결"]  # 1차 승인권자는 그대로
     assert [x["case_id"] for x in eng.todo("그룹 CEO")["권한 이동"]] == [cid]
@@ -208,7 +208,7 @@ def test_설계_8장_장면2_날짜는_기존_함수_결과와_같다(store):
     eng, _, cid, st = scene2(store, ACCEPT, SCM_PART)
     to_scm_reply(eng, store, cid, st, "3,000개까지 허용합니다.")
     s = store.get_case(cid)["facts"]["split"]
-    assert s["phase2_date"] == "2026-08-24"  # max(입고 다음 날 8/20, 하회 구간 끝 다음 날 8/23, 1차 + 28일 8/24)
+    assert s["phase2_date"] == "2026-08-28"  # max(입고 다음 날 8/20, 하회 구간 끝 다음 날 8/23, 1차 + 관찰 28일 + 승인 여유 4일 8/28)
     assert (date.fromisoformat(s["phase1_date"]) + timedelta(days=policy.get("split.return_observe_days"))
             == date(2026, 8, 24))
     assert inventory.line_restock_date("기초") + timedelta(days=1) == date(2026, 8, 20)
@@ -638,7 +638,7 @@ def test_갱신이_확정되면_2차_차단이_풀리고_2차_날짜가_정해�
     eng.advance(store.get_clock() + timedelta(days=1))
     assert store.get_case(cid)["status"] == "2차 잠금"
     p2 = store.get_case(cid)["facts"]["phase2"]
-    assert p2["date"] == "2026-08-24" and p2["qty"] == 12996
+    assert p2["date"] == "2026-08-28" and p2["qty"] == 12996
 
 
 def test_실행_점검은_갱신_미확정이면_만료_뒤를_막는다(store):
@@ -941,7 +941,7 @@ def test_장면2_판매율_변형_반품이_기준_이내면_판매율로_2차_�
     assert f["phase2"]["qty"] == qty_b * 2550 // 3000 == 11046
     assert f["phase2"]["amount_krw"] == amt_b * 2550 // 3000
     assert f["phase2_sellthrough"]["rate"] == 0.85 and f["phase2_sellthrough"]["outcome"] == "조절"
-    assert f["phase2"]["date"] == "2026-08-28" and f["phase2_planned_date"] == "2026-08-24"  # 승인 기간 확보로 진입일 + 1일 + 여유 3일로 연기
+    assert f["phase2"]["date"] == "2026-08-28" and "phase2_planned_date" not in f  # 처음부터 승인 여유를 둔 날로 계획해 미루지 않는다
     assert f["phase2_approvers"] == approvers_b
     assert any(h["rule_id"] == "sellthrough_adjust" for h in f["phase2_approver_hits"])
     ev = store.events(cid, kind="판매율조절")

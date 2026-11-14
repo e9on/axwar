@@ -358,7 +358,7 @@ def test_1차_집행이_시작되면_2차_승인권자에게_예고가_가고_2�
         ok(c.post("/api/demo/play", json={"step": w["step"]}))
     adv(c, "2026-07-28")  # 1차 집행(7/27) 뒤: 2차 관찰
     notes = [a for a in ok(c.get("/api/todo/Masil 대표"))["알림"] if a["ref_id"] == "PLAN-001" and a["kind"] == "2차예고"]
-    assert len(notes) == 1 and "2차 집행 예정 8/24" in notes[0]["text"] and "밀릴 수 있어요" in notes[0]["text"]
+    assert len(notes) == 1 and "2차 집행 예정 8/28" in notes[0]["text"] and "밀릴 수 있어요" in notes[0]["text"]
     assert "마지막 승인일" not in notes[0]["text"]  # 결과가 나오기 전이라 지킬 수 없는 날짜는 알리지 않는다
     assert [a for a in ok(c.get("/api/todo/그룹 재무"))["알림"] if a["kind"] == "2차예고"]
     adv(c, "2026-08-24")  # 판매·반품 결과 → 2차 승인 대기
