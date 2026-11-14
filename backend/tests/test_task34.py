@@ -284,3 +284,28 @@ def test_일정에는_승인할_수_있게_된_날부터_마지막_승인일까�
     assert "PLAN-014" in p["label"] and "7/3~7/16" in p["label"]
     ok(c.post("/api/demo/play", json={"step": ok(c.get("/api/demo/state"))["waiting"]["step"]}))
     assert periods() == []  # 승인하면 사라진다
+
+
+# ---- AI 의견: 전결 건인데 결정에 안 쓰는 참고 위험 신호가 나쁘면 위로 올리기를 권한다(사용자 제안)
+
+def _brief(c, ref, actor):
+    cid = case(c, ref)["id"]
+    ok(c.post(f"/api/cases/{cid}/briefing", json={"actor": actor}))
+    return ok(c.get(f"/api/cases/{cid}?viewer={actor}"))["briefing"]["text"]
+
+
+def test_전결_건에_참고_위험_신호가_나쁘면_AI가_위로_올리기를_권한다(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_1_escalate")  # DEMO-PLAN-001: 마케팅팀 전결, 실질 ROAS 1위, 예상 ROAS 괴리(참고용) 나쁨
+    adv(c, "2026-07-03")
+    text = _brief(c, "DEMO-PLAN-001", "마케팅팀장")
+    first = text.splitlines()[0]
+    assert first.startswith("권고:") and "위로 올려" in first
+    assert "예상 매출" in text
+
+
+def test_이미_대표가_결재하는_건은_참고_신호가_있어도_승인을_권한다(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_1")  # PLAN-014: Masil 대표 결재(전결 아님)
+    adv(c, "2026-07-03")
+    assert _brief(c, "PLAN-014", "Masil 대표").splitlines()[0] == "권고: 승인하길 권해요."

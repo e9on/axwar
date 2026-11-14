@@ -172,6 +172,8 @@ def _decide_by(f: dict) -> tuple[str, str]:
     return deadline, "확정 기한"
 
 
+DELEGATION_RULE = "plan_within_delegation"  # 규칙(rules/approver.py)의 전결 판정 이름
+REFERENCE_USE = "참고"  # 근거 신호의 쓰임 값: 결정에 쓰지 않는 참고용
 ANNOUNCE_TASK = "1차 공지"  # 승인 뒤 캠페인 담당 작업, 공지하면 완료
 RAW_KEEP = 500  # AI 원문은 이 글자 수까지만 판정 기록에 남긴다
 OBSERVE_NOTE = "2차는 반품 관찰 뒤 열림"
@@ -3058,7 +3060,15 @@ class Engine:
         else:
             out |= {"연 고정 값": f["annual_fixed_krw"], "계약 만료": f["expiry"]}
         out |= self._brief_numbers(case)
+        if case["kind"] == KIND_PLAN and self._delegated(f):
+            out["전결 건"] = "예"  # 아직 위로 올리지 않은 전결 건: AI가 위로 올리기를 권할 수 있다
         return out
+
+    @staticmethod
+    def _delegated(f: dict) -> bool:
+        """건별 한도 이하라 전결이 된 건이고, 아직 누구도 위로 올리지 않았는가."""
+        return (any(h.get("rule_id") == DELEGATION_RULE for h in f.get("approver_hits", []))
+                and not any(e.get("active") for e in f.get("escalations", [])))
 
     def _brief_numbers(self, case: dict) -> dict:
         """브리핑에 근거로 쓸 계산값(근거 화면과 같은 계산): 실질 ROAS·순위, 요청 비중·순위, 단순변심 반품률, 집행일이 든 하회 구간.
@@ -3073,6 +3083,9 @@ class Engine:
         rs = ki.get("request_share")
         if rs and rs["rank"] is not None and case["kind"] == KIND_PLAN:
             out |= {"요청 비중(%)": round(rs["value"], 2), "요청 비중 순위": rs["rank"], "요청 비중 대상 수": rs["of"]}
+        refs = [s["explain"] for s in ev["signals"] if s.get("judgment") == REFERENCE_USE and s.get("level") == "red" and s.get("explain")]
+        if refs:
+            out["참고 위험 신호"] = " / ".join(refs)  # 결정에 쓰지 않는 예상치 신호(근거 화면과 같은 문장)
         sc = ki.get("simple_change_return")
         if sc:
             out |= {"단순변심 반품률": round(sc["value"], 3), "그 외 단순변심 반품률": round(sc["compare_value"], 3)}
