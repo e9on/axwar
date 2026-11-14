@@ -11,6 +11,7 @@ import type { CaseDetailData, EvidenceData } from '../caseTypes'
 import ApprovalStamps from '../components/ApprovalStamps'
 import Badge from '../components/Badge'
 import DecisionPanel from '../components/DecisionPanel'
+import { AnnounceAction, NoticeDraft } from '../components/CaseTasks'
 import EvidenceList from '../components/EvidenceList'
 import LoadFailed from '../components/LoadFailed'
 import Fold from '../components/Fold'
@@ -176,6 +177,10 @@ export default function CaseDetailPage() {
         </div>
 
         <DecisionPanel detail={d} actor={person?.name ?? ''} onDone={reload} />
+
+        <AnnounceAction detail={d} actor={person?.name ?? ''} onDone={reload} />
+
+        <NoticeDraft detail={d} actor={person?.name ?? ''} onDone={reload} />
 
         <KeyLines detail={d} evidence={evidence.data} canMake={canMakeBriefing} making={making} onMake={makeBriefing} />
 

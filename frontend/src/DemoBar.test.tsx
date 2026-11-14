@@ -20,7 +20,7 @@ const WAIT_LATER = { index: 1, action: '결정', actor: 'Masil 대표', target: 
 const WAIT_NOW = { ...WAIT_LATER, ready: true }
 const TODO = { '승인 대기': [{ case_id: 7, ref_id: 'PLAN-014', title: '7월 기안', kind: '승인' }] }
 
-type Pos = { scenario: string | null; waiting: unknown; next_date: string | null; date: string; arrived: string[] }
+type Pos = { scenario: string | null; waiting: unknown; next_date: string | null; date: string; arrived: string[]; outcome?: string[] }
 
 /** 서버가 기억하는 진행 위치를 흉내 낸다. advance는 날짜만 옮기고 7월 3일에 물류 회신이 와 결정을 기다린다 */
 function mount(url: string, init: Partial<Pos> = {}, advance?: (to: string, pos: Pos) => Record<string, unknown> | undefined) {
@@ -33,7 +33,7 @@ function mount(url: string, init: Partial<Pos> = {}, advance?: (to: string, pos:
     'GET /api/clock': () => ({ json: { date: pos.date, mode: '시연' } }),
     'GET /api/demo/scenarios': { json: SCENARIOS },
     'GET /api/demo/state': () => ({
-      json: { scenario: pos.scenario, title: pos.scenario ? '장면 1. 정상' : null, summary: '', done: 0, total: 3, finished: false, next_step: null, date: pos.date, waiting: pos.waiting, next_date: pos.next_date, arrived: pos.arrived },
+      json: { scenario: pos.scenario, title: pos.scenario ? '장면 1. 정상' : null, summary: '', done: 0, total: 3, finished: false, next_step: null, date: pos.date, waiting: pos.waiting, next_date: pos.next_date, arrived: pos.arrived, outcome: pos.outcome },
     }),
     'POST /api/demo/reset': () => {
       Object.assign(pos, { scenario: 'scenario_1', waiting: WAIT_LATER, next_date: '2026-07-03', date: '2026-07-01', arrived: [] })
@@ -169,6 +169,14 @@ describe('메인의 시연 막대', () => {
     mount('/', { scenario: 'scenario_1', waiting: null, next_date: null, date: '2026-07-20', arrived: ['7/3 물류 회신', '7/20 기준일'] })
     expect(await screen.findByText('장면이 끝났어요')).toBeInTheDocument()
     expect(screen.getByRole('region', { name: '시연 진행' })).toHaveTextContent('7/20 기준일')
+  })
+
+  it('끝나면_마지막_도착_사건_대신_장면_건들의_지금_상태를_결과로_보인다', async () => {
+    mount('/', { scenario: 'scenario_1', waiting: null, next_date: null, date: '2026-07-20', arrived: ['7/3 물류 회신이 도착함'], outcome: ['PLAN-014 1차 집행'] })
+    expect(await screen.findByText('장면이 끝났어요')).toBeInTheDocument()
+    const bar = screen.getByRole('region', { name: '시연 진행' })
+    expect(bar).toHaveTextContent('결과: PLAN-014 1차 집행')
+    expect(bar).not.toHaveTextContent('7/3 물류 회신이 도착함')
   })
 
   it('장면이_없으면_막대가_없다', async () => {

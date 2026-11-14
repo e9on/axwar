@@ -134,6 +134,8 @@ export type DemoState = {
   /** 다음 바깥 사건이 도착하는 날(없으면 null) */
   next_date?: string | null
   arrived?: string[]
+  /** 장면 건마다 "번호 지금 상태"(끝났을 때 결과로 보인다) */
+  outcome?: string[]
 }
 
 export type DemoWaiting = { index: number; action: string; actor: string | null; target: string | null; text: string; ready: boolean; step: ScenarioStep }
