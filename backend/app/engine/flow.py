@@ -633,7 +633,7 @@ class Engine:
 
     def _demo_waiting(self, sc: scenarios.Scenario, applied: set[int]) -> dict | None:
         """지금 시연자가 할 일: 아직 적용하지 않은 첫 사람 단계(결정·공지·발송·상신·예외 승인). ready는 그 앞의 바깥 사건이 모두 도착했는지.
-        앞의 바깥 사건이 모두 도착한 상태에서 1차 결정을 이미 화면으로 눌러 끝낸 것(그 역할이 승인했거나 사건이 끝남)은 건너뛴다."""
+        앞의 바깥 사건이 모두 도착한 상태에서 이미 화면으로 끝낸 단계(_decision_already_made)는 건너뛴다."""
         for i, s in enumerate(sc.script):
             if i in applied or scenarios.is_outside(s):
                 continue
@@ -645,16 +645,29 @@ class Engine:
         return None
 
     def _decision_already_made(self, s: dict) -> bool:
-        if s["action"] != "결정" or s.get("stage") == "2차":
-            return False
+        """대본의 사람 단계를 시연자가 화면에서 이미 끝냈는지. 결정은 그 역할이 승인했거나 사건이 끝났는지,
+        공지·발송·상신·예외 승인은 그 일이 건에 기록됐는지로 본다(같은 단계를 두 번 기다리지 않게)."""
         found = self._find_case(*((KIND_PLAN, s["plan"]) if "plan" in s else (KIND_CONTRACT, s["contract"])))
         if found is None:
+            return False
+        f, action = found["facts"], s["action"]
+        if action == "공지":
+            return bool(f.get("announce"))
+        if action == "발송":
+            return bool((f.get("notice") or {}).get("sent_text"))
+        if action == "상신":
+            return any(e.get("actor") == s["actor"] and e.get("stage") == s["stage"] for e in f.get("escalations", []))
+        if action == "예외 승인":
+            return bool(f.get("phase2_exception"))
+        if action != "결정":
             return False
         try:
             role = self.role_of(s["actor"])
         except PermissionError:
             return False
-        return role in found["facts"].get("approved_roles", []) or found["status"] not in OPEN[found["kind"]]
+        if s.get("stage") == "2차":
+            return role in f.get(STAGES["2차"][2], []) or found["status"] in TERMINAL[found["kind"]]
+        return role in f.get("approved_roles", []) or found["status"] not in OPEN[found["kind"]]
 
     @_locked
     def advance_demo(self, to: date) -> dict:

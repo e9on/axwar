@@ -224,3 +224,23 @@ def test_진행_상태는_장면_건들의_지금_상태를_결과로_준다(sto
     assert ok(c.get("/api/demo/state"))["outcome"] == ["PLAN-014 회신 대기"]
     ok(c.post("/api/demo/run", json={"scenario": "scenario_1"}))
     assert ok(c.get("/api/demo/state"))["outcome"] == ["PLAN-014 1차 집행"]
+
+
+def test_화면에서_통보를_발송하면_시연이_발송을_더_기다리지_않는다(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_3")
+    out = adv(c, "2026-07-14")
+    assert out["waiting"]["action"] == "발송" and out["waiting"]["ready"]
+    ok(c.post(f"/api/cases/{case(c, 'INF-001')['id']}/send-notice", json={"actor": "계약 담당자"}))
+    assert ok(c.get("/api/demo/state"))["waiting"] is None
+
+
+def test_화면에서_상신하면_시연이_다음_결정을_기다린다(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_1_escalate")
+    out = adv(c, "2026-07-08")
+    assert out["waiting"]["action"] == "상신" and out["waiting"]["ready"]
+    ok(c.post(f"/api/cases/{case(c, 'DEMO-PLAN-001')['id']}/escalate",
+              json={"actor": "마케팅팀장", "stage": "1차", "opinion": "승인 권고", "reason": "대표 확인"}))
+    w = ok(c.get("/api/demo/state"))["waiting"]
+    assert w["action"] == "결정" and w["actor"] == "Masil 대표"
