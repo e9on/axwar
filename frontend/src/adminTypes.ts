@@ -138,7 +138,8 @@ export type DemoState = {
   outcome?: string[]
 }
 
-export type DemoWaiting = { index: number; action: string; actor: string | null; target: string | null; text: string; ready: boolean; step: ScenarioStep }
+/** due: 결정 단계에서 시연이 멈출 날(그 결재의 마지막 승인일). 그 전에도 할 일에서 결정할 수 있다 */
+export type DemoWaiting = { index: number; action: string; actor: string | null; target: string | null; text: string; ready: boolean; due?: string | null; step: ScenarioStep }
 
 /** POST /api/demo/advance — 날짜로 진행한 결과(상태 항목과 함께) */
 export type AdvanceReply = Partial<DemoState> & { applied: string[]; skipped: string[]; actions: ServerAction[] }

@@ -179,6 +179,13 @@ describe('메인의 시연 막대', () => {
     expect(bar).not.toHaveTextContent('7/3 물류 회신이 도착함')
   })
 
+  it('결정이_남았지만_마감_전이면_언제_멈추는지와_먼저_할_수_있다는_것을_보인다', async () => {
+    mount('/', { scenario: 'scenario_1', waiting: { ...WAIT_LATER, due: '2026-07-16' }, next_date: '2026-07-16', date: '2026-07-05' })
+    const bar = await screen.findByRole('region', { name: '시연 진행' })
+    await waitFor(() => expect(bar).toHaveTextContent('Masil 대표 승인 마감 7월 16일'))
+    expect(bar).toHaveTextContent('할 일에서 먼저 할 수 있어요')
+  })
+
   it('장면이_없으면_막대가_없다', async () => {
     mount('/')
     await screen.findByRole('region', { name: '할 일' })

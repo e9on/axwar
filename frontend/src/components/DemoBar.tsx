@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { koDateWeekday } from '../date'
+import { koDate, koDateWeekday } from '../date'
 import { actionLine, josa } from '../format'
 import { ga, plainLine } from '../copy'
 import { useStartScene } from '../state/demoScene'
@@ -76,6 +76,9 @@ export default function DemoBar({ demo }: { demo: Scene }) {
       <p className="db-msg" role="status" data-need={!!need}>
         <b>{message}</b>
         {ended && result && <span className="db-result"> {plainLine(result, 120)}</span>}
+        {!ended && !need && waiting?.due && (
+          <span className="db-result"> · {who ?? '시연자'} {needWord(waiting)} 마감 {koDate(waiting.due)} · 할 일에서 먼저 할 수 있어요</span>
+        )}
         {need && who && who !== person?.name && (
           <button type="button" className="btn small" onClick={() => demo.switchTo(who)}>
             {josa(who, '로')} 바꾸기
