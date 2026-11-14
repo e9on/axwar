@@ -174,6 +174,7 @@ def _decide_by(f: dict) -> tuple[str, str]:
 
 DELEGATION_RULE = "plan_within_delegation"  # 규칙(rules/approver.py)의 전결 판정 이름
 REFERENCE_USE = "참고"  # 근거 신호의 쓰임 값: 결정에 쓰지 않는 참고용
+EXCEPTION_TASK = "2차 예외 승인 검토"  # 반품 자동 보류 때 예외 승인 권한자(2차 승인권자 중 최고 역할)의 작업
 ANNOUNCE_TASK = "1차 공지"  # 승인 뒤 캠페인 담당 작업, 공지하면 완료
 RAW_KEEP = 500  # AI 원문은 이 글자 수까지만 판정 기록에 남긴다
 OBSERVE_NOTE = "2차는 반품 관찰 뒤 열림"
@@ -2088,6 +2089,11 @@ class Engine:
         self.store.add_event(case_id, EV_P2_HOLD, "시스템", {"cause": "반품", "reasons": list(g.reasons),
                                                           "voided_roles": voided or [], "text": text})
         self._task_once(case_id, self.campaign, STALE_PHASE2_HOLD, self._today(), text)
+        top = self._exception_role(f)
+        if top:  # 그래도 2차를 하려면 예외 승인할 사람에게도 할 일로 보인다(시연에서 찾을 수 없던 문제)
+            self._task_once(case_id, top, EXCEPTION_TASK, self._today(),
+                            f"{case['ref_id']} 반품이 기준을 넘어 2차 자동 보류: {why}. 그래도 2차를 하려면 2차 관찰 화면에서 "
+                            "이유를 적어 예외 승인할 수 있음")
 
     def _regress_from_wait(self, case: dict, g: GateResult) -> None:
         """2차 승인 대기 중 게이트가 다시 닫혔다(M8): 받은 2차 승인을 무효로 하고, 반품 자동 보류면 2차 보류, 리뷰 잠금이면 2차 잠금."""
@@ -2456,6 +2462,9 @@ class Engine:
         task = self._hold_task(case_id)
         if task:
             self.store.set_task_status(task["id"], "완료", actor)
+        for t in self.store.list_tasks(case_id):  # 판단이 끝났으니 예외 승인 검토도 닫는다
+            if t["title"] == EXCEPTION_TASK and t["status"] == "대기":
+                self.store.set_task_status(t["id"], "완료", actor)
         text = (f"{ref} {josa(basis, '을를')} {josa(choice, '으로')} 판단: 2차 {qty_b:,}→{qty_a:,}개, "
                 f"금액 {amt_b:,}→{amt_a:,}원 — 이유: {reason.strip()}")
         self.store.add_event(case_id, EV_DECIDE, actor, {
