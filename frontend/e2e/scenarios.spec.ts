@@ -148,6 +148,17 @@ test('scenario_3: 승인 없이 기본 거부 날이 되면 기본 거부와 통
   await openTodo(page, 'INF-001')
   await expect(page.getByRole('group', { name: '결정' })).toContainText('통보 초안')
   await expect(page.getByRole('group', { name: '결정' })).toContainText('통보 발송')
+
+  // 초안을 읽고 발송하면, 메인에서 진행해 인플루언서 측 회신까지 받고 장면이 끝난다
+  const draft = page.getByRole('region', { name: '조건변경 통보 초안' })
+  await expect(draft).toContainText('공제 후 순액')
+  await draft.getByRole('button', { name: '통보 발송' }).click()
+  await page.getByRole('dialog').getByRole('button', { name: '발송 확정' }).click()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await goHome(page)
+  await demoBar(page).getByRole('button', { name: '▶ 진행' }).click()
+  await expect(demoBar(page)).toContainText('장면이 끝났어요', { timeout: 60_000 })
+  await expect(demoBar(page)).toContainText('결과: ')
 })
 
 test('scenario_1_escalate: 마케팅팀장이 위로 올리면 Masil 대표 결재선에 들어간다', async ({ page, problems }) => {
