@@ -16,6 +16,11 @@ value = 1000000000
 source = "approval_authority_policy.md 인플루언서 연간 전속계약 체결·갱신"
 description = "전속계약 연 금액이 이 금액을 넘으면 CEO·이사회, 이하면 Masil 대표"
 
+[approval.wait_for_scm]
+value = "예"
+source = "사용자 결정(2026-11-14): 임시 분할안으로 승인했다가 SCM 회신으로 분할안이 바뀌어 다시 승인하는 일이 없게"
+description = "SCM 안전재고 회신을 기다리는 동안 승인·분할 승인을 막을지(예/아니오). 아니오면 먼저 승인할 수 있고, 회신으로 분할안이 바뀌면 받은 승인을 무효로 하고 재승인을 받는다. 거절은 언제나 가능"
+
 [deadline.buffer_days]
 value = 3
 source = "사용자 지정(2026-11-12): 기한 당일 통보는 상대에게 급하므로 3일 여유"

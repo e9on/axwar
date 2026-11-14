@@ -139,14 +139,12 @@ def test_날짜를_한꺼번에_넘기면_도착일_순서로_적용하고_결�
     out = adv(c, "2026-07-03")
     assert len(out["applied"]) == 1 and "물류 회신" in out["applied"][0]
     assert out["waiting"]["actor"] == "그룹 CEO" and out["next_date"] == "2026-07-04"
-    for _ in range(2):  # 그룹 CEO, 이사회가 분할 승인
-        ok(c.post("/api/demo/play", json={"step": ok(c.get("/api/demo/state"))["waiting"]["step"]}))
-    out = adv(c, "2026-07-04")  # SCM이 일부만 허용하면 받은 승인이 무효가 되어 재승인은 시연자 몫
+    out = adv(c, "2026-07-04")  # SCM이 일부만 허용: 분할안이 정해진다(그 전에는 승인할 수 없음)
     assert [a.split()[0] for a in out["applied"]] == ["7/4"]
     assert out["waiting"]["action"] == "결정" and out["waiting"]["actor"] == "그룹 CEO"
     assert out["waiting"]["ready"] is False and out["waiting"]["due"] == "2026-07-13"  # 마지막 승인일까지는 멈추지 않는다
-    assert case(c, "PLAN-001")["status"] == "재승인 대기"
-    out = adv(c, "2026-08-24")  # 재승인 없이 날짜가 넘어가도 리뷰(8/10)·반품(8/24)은 도착일 순서로 들어오고, 기한 규칙은 그대로 돈다
+    assert case(c, "PLAN-001")["status"] == "승인 대기"
+    out = adv(c, "2026-08-24")  # 승인 없이 날짜가 넘어가도 리뷰(8/10)·반품(8/24)은 도착일 순서로 들어오고, 기한 규칙은 그대로 돈다
     assert [a.split()[0] for a in out["applied"]] == ["8/10", "8/20", "8/21", "8/24"]  # 8/20·8/21은 2차 물류·SCM 회신
     assert case(c, "PLAN-001")["status"] != "1차 집행"
     assert adv(c, "2026-08-24")["applied"] == []  # 같은 날을 다시 눌러도 같은 사건을 두 번 넣지 않는다
@@ -183,7 +181,7 @@ def test_run은_결정까지_끝까지_자동으로_돈다_시험용(store):
 def test_직접_누른_결정도_다음_결정으로_넘어간다(store):
     c, _ = fake_client(store)
     reset(c, "scenario_2")
-    adv(c, "2026-07-02")
+    adv(c, "2026-07-04")  # SCM 회신 뒤라야 분할 승인할 수 있다
     cid = case(c, "PLAN-001")["id"]
     ok(c.post(f"/api/cases/{cid}/decision", json={"actor": "그룹 CEO", "action": "분할승인", "comment": "직접"}))
     assert ok(c.get("/api/demo/state"))["waiting"]["actor"] == "이사회"
@@ -419,3 +417,20 @@ def test_2차_회신이_일부만_가능하면_2차_수량을_줄이고_거절�
             "attachments": 0, "ai": {"stance": "거절", "qty_limit": 0, "next_date": None, "needs_human": False}}
     ok(c.post("/api/demo/play", json={"step": step}))
     assert any("2차 부서 거절" in r for r in eng.phase2_status(cid).reasons)
+
+
+def test_SCM_안전재고_회신_전에는_승인과_분할_승인을_막고_거절은_된다(store):
+    from app import policy
+    assert policy.base_entry("approval.wait_for_scm")[0] == "예"  # 파일 기본값은 막기
+    policy.set_overrides({"approval.wait_for_scm": ("예", "시험", "")})
+    c, eng = fake_client(store)
+    reset(c, "scenario_2")
+    adv(c, "2026-07-03")  # 물류 회신(7/2) 뒤, SCM 회신(7/4) 전
+    cid = case(c, "PLAN-001")["id"]
+    v = ok(c.get(f"/api/cases/{cid}?viewer=그룹 CEO"))["viewer"]
+    blocked = {b["action"]: b["reason"] for b in v["blocked"]}
+    assert "분할승인" in blocked and "SCM" in blocked["분할승인"] and "거절" in v["actions"]
+    with pytest.raises(ValueError, match="SCM"):
+        eng.decide(cid, "그룹 CEO", "분할승인")
+    adv(c, "2026-07-04")  # SCM 회신 뒤에는 분할 승인할 수 있다
+    assert "분할승인" in ok(c.get(f"/api/cases/{cid}?viewer=그룹 CEO"))["viewer"]["actions"]

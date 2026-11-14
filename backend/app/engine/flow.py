@@ -178,6 +178,7 @@ def _decide_by(f: dict) -> tuple[str, str]:
 DELEGATION_RULE = "plan_within_delegation"  # 규칙(rules/approver.py)의 전결 판정 이름
 REFERENCE_USE = "참고"  # 근거 신호의 쓰임 값: 결정에 쓰지 않는 참고용
 EXCEPTION_TASK = "2차 예외 승인 검토"  # 반품 자동 보류 때 예외 승인 권한자(2차 승인권자 중 최고 역할)의 작업
+POLICY_YES = "예"  # 예/아니오 정책 항목의 '예'
 ANNOUNCE_TASK = "1차 공지"  # 승인 뒤 캠페인 담당 작업, 공지하면 완료
 RAW_KEEP = 500  # AI 원문은 이 글자 수까지만 판정 기록에 남긴다
 OBSERVE_NOTE = "2차는 반품 관찰 뒤 열림"
@@ -1893,6 +1894,8 @@ class Engine:
             return None
         if status == S_WAIT_REPLY:
             return "부서 회신을 기다리는 중이라 아직 승인할 수 없음"
+        if (f.get("scm") or {}).get("state") == SCM_ASKED and policy.get("approval.wait_for_scm") == POLICY_YES:  # 정책(사용자 결정)
+            return "SCM 안전재고 회신을 기다리는 중 — 분할안이 정해지면 결정할 수 있음(거절은 지금도 가능)"
         st = f.get("stock") or {}
         if st.get("day_qty") and st.get("share") == 0:
             return "물류 몫이 0개라 1차 수량이 0이 됨 — 승인할 수 없음(물류와 다시 조율하거나 거절)"
