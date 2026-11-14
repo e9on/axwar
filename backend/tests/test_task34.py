@@ -319,3 +319,12 @@ def test_기본_거부로_끝난_건의_남은_대본_단계는_기다리지_않
     out = adv(c, "2026-07-14")  # 기본 거부 → 확정 보류
     assert case(c, "PLAN-001")["status"] == "확정 보류"
     assert out["waiting"] is None  # 승인되지 않은 건이라 공지할 수 없다 — 공지를 기다리지 않는다
+
+
+def test_SCM이_거절하면_1차가_막히고_이유_문장의_조사가_맞다(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_2_reject")
+    adv(c, "2026-07-05")
+    f = store.get_case(case(c, "PLAN-001")["id"])["facts"]
+    assert case(c, "PLAN-001")["status"] == "1차 차단"
+    assert f["phase1_blocked"]["reason"].startswith("SCM 거절 — SCM이 안전재고 사용을 거절했고")
