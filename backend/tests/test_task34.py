@@ -366,3 +366,17 @@ def test_1차_집행이_시작되면_2차_승인권자에게_예고가_가고_2�
     adv(c, "2026-08-24")  # 판매·반품 결과 → 2차 승인 대기
     assert case(c, "PLAN-001")["status"] == "2차 승인 대기"
     assert [a for a in ok(c.get("/api/todo/Masil 대표"))["알림"] if a["kind"] == "2차예고"] == []
+
+
+def test_공지를_못_한_채_1차_집행일이_지나면_시연이_공지를_더_기다리지_않는다(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_2")
+    adv(c, "2026-07-13")
+    for _ in range(4):  # 결재만 하고 공지는 하지 않는다
+        w = ok(c.get("/api/demo/state"))["waiting"]
+        if w["action"] != "결정":
+            break
+        ok(c.post("/api/demo/play", json={"step": w["step"]}))
+    assert ok(c.get("/api/demo/state"))["waiting"]["action"] == "공지"
+    out = adv(c, "2026-07-28")  # 1차 집행일(7/27)이 지났다: 공지는 더 할 수 없다
+    assert out["waiting"] is None or out["waiting"]["action"] != "공지"

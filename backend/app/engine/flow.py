@@ -686,8 +686,8 @@ class Engine:
         f, action = found["facts"], s["action"]
         if found["status"] in TERMINAL[found["kind"]]:
             return True  # 끝난 건(기본 거부·거절·완료 등): 남은 사람 단계는 할 수 없으니 기다리지 않는다
-        if action == "공지":
-            return bool(f.get("announce"))
+        if action == "공지":  # 공지했거나, 공지 없이 1차 집행일이 지나 더는 할 수 없으면 끝난 것
+            return bool(f.get("announce")) or bool(f.get("phase1") and self._today() > _d(f["phase1"]["date"]))
         if action == "발송":
             return bool((f.get("notice") or {}).get("sent_text"))
         if action == "상신":
