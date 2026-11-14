@@ -14,6 +14,18 @@ import Badge from '../components/Badge'
 import LoadFailed from '../components/LoadFailed'
 import './Replies.css'
 
+/** 답 고르기: 회신 해석(가짜 AI 키워드·진짜 AI 모두)이 같은 뜻으로 읽는 문장. 일부만 가능은 수량을 받아 "N개까지 가능합니다." */
+const PICKS: { label: string; text: string; partial?: boolean }[] = [
+  { label: '가능', text: '요청하신 대로 가능합니다.' },
+  { label: '일부만 가능', text: '', partial: true },
+  { label: '불가', text: '요청하신 내용은 불가합니다.' },
+]
+const PICKS_HUMAN: { label: string; text: string; partial?: boolean }[] = [
+  { label: '확인 완료', text: '확인했습니다. 진행 가능합니다.' },
+  { label: '일부만 가능', text: '', partial: true },
+  { label: '불가', text: '확인 결과 불가합니다.' },
+]
+
 const GROUPS: { status: string; title: string }[] = [
   { status: R_WAIT, title: '대기' },
   { status: R_HUMAN, title: '사람 확인' },
@@ -112,6 +124,7 @@ function Detail({ row, who, onSaved }: { row: RequestRow; who: string; onSaved: 
   const load = useLoad<ReplyCase>(`/api/cases/${row.case_id}`, [version])
   const [text, setText] = useState('')
   const [attach, setAttach] = useState('0')
+  const [partial, setPartial] = useState<string | null>(null) // 일부만 가능을 골랐을 때 수량(글자)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState<Saved | null>(null)
@@ -229,6 +242,43 @@ function Detail({ row, who, onSaved }: { row: RequestRow; who: string; onSaved: 
         >
           <h3>{human ? '사람 확인' : '회신 입력'}</h3>
           {human && <p className="muted">AI가 사람 확인이 필요하다고 본 회신이에요. 확인한 내용을 적어 저장하면 다시 해석해 반영해요. 권한은 서버가 판단해요.</p>}
+          <div role="group" aria-label="답 고르기" className="picks">
+            {(human ? PICKS_HUMAN : PICKS).map((p) => (
+              <button
+                key={p.label}
+                type="button"
+                className="btn small"
+                aria-pressed={p.partial ? partial !== null : text === p.text}
+                onClick={() => {
+                  if (p.partial) {
+                    setPartial('')
+                    setText('')
+                  } else {
+                    setPartial(null)
+                    setText(p.text)
+                  }
+                }}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          {partial !== null && (
+            <label className="num">
+              가능한 수량
+              <input
+                type="number"
+                min={1}
+                value={partial}
+                onChange={(e) => {
+                  setPartial(e.target.value)
+                  const n = Number(e.target.value)
+                  setText(n > 0 ? `${num(n)}개까지 가능합니다.` : '')
+                }}
+              />
+            </label>
+          )}
+          <p className="muted hint">단추를 누르면 시스템이 알아듣는 문장이 들어가요. 문장은 고쳐 써도 돼요.</p>
           <label>
             {human ? '확인 내용' : '회신 내용'}
             <textarea rows={3} value={text} onChange={(e) => setText(e.target.value)} />
