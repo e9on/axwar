@@ -70,7 +70,7 @@ export function NoticeDraft({ detail, actor, onDone }: Props) {
   const sent = !!notice.sent_text
   const lines = (notice.sent_text ?? notice.text ?? '').split('\n').filter((l) => l.trim())
   return (
-    <section className="case-task notice" aria-label="조건변경 통보 초안">
+    <section className="case-task notice-draft" aria-label="조건변경 통보 초안">
       <h3>
         조건변경 통보 {sent ? '(발송함)' : '초안'} {!sent && <Badge kind="AI" />}
       </h3>
