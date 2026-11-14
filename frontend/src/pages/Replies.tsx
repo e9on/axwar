@@ -1,4 +1,4 @@
-import { fromTo } from '../copy'
+import { fromTo, modelLabel } from '../copy'
 import { useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
@@ -7,12 +7,24 @@ import { useViewer } from '../state/viewer'
 import { useLoad } from '../state/useLoad'
 import { koDate } from '../date'
 import { num, pct } from '../format'
-import { R_DONE, R_HUMAN, R_WAIT } from '../decisions'
+import { FIRST_STAGE_STATUSES, R_DONE, R_HUMAN, R_WAIT } from '../decisions'
 import type { ReplyCase, ReplyResult, RequestRow } from '../replyTypes'
 import type { ReplyJudgment } from '../caseTypes'
 import Badge from '../components/Badge'
 import LoadFailed from '../components/LoadFailed'
 import './Replies.css'
+
+/** 답 고르기: 회신 해석(가짜 AI 키워드·진짜 AI 모두)이 같은 뜻으로 읽는 문장. 일부만 가능은 수량을 받아 "N개까지 가능합니다." */
+const PICKS: { label: string; text: string; partial?: boolean }[] = [
+  { label: '가능', text: '요청하신 대로 가능합니다.' },
+  { label: '일부만 가능', text: '', partial: true },
+  { label: '불가', text: '요청하신 내용은 불가합니다.' },
+]
+const PICKS_HUMAN: { label: string; text: string; partial?: boolean }[] = [
+  { label: '확인 완료', text: '확인했습니다. 진행 가능합니다.' },
+  { label: '일부만 가능', text: '', partial: true },
+  { label: '불가', text: '확인 결과 불가합니다.' },
+]
 
 const GROUPS: { status: string; title: string }[] = [
   { status: R_WAIT, title: '대기' },
@@ -39,7 +51,7 @@ function judgmentLine(j: ReplyJudgment): string {
   if (j.qty_limit !== null && j.qty_limit !== undefined) parts.push(`수량 제한 ${num(j.qty_limit)}개`)
   if (j.next_date) parts.push(`다음 날짜 ${koDate(j.next_date)}`)
   if (j.confidence !== null && j.confidence !== undefined) parts.push(`확신도 ${pct(j.confidence)}`)
-  parts.push(j.model)
+  parts.push(modelLabel(j.model))
   parts.push(j.needs_human ? (j.human_confirmed ? `사람이 확인함${j.confirmed_by ? ` (${j.confirmed_by})` : ''}` : '사람 확인 필요') : '사람 확인 불필요')
   return parts.join(' · ')
 }
@@ -78,7 +90,7 @@ function SavedResult({ saved, now }: { saved: Saved; now: ReplyCase | null }) {
               <dt>확신도</dt>
               <dd>{j.confidence !== null && j.confidence !== undefined ? pct(j.confidence) : '없음'}</dd>
               <dt>모델</dt>
-              <dd>{j.model}</dd>
+              <dd>{modelLabel(j.model)}</dd>
             </dl>
           ) : (
             <p className="muted">해석 기록이 없어요</p>
@@ -112,6 +124,7 @@ function Detail({ row, who, onSaved }: { row: RequestRow; who: string; onSaved: 
   const load = useLoad<ReplyCase>(`/api/cases/${row.case_id}`, [version])
   const [text, setText] = useState('')
   const [attach, setAttach] = useState('0')
+  const [partial, setPartial] = useState<string | null>(null) // 일부만 가능을 골랐을 때 수량(글자)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState<Saved | null>(null)
@@ -154,6 +167,7 @@ function Detail({ row, who, onSaved }: { row: RequestRow; who: string; onSaved: 
     )
   }
 
+  const firstStage = FIRST_STAGE_STATUSES.includes(d.case.status) // 1차 결재 단계에서만 1차 기한을 보인다
   return (
     <article className="doc rdoc">
       <div className="rhead">
@@ -169,12 +183,12 @@ function Detail({ row, who, onSaved }: { row: RequestRow; who: string; onSaved: 
             <span>
               건 상태 <b>{d.case.status}</b>
             </span>
-            {d.deadline && (
+            {firstStage && d.deadline && (
               <span>
                 확정 기한 <b>{koDate(d.deadline)}</b>
               </span>
             )}
-            {d.approval_deadline && (
+            {firstStage && d.approval_deadline && (
               <span>
                 마지막 승인일 <b>{koDate(d.approval_deadline)}</b>
               </span>
@@ -229,6 +243,43 @@ function Detail({ row, who, onSaved }: { row: RequestRow; who: string; onSaved: 
         >
           <h3>{human ? '사람 확인' : '회신 입력'}</h3>
           {human && <p className="muted">AI가 사람 확인이 필요하다고 본 회신이에요. 확인한 내용을 적어 저장하면 다시 해석해 반영해요. 권한은 서버가 판단해요.</p>}
+          <div role="group" aria-label="답 고르기" className="picks">
+            {(human ? PICKS_HUMAN : PICKS).map((p) => (
+              <button
+                key={p.label}
+                type="button"
+                className="btn small"
+                aria-pressed={p.partial ? partial !== null : text === p.text}
+                onClick={() => {
+                  if (p.partial) {
+                    setPartial('')
+                    setText('')
+                  } else {
+                    setPartial(null)
+                    setText(p.text)
+                  }
+                }}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          {partial !== null && (
+            <label className="num">
+              가능한 수량
+              <input
+                type="number"
+                min={1}
+                value={partial}
+                onChange={(e) => {
+                  setPartial(e.target.value)
+                  const n = Number(e.target.value)
+                  setText(n > 0 ? `${num(n)}개까지 가능합니다.` : '')
+                }}
+              />
+            </label>
+          )}
+          <p className="muted hint">단추를 누르면 시스템이 알아듣는 문장이 들어가요. 문장은 고쳐 써도 돼요.</p>
           <label>
             {human ? '확인 내용' : '회신 내용'}
             <textarea rows={3} value={text} onChange={(e) => setText(e.target.value)} />

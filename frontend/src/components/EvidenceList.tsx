@@ -139,9 +139,14 @@ export function indicatorValue(i: IndicatorLine): string {
   return i.rank !== null && i.of !== null ? `${v} (${i.rank}위/${i.of})` : v
 }
 
+const REFERENCE = '참고' // 서버 신호의 쓰임 값: 결정에 쓰지 않는 참고용
+
+/** 결정에 쓰는 신호만 수준별로 세고, 참고용은 따로 센다(핵심 줄의 "가장 큰 위험"과 같은 기준) */
 function signalSummary(signals: SignalLine[]): string {
-  const n = (lv: SignalLine['level']) => signals.filter((s) => s.level === lv).length
-  return `나쁨 ${n('red')}건 · 주의 ${n('yellow')}건 · 좋음 ${n('green')}건`
+  const used = signals.filter((s) => s.judgment !== REFERENCE)
+  const n = (lv: SignalLine['level']) => used.filter((s) => s.level === lv).length
+  const ref = signals.length - used.length
+  return `나쁨 ${n('red')}건 · 주의 ${n('yellow')}건 · 좋음 ${n('green')}건${ref > 0 ? ` · 참고용 ${ref}건` : ''}`
 }
 
 export default function EvidenceList({ data }: { data: EvidenceData }) {

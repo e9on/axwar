@@ -25,7 +25,7 @@ const USAGE = {
   calls: [{ id: 1, ts: '2026-11-13T05:10:00+00:00', day: '2026-11-13', case_id: 3, kind: '회신해석', model: 'fake-model', in_tok: 120, out_tok: 30, usd: 0.0012, confidence: 0.85, summary: '물류 회신: 전량 가능', state: '정산' }],
 }
 
-function mount(events = EVENTS) {
+function mount(events: unknown[] = EVENTS) {
   fakeServer({
     'GET /api/people': { json: PEOPLE },
     'GET /api/clock': { json: { date: '2026-07-01', mode: '시연' } },
@@ -43,6 +43,31 @@ function mount(events = EVENTS) {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('처리 기록·가정 목록', () => {
+  it('기록_내용은_쉬운_말로_보이고_내부_키·번호·fake는_보이지_않는다', async () => {
+    const ev = (id: number, kind: string, detail: Record<string, unknown>) => ({ id, ts: '2026-11-13T05:06:55+00:00', sim_date: '2026-07-14', case_id: 1, kind, actor: '시스템', detail })
+    mount([
+      ev(11, '요청생성', { dept: '인플루언서 측', attach_required: false, purpose: '통보 회신' }),
+      ev(12, 'AI판정', { judgment_id: 1, kind: '통보초안', model: 'fake', needs_human: false }),
+      ev(13, '사실변경', { keys: ['notice'], note: '통보 발송' }),
+      ev(14, '작업상태', { task_id: 1, title: '통보 발송', status: '완료', due: '2026-07-17' }),
+      ev(15, '승인기록', { decision: '거절', approvers: ['CEO'] }),
+    ])
+    const list = await screen.findByRole('list', { name: '처리 기록' })
+    const text = list.textContent ?? ''
+    expect(text).toContain('부서: 인플루언서 측')
+    expect(text).toContain('목적: 통보 회신')
+    expect(text).toContain('통보초안')
+    expect(text).toContain('시연용 해석')
+    expect(text).toContain('결정: 거절')
+    expect(text).toContain('승인권자: CEO')
+    expect(text).toContain('작업: 통보 발송')
+    expect(text).toContain('기한: 7월 17일')
+
+    for (const bad of ['dept', 'attach_required', 'purpose', 'judgment_id', 'model', 'fake', 'needs_human', 'keys', 'notice', 'task_id', 'decision', 'approvers']) {
+      expect(text).not.toContain(bad)
+    }
+  })
+
   it('기록이_길면_처음_몇_줄만_보이고_더_보기로_늘린다', async () => {
     const many = Array.from({ length: 45 }, (_, i) => ({ id: 100 + i, ts: '2026-11-13T05:06:55+00:00', sim_date: '2026-07-01', case_id: null, kind: '초기화', actor: '시연', detail: {} }))
     mount(many)
@@ -111,7 +136,9 @@ describe('처리 기록·가정 목록', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'AI 호출 내역' }))
     const list = await screen.findByRole('list', { name: 'AI 호출 내역' })
     const row = within(list).getByRole('listitem')
-    expect(row).toHaveTextContent('fake-model')
+    expect(row).toHaveTextContent('시연용 해석')
+    expect(row).not.toHaveTextContent('fake')
+    expect(screen.getByText(/AI 모드 시연용 해석/)).toBeInTheDocument()
     expect(row).toHaveTextContent('85%')
     expect(row).toHaveTextContent('$0.0012')
     expect(row).toHaveTextContent('120')

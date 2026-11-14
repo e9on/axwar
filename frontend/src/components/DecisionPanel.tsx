@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { api } from '../api'
-import { D_APPROVE, D_REJECT, D_SPLIT, KIND_CONTRACT, OPINIONS, ST_PHASE2_WAIT, S_DEFAULT_DENY } from '../decisions'
+import { D_APPROVE, D_REJECT, D_SPLIT, FIRST_STAGE_STATUSES, KIND_CONTRACT, OPINIONS, ST_PHASE2_WAIT, S_DEFAULT_DENY } from '../decisions'
 import { daysBetween, koDate } from '../date'
 import { useClock } from '../state/clock'
 import { josa, num, won } from '../format'
@@ -194,7 +194,9 @@ export default function DecisionPanel({ detail, actor, onDone }: Props) {
   const deny = p2 ? p2.deny_date : detail.deny_date
   const last = p2 ? p2.approval_deadline : detail.approval_deadline
   const prefix = phase2 ? '2차 ' : ''
-  const overdue = !!deny && !!today && daysBetween(today, deny) < 0
+  // 기한 지남은 결정 단계(1차: 회신·승인·재승인 대기, 2차: 2차 승인 대기)일 때만 — 이미 승인돼 다음 단계로 간 건에는 맞지 않는다
+  const deciding = phase2 || FIRST_STAGE_STATUSES.includes(c.status)
+  const overdue = deciding && !!deny && !!today && daysBetween(today, deny) < 0
   let lead: string
   if (overdue) lead = `${prefix}기본 거부 날(${koDate(deny as string)})이 지났어요. 기한이 지나 결정할 수 없고 기본 거부로 처리돼요.`
   else if (canDecide) {

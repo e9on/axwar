@@ -110,7 +110,7 @@ describe('회신 입력', () => {
     expect(r.getByText('3,000개')).toBeInTheDocument()
     expect(r.getByText('9월 20일')).toBeInTheDocument()
     expect(r.getByText('85%')).toBeInTheDocument()
-    expect(r.getByText('fake-해석기')).toBeInTheDocument()
+    expect(r.getByText('시연용 해석')).toBeInTheDocument()
     expect(r.getByText(/사람 확인 필요/)).toBeInTheDocument()
     expect(r.getByText('아니오')).toBeInTheDocument()
     // 바뀐 상태: 건 상태, 새 작업, 집행일 변경
@@ -136,6 +136,31 @@ describe('회신 입력', () => {
     release()
     await screen.findByRole('region', { name: '저장 결과' })
     expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1)
+  })
+
+  it('답_고르기_단추가_시스템이_알아듣는_문장을_채운다', async () => {
+    base()
+    mount()
+    await userEvent.click(await screen.findByRole('button', { name: /DEMO-PLAN-001/ }))
+    const box = await screen.findByLabelText('회신 내용')
+    const pickBox = screen.getByRole('group', { name: '답 고르기' })
+    await userEvent.click(within(pickBox).getByRole('button', { name: '가능' }))
+    expect(box).toHaveValue('요청하신 대로 가능합니다.')
+    await userEvent.click(within(pickBox).getByRole('button', { name: '일부만 가능' }))
+    await userEvent.type(screen.getByLabelText('가능한 수량'), '8000')
+    expect(box).toHaveValue('8,000개까지 가능합니다.')
+    await userEvent.click(within(pickBox).getByRole('button', { name: '불가' }))
+    expect(box).toHaveValue('요청하신 내용은 불가합니다.')
+    expect(screen.getByRole('button', { name: '회신 저장' })).toBeEnabled()
+  })
+
+  it('1차_결재가_끝난_건의_요청에는_1차_기한을_보이지_않는다', async () => {
+    base({ 'GET /api/cases/7': { json: caseOf({ case: { ...caseOf().case, status: '2차 잠금', stage: '2차 관찰' } }) } })
+    mount()
+    await userEvent.click(await screen.findByRole('button', { name: /DEMO-PLAN-001/ }))
+    await screen.findByLabelText('회신 내용')
+    expect(screen.queryByText(/확정 기한/)).toBeNull()
+    expect(screen.queryByText(/마지막 승인일/)).toBeNull()
   })
 
   it('내용이_비면_저장할_수_없다', async () => {

@@ -115,8 +115,8 @@ export function useDemoScene() {
     busy,
     notice,
     error,
-    /** 끝났을 때 보이는 결과 한 줄: 이번 접속에서 본 마지막 일, 없으면 서버가 아는 마지막 도착 사건 */
-    result: last ?? state?.arrived?.[(state.arrived?.length ?? 0) - 1] ?? null,
+    /** 끝났을 때 보이는 결과 한 줄: 서버가 준 장면 건들의 지금 상태, 없으면 이번 접속에서 본 마지막 일이나 마지막 도착 사건 */
+    result: state?.outcome?.length ? `결과: ${state.outcome.join(', ')}` : (last ?? state?.arrived?.[(state.arrived?.length ?? 0) - 1] ?? null),
     /** 결정을 기다리느라 멈췄다가 돌아왔는지 */
     decided: run.paused === 'decide' && !(waiting?.ready),
     highlightRef: waiting?.ready ? (waiting.target ?? null) : null,

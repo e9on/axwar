@@ -2,7 +2,7 @@ import { useState } from 'react'
 import Badge from './Badge'
 import Fold from './Fold'
 import { signalValue, indicatorValue } from './EvidenceList'
-import { RULE_LABEL, RULE_LABEL_FALLBACK, changeLine, fromTo } from '../copy'
+import { RULE_LABEL, RULE_LABEL_FALLBACK, changeLine, fromTo, modelLabel } from '../copy'
 import type { AiText, ApproverChange, CaseDetailData, CaseEvent, CaseRequest, Escalation, EvidenceData, ReplyJudgment } from '../caseTypes'
 import { koDate } from '../date'
 import { AI_SHORT_LIMIT, aiCore, aiGroups, clip, isStructured } from '../aiText'
@@ -80,7 +80,7 @@ export function Requests({ requests }: { requests: CaseRequest[] }) {
                 {j ? (
                   <p className="interp">
                     <Badge kind="AI" />
-                    해석: {interpretation(j)} <span className="muted">· {j.model} · {humanText(j)}</span>
+                    해석: {interpretation(j)} <span className="muted">· {modelLabel(j.model)} · {humanText(j)}</span>
                   </p>
                 ) : (
                   <p className="interp muted">해석 기록 없음</p>

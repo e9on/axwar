@@ -1,4 +1,4 @@
-import { fromTo } from '../copy'
+import { fromTo, modelLabel, noArrow } from '../copy'
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useViewer } from '../state/viewer'
@@ -6,6 +6,7 @@ import { useClock } from '../state/clock'
 import { usePreview } from '../state/preview'
 import { useLoad } from '../state/useLoad'
 import { anyValue, pct, num, usd } from '../format'
+import { koDate } from '../date'
 import { ASSUMPTION_PREFIX } from '../decisions'
 import type { AiUsage, EventRow, PolicyItem } from '../adminTypes'
 import Badge from '../components/Badge'
@@ -25,15 +26,33 @@ function timeText(ts: string): string {
   return ts.slice(0, 16).replace('T', ' ')
 }
 
-/** 이벤트 상세를 "이전에서 이후로"와 나머지 항목으로 */
+/** 기록에 그대로 보여 줄 문장 값(이름 없이) */
+const TEXT_KEYS = ['note', 'text', 'reason', 'comment', 'detail']
+/** 사람이 읽을 이름으로 보여 줄 항목. 여기 없는 항목(내부 번호·키 이름·계산용 값)은 보이지 않는다 */
+const LABELS: Record<string, string> = {
+  dept: '부서', purpose: '목적', title: '작업', decision: '결정', approvers: '승인권자', targets: '대상', target: '대상',
+  stage: '단계', deadline: '기한', due: '기한', status: '상태', actor: '처리한 사람', role: '역할', opinion: '의견',
+  choice: '판단', qty_before: '바꾸기 전 수량', qty_after: '바꾼 수량', date: '날짜', cause: '원인',
+}
+const DATE_KEYS = ['deadline', 'due', 'date'] // 날짜 값은 "7월 17일"로
+
+/** 이벤트 상세를 "이전에서 이후로"와 쉬운 말 항목으로. AI 판정은 판정 종류와 해석기(시연용 해석·모델 이름)만 */
 function detailParts(detail: Record<string, unknown>): { change: string | null; rest: string } {
   const pair = 'from' in detail && 'to' in detail ? ['from', 'to'] : 'before' in detail && 'after' in detail ? ['before', 'after'] : null
   const change = pair ? fromTo(anyValue(detail[pair[0]]), anyValue(detail[pair[1]])) : null
-  const rest = Object.entries(detail)
-    .filter(([k]) => !pair?.includes(k))
-    .map(([k, v]) => (k === 'note' ? String(v) : `${k}: ${anyValue(v)}`))
-    .join(' · ')
-  return { change, rest }
+  const parts: string[] = []
+  if (typeof detail.kind === 'string' && 'model' in detail) {
+    parts.push(detail.kind, modelLabel(String(detail.model)))
+    if (detail.needs_human === true) parts.push('사람 확인 필요')
+  }
+  for (const [k, v] of Object.entries(detail)) {
+    if (pair?.includes(k) || v === null || v === undefined || v === '') continue
+    if (TEXT_KEYS.includes(k) && typeof v === 'string') parts.push(v)
+    else if (LABELS[k] && DATE_KEYS.includes(k) && typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)) parts.push(`${LABELS[k]}: ${koDate(v)}`)
+    else if (LABELS[k] && typeof v !== 'object') parts.push(`${LABELS[k]}: ${anyValue(v)}`)
+    else if (LABELS[k] && Array.isArray(v) && v.every((x) => typeof x !== 'object')) parts.push(`${LABELS[k]}: ${v.join(', ')}`)
+  }
+  return { change, rest: noArrow(parts.join(' · ')) }
 }
 
 function Events() {
@@ -141,7 +160,7 @@ function AiCalls() {
   return (
     <section aria-label="AI 호출 영역">
       <p className="lead">
-        AI 모드 {u.mode} · 지금까지 {usd(u.spent_usd)} (한도 {usd(u.total_cap_usd)}) · 오늘 {usd(u.spent_today_usd)} (하루 한도 {usd(u.daily_cap_usd)}) · 호출 {num(u.calls_total)}건
+        AI 모드 {u.mode === 'fake' ? '시연용 해석(진짜 AI 꺼짐)' : '실제 AI'} · 지금까지 {usd(u.spent_usd)} (한도 {usd(u.total_cap_usd)}) · 오늘 {usd(u.spent_today_usd)} (하루 한도 {usd(u.daily_cap_usd)}) · 호출 {num(u.calls_total)}건
       </p>
       {u.calls.length === 0 ? (
         <p className="muted">AI를 부른 기록이 없어요</p>
@@ -156,7 +175,7 @@ function AiCalls() {
                   <Badge kind="AI" />
                   {c.kind}
                 </span>{' '}
-                · {c.model}
+                · {modelLabel(c.model)}
                 {c.case_id !== null && (
                   <>
                     {' '}

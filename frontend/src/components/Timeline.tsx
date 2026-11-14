@@ -14,6 +14,7 @@ import type { CaseListRow } from '../caseTypes'
 import LoadFailed from './LoadFailed'
 
 const BAND_KIND = '하회 구간' // 서버 calendar의 kind 이름
+const PERIOD_KIND = '승인 기간' // 승인할 수 있게 된 날부터 마지막 승인일까지(서버 calendar)
 const ALERT_KINDS = ['알림', '2차 알림'] // 기본 거부 직전 알림 종류
 const GROUP_MIN = 3 // 같은 날 같은 종류가 이 개수 이상이면 묶어 보임
 const FALLBACK_WIDTH = 1000 // 폭을 잴 수 없을 때
@@ -52,14 +53,44 @@ function Band({ ev, style }: { ev: CalEvent; style?: React.CSSProperties }) {
   )
 }
 
-function Wide({ events, today, role }: { events: CalEvent[]; today: string; role?: string }) {
+/** 승인 기간 막대: 점 표시 아래 전용 줄에 하나씩. 내 차례면 남색 */
+function Periods({ periods, start, end, role }: { periods: CalEvent[]; start: string; end: string; role?: string }) {
   const go = useCaseLink()
+  return (
+    <>
+      {periods.map((p, i) => {
+        const span = bandSpan(p.date, p.end!, start, end)
+        const mine = role !== undefined && p.roles.includes(role)
+        return (
+          <button
+            key={i}
+            type="button"
+            className="period"
+            data-testid="period"
+            data-mine={mine}
+            aria-label={`${p.label}${mine ? ' (내 차례)' : ''}`}
+            title={p.label}
+            style={{ left: `${span.left}%`, width: `${span.width}%`, ['--lane' as string]: i }}
+            onClick={() => p.case_id !== null && go(p.case_id)}
+          >
+            <span>{p.label}</span>
+          </button>
+        )
+      })}
+    </>
+  )
+}
+
+function Wide({ events: all, today, role }: { events: CalEvent[]; today: string; role?: string }) {
+  const go = useCaseLink()
+  const periods = useMemo(() => all.filter((e) => e.kind === PERIOD_KIND && e.end), [all])
+  const events = useMemo(() => all.filter((e) => e.kind !== PERIOD_KIND), [all])
   const [ref, width] = useWidth()
   const [open, setOpen] = useState<string | null>(null)
 
   const { start, end } = useMemo(
-    () => monthRange([today, ...events.flatMap((e) => (e.end ? [e.date, e.end] : [e.date]))]),
-    [events, today],
+    () => monthRange([today, ...all.flatMap((e) => (e.end ? [e.date, e.end] : [e.date]))]),
+    [all, today],
   )
   const marks = useMemo(() => toMarks(events, role, GROUP_MIN), [events, role])
   const rows = useMemo(() => {
@@ -87,6 +118,7 @@ function Wide({ events, today, role }: { events: CalEvent[]; today: string; role
         ref={ref}
         style={{
           ['--rows' as string]: rowCount,
+          ['--periods' as string]: periods.length,
           ['--dot-px' as string]: `${DOT_PAD_PX}px`,
           ['--dot-border' as string]: `${DOT_BORDER_PX}px`,
           ['--dot-font' as string]: `${DOT_CHAR_PX}px`,
@@ -101,6 +133,7 @@ function Wide({ events, today, role }: { events: CalEvent[]; today: string; role
           const span = bandSpan(b.date, b.end!, start, end)
           return <Band key={i} ev={b} style={{ left: `${span.left}%`, width: `${span.width}%` }} />
         })}
+        <Periods periods={periods} start={start} end={end} role={role} />
         <div className="today" data-testid="today" style={{ left: `${pct(today, start, end)}%` }}>
           <span>오늘 {today.slice(5).replace('-', '/')}</span>
         </div>
@@ -153,8 +186,9 @@ function Narrow({ events, today, role }: { events: CalEvent[]; today: string; ro
   const [showPast, setShowPast] = useState(false)
   const bands = events.filter((e) => e.kind === BAND_KIND)
   const items = events.filter((e) => e.kind !== BAND_KIND)
-  const shown = items.filter((e) => showPast || e.date >= today)
-  const pastCount = items.length - items.filter((e) => e.date >= today).length
+  const last = (e: CalEvent) => e.end ?? e.date // 승인 기간은 끝날이 지나야 지난 일정
+  const shown = items.filter((e) => showPast || last(e) >= today)
+  const pastCount = items.length - items.filter((e) => last(e) >= today).length
   return (
     <div className="date-list-wrap">
       {bands.map((b, i) => (
@@ -167,7 +201,7 @@ function Narrow({ events, today, role }: { events: CalEvent[]; today: string; ro
               type="button"
               data-mine={role !== undefined && e.roles.includes(role)}
               data-alert={isAlert(e.kind)}
-              data-past={e.date < today}
+              data-past={last(e) < today}
               aria-label={spoken(e.date, e.label, role !== undefined && e.roles.includes(role), isAlert(e.kind))}
               aria-disabled={e.case_id === null}
               onClick={() => e.case_id !== null && go(e.case_id)}
@@ -208,7 +242,7 @@ export default function Timeline() {
     const byId = new Map((caseRows.data ?? []).map((c) => [c.id, c]))
     return (data ?? []).map((e) => relabel(e, byId))
   }, [data, caseRows.data])
-  const isKey = (e: CalEvent) => e.kind === BAND_KIND || (role !== undefined && e.roles.includes(role)) || KEY_KINDS.test(e.kind)
+  const isKey = (e: CalEvent) => e.kind === BAND_KIND || e.kind === PERIOD_KIND || (role !== undefined && e.roles.includes(role)) || KEY_KINDS.test(e.kind)
   const shown = all ? named : named.filter(isKey)
   const hidden = named.length - shown.length
 
