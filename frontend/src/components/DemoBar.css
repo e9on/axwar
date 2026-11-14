@@ -1,0 +1,31 @@
+/* 메인 위쪽의 시연 막대: 날짜 · 버튼 · 안내 한 줄 · 알림. 값은 tokens.css만 쓴다. 움직이는 효과 없음(움직임 줄이기 설정과 무관하게 정지 상태) */
+.demo-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2) var(--s-5);
+  padding: var(--s-2) var(--s-5);
+  background: var(--c-navy-soft); border-bottom: 1px solid var(--c-rule);
+}
+.demo-bar[data-state="wait"] { background: var(--c-warn-soft); border-bottom: 2px solid var(--c-warn); }
+.db-date { display: flex; align-items: baseline; gap: var(--s-3); }
+.db-date b { font-family: var(--f-doc); font-size: var(--t-5); font-weight: var(--w-heavy); font-variant-numeric: tabular-nums; }
+.db-date span { color: var(--c-ink-2); font-size: var(--t-1); }
+.db-tools { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.demo-bar .btn {
+  border: 1px solid var(--c-navy); border-radius: var(--r-2); background: var(--c-sheet); color: var(--c-navy);
+  padding: var(--s-1) var(--s-4); font: inherit; font-weight: var(--w-bold); cursor: pointer;
+}
+.demo-bar .btn.pri { background: var(--c-navy); color: var(--c-sheet); }
+.demo-bar .btn.deny { border-color: var(--c-seal); color: var(--c-seal); }
+.demo-bar .btn.small { padding: 0 var(--s-3); margin-left: var(--s-2); }
+.demo-bar .btn:disabled { opacity: 0.5; cursor: default; }
+.db-msg { margin: 0; flex: 1 1 18em; color: var(--c-ink); }
+.demo-bar[data-state="wait"] .db-msg { color: var(--c-warn); }
+.db-result { color: var(--c-ink-2); }
+.db-error { margin: 0; flex-basis: 100%; color: var(--c-seal); font-weight: var(--w-medium); }
+.db-notice { list-style: none; margin: 0; padding: var(--s-1) var(--s-3); flex-basis: 100%; border-left: 3px solid var(--c-navy); background: var(--c-sheet); font-size: var(--t-2); }
+
+/* 결정을 기다리는 할 일 줄: 깜빡임 없이 테두리와 바탕으로만 */
+.todo .rows > li[data-waiting="true"] { box-shadow: inset 0 0 0 2px var(--c-warn); background: var(--c-warn-soft); }
+
+@media (max-width: 760px) {
+  .demo-bar { padding: var(--s-2) var(--s-4); }
+}

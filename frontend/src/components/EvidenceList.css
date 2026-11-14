@@ -1,0 +1,63 @@
+.evidence h3 { font-size: var(--t-4); margin: var(--s-5) 0 var(--s-2); }
+.evidence section:first-child h3 { margin-top: var(--s-4); }
+.evidence .note, .evidence .limit { font-size: var(--t-1); color: var(--c-ink-3); margin: var(--s-1) 0 var(--s-2); }
+.evidence .limit { margin-top: var(--s-4); }
+.evidence .muted { color: var(--c-ink-3); }
+
+.elist { list-style: none; margin: 0; padding: 0; }
+.elist.rule-box { background: var(--c-paper); border-left: 3px solid var(--c-navy); padding: var(--s-1) var(--s-3); }
+.erow { border-bottom: 1px solid var(--c-rule); }
+.erow:last-child { border-bottom: 0; }
+.erow[data-assumed="true"] .ebtn { box-shadow: inset 3px 0 0 var(--c-b-asm); }
+
+/* 줄 전체가 펼침 버튼 */
+.ebtn {
+  display: grid; align-items: start; gap: var(--s-1) var(--s-3);
+  width: 100%; text-align: left; border: 0; background: none; color: inherit;
+  padding: var(--s-2) var(--s-2); border-radius: var(--r-2);
+}
+.ebtn:hover { background: var(--c-navy-soft); }
+/* 줄 안: 위는 결론+이름(+작은 값), 아래는 설명 문장 */
+.ebtn { grid-template-columns: minmax(0, 1fr) var(--col-chev); }
+.eline { display: flex; flex-direction: column; gap: var(--s-1); min-width: 0; }
+.ehead-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s-1) var(--s-2); }
+.elabel { font-weight: var(--w-bold); }
+.eval { color: var(--c-ink-2); font-size: var(--t-1); }
+.explain { font-weight: var(--w-regular, 400); white-space: normal; overflow-wrap: anywhere; }
+.explain.fallback { font-size: var(--t-1); }
+.esrc { font-size: var(--t-1); }
+.epanel .basis { margin-top: 0; }
+.ecell { min-width: 0; overflow-wrap: anywhere; }
+.ecell.n { text-align: right; white-space: nowrap; }
+.ecell.src { font-size: var(--t-1); }
+.ecell.lv { font-weight: var(--w-bold); white-space: nowrap; }
+.ecell.lv.red { color: var(--c-seal); }
+.ecell.lv.yel { color: var(--c-warn); }
+.ecell.lv.grn { color: var(--c-ok); }
+.ecell.lv.none { color: var(--c-ink-3); }
+.ecell .stage { color: var(--c-ink-3); font-size: var(--t-1); }
+.chev { color: var(--c-ink-3); text-align: right; }
+
+.epanel { padding: var(--s-2) var(--s-3) var(--s-4) var(--s-4); background: var(--c-paper); border-left: 3px solid var(--c-rule); margin: 0 var(--s-2) var(--s-2); }
+.epanel[hidden] { display: none; }
+.edetail p { margin: 0 0 var(--s-2); }
+.edetail .dh { font-size: var(--t-1); font-weight: var(--w-bold); color: var(--c-ink-2); }
+.edetail p.dh { margin: var(--s-3) 0 var(--s-1); }
+.inputs { display: grid; grid-template-columns: repeat(auto-fill, minmax(calc(var(--col-name) + var(--col-num)), 1fr)); gap: var(--s-1) var(--s-4); margin: 0; }
+.inputs div { display: flex; justify-content: space-between; gap: var(--s-3); border-bottom: 1px dotted var(--c-rule); }
+.inputs dt { color: var(--c-ink-2); }
+.inputs dd { margin: 0; font-weight: var(--w-medium); text-align: right; }
+.sources, .policies { margin: 0; padding: 0; list-style: none; }
+.sources li { overflow-wrap: anywhere; }
+.policies li { padding: var(--s-2) var(--s-3); border-left: 3px solid var(--c-rule); margin-bottom: var(--s-2); background: var(--c-sheet); }
+.policies li[data-assumed="true"] { border-left-color: var(--c-b-asm); background: var(--c-warn-soft); }
+.policies li p { margin: 0; }
+.policies code { font-family: var(--f-ui); font-size: var(--t-1); }
+
+@media (max-width: 760px) {
+  .epanel { margin: 0 0 var(--s-2); padding-left: var(--s-3); }
+}
+
+/* 상신으로 바뀌기 전의 처음 판정 줄 */
+.erow[data-superseded="true"] .ebtn { color: var(--c-ink-3); }
+.erow[data-superseded="true"] .ecell.text { text-decoration: none; opacity: 0.85; }

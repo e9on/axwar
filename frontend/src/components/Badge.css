@@ -1,0 +1,17 @@
+.b {
+  display: inline-block; font-size: var(--t-1); font-weight: var(--w-bold); line-height: 1.5;
+  color: var(--c-b-ink); padding: 0 var(--s-2); border-radius: var(--r-1);
+  margin-right: var(--s-1); vertical-align: 1px; white-space: nowrap;
+}
+.b.src { background: var(--c-b-src); }
+.b.calc { background: var(--c-b-calc); }
+.b.asm { background: var(--c-b-asm); color: var(--c-b-asm-ink); }
+.b.reply { background: var(--c-b-reply); }
+.b.op { background: var(--c-b-op); }
+.b.ai { background: var(--c-b-ai); }
+/* 가정은 작고 조용하게: 채움 없이 테두리만 */
+.b.asm { background: transparent; color: inherit; font-size: var(--t-1); font-weight: var(--w-regular); border: 1px solid var(--c-b-asm); padding: 0 var(--s-1); }
+.ai-lines p { margin: 0 0 var(--s-1); }
+.ai-group ul { margin: 0 0 var(--s-1); padding-left: 1.2em; }
+.ai-group li { overflow-wrap: anywhere; }
+.ai-line { display: block; overflow-wrap: anywhere; white-space: pre-line; }
