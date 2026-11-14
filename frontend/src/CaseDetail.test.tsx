@@ -10,6 +10,8 @@ import CaseDetailPage from './pages/CaseDetail'
 const PEOPLE = [
   { name: 'Masil 대표', role: 'Masil 대표' },
   { name: '마케팅팀장', role: '마케팅팀' },
+  { name: '캠페인 담당자', role: '캠페인 담당' },
+  { name: '계약 담당자', role: '계약 담당' },
 ]
 const DETAIL_PATH = (who: string) => `/api/cases/7?viewer=${encodeURIComponent(who)}`
 
@@ -333,7 +335,7 @@ describe('건 상세', () => {
     const reply = text.closest('.reply') as HTMLElement
     expect(within(reply).queryByText('회신')).toBeNull()
     expect(within(reply).getByText(/해석: 수용/)).toBeInTheDocument()
-    expect(within(reply).getByText(/fake-해석기 · 사람 확인 불필요/)).toBeInTheDocument()
+    expect(within(reply).getByText(/시연용 해석 · 사람 확인 불필요/)).toBeInTheDocument()
   })
 
   it('결재선_변경_이력이_보인다', async () => {
@@ -858,5 +860,84 @@ describe('승인 확인 창과 서버가 준 열린 여부·막힘', () => {
     await userEvent.click(await screen.findByRole('button', { name: /예상 ROAS 괴리/ }))
     expect(screen.getAllByText(/없어진 정책 항목/).length).toBeGreaterThan(0)
     expect(screen.getByText('signals.old_key')).toBeInTheDocument()
+  })
+
+  it('위험_신호_요약은_결정에_쓰는_신호만_세고_참고용은_따로_센다', async () => {
+    Setup(MAY, 'Masil 대표')
+    mount('Masil 대표')
+    expect(await screen.findByRole('button', { name: /위험 신호/ })).toHaveTextContent('나쁨 0건 · 주의 1건 · 좋음 1건 · 참고용 1건')
+  })
+
+  it('공지할_수_있는_사람에게만_1차_공지_단추가_있고_확인_뒤_보낸다', async () => {
+    const CAMPAIGN = { ...NOT, person: '캠페인 담당자', role: '캠페인 담당', can_announce: true }
+    const over = { facts: { ...detailOf(NOT).facts, phase1: { qty: 3000, date: '2026-07-27' } } }
+    const { calls } = Setup(CAMPAIGN, '캠페인 담당자', { 'POST /api/cases/7/announce': { json: { changed: true, qty: 3000 } } }, over)
+    mount('캠페인 담당자')
+    await userEvent.click(await screen.findByRole('button', { name: '1차 공지' }))
+    const dlg = screen.getByRole('dialog')
+    expect(dlg).toHaveTextContent('3,000개')
+    await userEvent.click(within(dlg).getByRole('button', { name: '공지 확정' }))
+    await waitFor(() => expect(calls.filter((c) => c.method === 'POST' && c.path === '/api/cases/7/announce')).toHaveLength(1))
+    expect(calls.find((c) => c.path === '/api/cases/7/announce')?.body).toEqual({ actor: '캠페인 담당자' })
+  })
+
+  it('공지할_수_없으면_1차_공지_단추가_없다', async () => {
+    Setup({ ...NOT, can_announce: false }, '마케팅팀장')
+    mount('마케팅팀장')
+    await screen.findByText('Masil 대표의 결정을 기다리고 있어요.')
+    expect(screen.queryByRole('button', { name: '1차 공지' })).toBeNull()
+  })
+
+  it('통보_초안은_줄바꿈해_보이고_발송할_수_있는_사람에게만_발송_단추', async () => {
+    const OWNER = { ...NOT, person: '계약 담당자', role: '계약 담당', can_send_notice: true }
+    const over = {
+      case: { ...detailOf(NOT).case, kind: '계약', ref_id: 'INF-001', status: '통보 초안', stage: '통보', title: '혜인 전속계약' },
+      facts: { annual_fixed_krw: 2_800_000_000, expiry: '2026-08-31', notice: { text: '혜인님께,\n성과 값은 공제 후 순액 기준으로 정산하는 안을 제안드립니다.', ok: true, model: 'fake' } },
+    }
+    const { calls } = Setup(OWNER, '계약 담당자', { 'POST /api/cases/7/send-notice': { json: { changed: true, status: '상대 회신 대기' } } }, over)
+    mount('계약 담당자')
+    const box = await screen.findByRole('region', { name: '조건변경 통보 초안' })
+    expect(box).toHaveTextContent('공제 후 순액 기준')
+    expect(within(box).getByText('AI')).toBeInTheDocument()
+    await userEvent.click(within(box).getByRole('button', { name: '통보 발송' }))
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '발송 확정' }))
+    await waitFor(() => expect(calls.filter((c) => c.method === 'POST' && c.path === '/api/cases/7/send-notice')).toHaveLength(1))
+    expect(calls.find((c) => c.path === '/api/cases/7/send-notice')?.body).toEqual({ actor: '계약 담당자' })
+  })
+
+  it('발송할_수_없는_사람은_통보_초안만_보고_단추는_없다', async () => {
+    const over = {
+      case: { ...detailOf(NOT).case, kind: '계약', ref_id: 'INF-001', status: '통보 초안', stage: '통보', title: '혜인 전속계약' },
+      facts: { annual_fixed_krw: 2_800_000_000, expiry: '2026-08-31', notice: { text: '혜인님께', ok: true, model: 'fake' } },
+    }
+    Setup({ ...NOT, can_send_notice: false }, '마케팅팀장', {}, over)
+    mount('마케팅팀장')
+    expect(await screen.findByRole('region', { name: '조건변경 통보 초안' })).toHaveTextContent('혜인님께')
+    expect(screen.queryByRole('button', { name: '통보 발송' })).toBeNull()
+  })
+
+  it('기본_거부로_끝난_건은_왜_그렇게_됐는지와_승인하지_않은_결재를_보인다', async () => {
+    const over = {
+      case: { ...detailOf(NOT).case, status: '확정 보류', open: false, stage: '끝' },
+      rule: { approvers: ['CEO', '이사회'], hits: [], required_roles: ['CEO', '이사회'], approved_roles: ['CEO'], pending_roles: [] },
+      history: [
+        { id: 9, sim_date: '2026-07-14', kind: '상태변경', actor: '시스템', detail: { from: '승인 대기', to: '기본 거부', note: '마지막 승인일 7/13까지 승인 없음 — 확정 기한 7/17의 3일 전 기본 거부' } },
+        { id: 10, sim_date: '2026-07-14', kind: '상태변경', actor: '시스템', detail: { from: '기본 거부', to: '확정 보류', note: '확정 보류(철회)' } },
+      ],
+    }
+    Setup(NOT, '마케팅팀장', {}, over)
+    mount('마케팅팀장')
+    const why = await screen.findByRole('note', { name: '기본 거부된 이유' })
+    expect(why).toHaveTextContent('마지막 승인일 7/13까지 승인 없음')
+    expect(why).toHaveTextContent('승인하지 않은 결재: 이사회')
+  })
+
+  it('1차_결재가_끝나_2차로_넘어간_건에는_1차_기본_거부_날이_지났다고_하지_않는다', async () => {
+    const over = { case: { ...detailOf(NOT).case, status: '2차 잠금', open: true, stage: '2차 관찰' }, deny_date: '2026-07-14', approval_deadline: '2026-07-13', rule: { ...detailOf(NOT).rule, approved_roles: ['마케팅팀', 'Masil 대표'], pending_roles: [] } }
+    Setup(NOT, '마케팅팀장', {}, over)
+    mount('마케팅팀장')
+    const lead = await screen.findByRole('group', { name: '결정' })
+    expect(lead).not.toHaveTextContent('기본 거부 날')
+    expect(lead).toHaveTextContent('2차 잠금 상태예요')
   })
 })

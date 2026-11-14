@@ -56,3 +56,7 @@
   .rdoc { padding: var(--s-4); }
   .rhead { grid-template-columns: minmax(0, 1fr); }
 }
+/* 답 고르기: 입력칸 위 단추 줄 */
+.rform .picks { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.rform .picks .btn[aria-pressed="true"] { border-color: var(--c-navy); background: var(--c-navy-soft); color: var(--c-navy); font-weight: var(--w-bold); }
+.rform .hint { margin: 0; font-size: var(--t-1); }

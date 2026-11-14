@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 
 from app.calc.cash import Window
 from app.rules.split import make_split, phase2_gate, return_stop_threshold
@@ -14,7 +14,7 @@ def test_장면2_분할안():
     p = _split()
     assert p.phase1_qty == 1800
     assert p.phase2_qty == 2200
-    assert p.phase2_date == date(2026, 8, 24)
+    assert p.phase2_date == date(2026, 8, 28)  # 1차 7/27 + 관찰 28일 + 기본 거부 여유 3일 + 최소 승인 1일
 
 
 def test_1차는_물류한도와_여유재고_중_작은값():
@@ -119,3 +119,11 @@ def test_갱신이_확정됐거나_만료_전이면_차단_아님():
 def test_반품_자동보류는_차단이_아니다():
     g = gate(color_returns=90)
     assert g.auto_stopped and not g.blocked
+
+
+def test_2차_계획일은_반품_관찰이_끝나고_승인할_여유까지_둔_날_이후다():
+    # 1차 7/27 + 관찰 28일(8/24)에 결과가 나오므로, 기본 거부 여유 3일 + 최소 승인 1일을 더한 8/28 이후로 계획한다
+    from app import policy
+    p = make_split(4000, 1000, 1000, date(2026, 7, 27), date(2026, 8, 18), [], date(2026, 12, 31))
+    room = policy.get("split.return_observe_days") + policy.get("deadline.buffer_days") + policy.get("phase2.min_approval_days")
+    assert p.phase2_date == date(2026, 7, 27) + timedelta(days=room) == date(2026, 8, 28)

@@ -132,3 +132,18 @@ export function fromTo(a: string, b: string): string {
 export function changeLine(from: string, to: string, at: string): string {
   return `결재선이 바뀌었어요 (${from}에서 ${to}로, ${koDate(at)})`
 }
+
+/** AI 모델 이름: 서버의 시연용 해석기(fake…)는 "시연용 해석"으로 */
+export function modelLabel(model: string): string {
+  return /^fake/i.test(model) ? '시연용 해석' : model
+}
+
+/** 서버 문장의 화살표(A→B)를 "A에서 B로"로. 숫자에 단위가 오른쪽에만 붙어 있으면 왼쪽에도 붙인다(6,000→4,700개 → 6,000개에서 4,700개로) */
+export function noArrow(text: string): string {
+  return text.replace(/([^\s→]+)→((?:[^,·()\n→]|,(?=\d))+)/g, (_, a: string, b: string) => {
+    const right = b.trim()
+    const unit = right.match(/^[\d,.]+(\D+)$/)?.[1] ?? ''
+    const left = unit && /^[\d,.]+$/.test(a) ? a + unit : a
+    return `${left}에서 ${josa(right, '로')}${b.endsWith(' ') ? ' ' : ''}`
+  })
+}

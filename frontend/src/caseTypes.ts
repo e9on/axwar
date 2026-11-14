@@ -96,6 +96,10 @@ export type CaseDetailData = {
     split?: Split | null
     stock?: { day_qty?: number | null; share?: number | null; want?: number | null; shortage?: boolean } | null
     volume?: { units?: number } | null
+    /** 승인된 1차 수량·날짜 */
+    phase1?: { qty: number; date: string | null } | null
+    /** 기본 거부된 계약의 조건변경 통보(초안·발송한 글) */
+    notice?: { text: string; ok: boolean; model: string; sent_text?: string; sent_by?: string } | null
     [key: string]: unknown
   }
   rule: { approvers: string[]; hits: Hit[]; required_roles: string[]; approved_roles: string[]; pending_roles: string[] }
@@ -127,6 +131,10 @@ export type CaseDetailData = {
     /** 지금 보낼 수 있는 2차 결정 값 */
     actions_phase2?: string[]
     split_preview?: SplitPreview | null
+    /** 지금 1차 공지를 할 수 있는지(서버가 실제 공지와 같은 검사로 판단) */
+    can_announce?: boolean
+    /** 지금 조건변경 통보를 발송할 수 있는지 */
+    can_send_notice?: boolean
   }
 }
 

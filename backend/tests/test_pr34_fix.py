@@ -39,7 +39,7 @@ def _eng(store, *responses):
 def _phase2_wait(store):
     eng = Engine(store)
     cid = eng.seed("scenario_2_exception")[0]
-    eng.run_script("scenario_2_exception", upto=10)
+    eng.run_script("scenario_2_exception", upto=12)
     assert store.get_case(cid)["status"] == "2차 승인 대기"
     return eng, cid
 

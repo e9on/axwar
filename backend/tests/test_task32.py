@@ -190,7 +190,7 @@ def test_옛_저장_행도_설명이_붙는다(store):
 
 def test_2차_반품_기준_줄에도_설명(store):
     from test_task25 import _scene  # noqa: E402
-    eng, cid = _scene(store, "scenario_2_exception", 9)
+    eng, cid = _scene(store, "scenario_2_exception", 11)
     items = eng.phase2_view(cid)["returns_check"]["items"]
     assert [i["label"] for i in items] == ["단순변심", "색상불만"]
     for i in items:

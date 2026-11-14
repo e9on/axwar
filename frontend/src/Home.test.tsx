@@ -377,4 +377,35 @@ describe('메인 화면', () => {
     expect(css).not.toMatch(/\.track\s*\{[^}]*overflow:\s*hidden/)
     expect(css).not.toMatch(/data-past[^}]*opacity/)
   })
+
+  it('승인_기간은_시작부터_마지막_승인일까지_막대로_보이고_누르면_건으로_간다', async () => {
+    const period = ev('2026-07-03', '승인 기간', 'P-1 승인 기간 7/3~7/16', 1, ['마케팅팀장'], '2026-07-16')
+    fakeServer(routes(EMPTY_TODO, [...CALENDAR, period]))
+    mount()
+    const bar = await screen.findByTestId('period')
+    expect(bar).toHaveAccessibleName(/P-1 승인 기간 7\/3~7\/16/)
+    expect(bar).toHaveAttribute('data-mine', 'true')
+    expect(parseFloat(bar.style.left)).toBeCloseTo((2 / 62) * 100, 3)
+    expect(parseFloat(bar.style.width)).toBeCloseTo((14 / 62) * 100, 3)
+    expect(screen.queryByRole('button', { name: /^7월 3일, P-1 승인 기간/ })).toBeNull() // 점 표시로는 그리지 않는다
+    await userEvent.click(bar)
+    await waitFor(() => expect(screen.getByTestId('url').textContent).toMatch(/^\/cases\/1/))
+  })
+
+  it('좁은_화면에서도_진행_중인_승인_기간은_목록에_남는다', async () => {
+    narrow(true)
+    const period = ev('2026-07-03', '승인 기간', 'P-1 승인 기간 7/3~7/16', 1, ['마케팅팀장'], '2026-07-16')
+    fakeServer(routes(EMPTY_TODO, [...CALENDAR, period]))
+    mount()
+    const list = await screen.findByRole('list', { name: '날짜 목록' })
+    expect(within(list).getByRole('button', { name: /P-1 승인 기간 7\/3~7\/16/ })).toBeInTheDocument() // 시작일(7/3)은 지났지만 끝(7/16)이 남았다
+  })
+
+  it('회신_사람_확인_작업은_회신_화면으로_간다', async () => {
+    const todo = { ...EMPTY_TODO, 작업: [item(5, 'P-5', { kind: '작업', task_id: 9, title: '회신 사람 확인', detail: '콘텐츠 수정 회신을 사람이 확인해 주세요' })] }
+    fakeServer(routes(todo))
+    mount()
+    await userEvent.click(await screen.findByRole('button', { name: /P-5 회신하기/ }))
+    await waitFor(() => expect(screen.getByTestId('url').textContent).toMatch(/^\/replies/))
+  })
 })

@@ -27,6 +27,7 @@ type Todo = Record<string, unknown>
 /** 칸 순서(서버 todo의 칸 이름). */
 const COLUMNS = ['승인 대기', '알림', '기한 임박', '권한 이동', '회신 대기', '작업']
 const REPLY_COLUMN = '회신 대기' // 서버 todo 칸 이름: 줄 버튼이 회신 화면으로 간다
+const HUMAN_TASK = '회신 사람 확인' // 서버 작업 이름: 처리 칸이 회신 화면에 있어 그리로 간다
 const WORK_COLUMN = '작업' // 서버가 title을 작업 이름으로 덮어 보낸다
 const ALARM = '마감 알림' // 서버 알림 종류 이름: 도장색 글씨로 보인다
 
@@ -55,6 +56,8 @@ export default function TodoList({ highlightRef = null, inScene = false }: { hig
   const { data, error, retry } = useLoad<Todo>(person ? `/api/todo/${encodeURIComponent(person.name)}` : null, [person?.name, version])
 
   const rows = data ? COLUMNS.flatMap((c) => (Array.isArray(data[c]) ? (data[c] as Item[]) : []).map((it) => ({ column: c, it }))) : []
+  // 시연이 기다리는 건이 여러 칸(승인 대기·기한 임박·알림)에 있어도 강조는 맨 앞 줄 하나만
+  const waitingRow = highlightRef ? rows.findIndex((r) => r.it.ref_id === highlightRef) : -1
 
   let body
   if (!person && viewerFailed) {
@@ -83,14 +86,14 @@ export default function TodoList({ highlightRef = null, inScene = false }: { hig
           const line = plainLine(m.full)
           const day = until(column, it)
           return (
-            <li key={i} data-column={column} data-waiting={!!highlightRef && it.ref_id === highlightRef}>
+            <li key={i} data-column={column} data-waiting={i === waitingRow}>
               <span className="verb">{TODO_VERB[column] ?? column}</span>
               <span className="who">
                 <span className="name">{name}</span>
                 {it.title && it.title !== it.ref_id && <span className="ref">{it.ref_id}</span>}
               </span>
               <span className="when">{day}</span>
-              {column === REPLY_COLUMN ? (
+              {column === REPLY_COLUMN || it.title === HUMAN_TASK ? (
                 <button type="button" className="go" aria-label={`${name} ${it.ref_id} 회신하기`} onClick={() => navigate('/replies' + asQuery)}>
                   회신하기
                 </button>
