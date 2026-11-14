@@ -55,6 +55,8 @@ export default function TodoList({ highlightRef = null, inScene = false }: { hig
   const { data, error, retry } = useLoad<Todo>(person ? `/api/todo/${encodeURIComponent(person.name)}` : null, [person?.name, version])
 
   const rows = data ? COLUMNS.flatMap((c) => (Array.isArray(data[c]) ? (data[c] as Item[]) : []).map((it) => ({ column: c, it }))) : []
+  // 시연이 기다리는 건이 여러 칸(승인 대기·기한 임박·알림)에 있어도 강조는 맨 앞 줄 하나만
+  const waitingRow = highlightRef ? rows.findIndex((r) => r.it.ref_id === highlightRef) : -1
 
   let body
   if (!person && viewerFailed) {
@@ -83,7 +85,7 @@ export default function TodoList({ highlightRef = null, inScene = false }: { hig
           const line = plainLine(m.full)
           const day = until(column, it)
           return (
-            <li key={i} data-column={column} data-waiting={!!highlightRef && it.ref_id === highlightRef}>
+            <li key={i} data-column={column} data-waiting={i === waitingRow}>
               <span className="verb">{TODO_VERB[column] ?? column}</span>
               <span className="who">
                 <span className="name">{name}</span>

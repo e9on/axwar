@@ -63,14 +63,17 @@ async function openTodo(page: Page, ref: string, column?: string) {
   await expect(page).toHaveURL(/\/cases\/\d+/)
 }
 
-test('scenario_1: 메인에서 진행하다 7월 3일 회신 뒤 멈추고, Masil 대표가 승인하면 7월 20일에 1차 집행이 되어 끝난다', async ({ page, problems }) => {
+test('scenario_1: 메인에서 진행하면 7월 3일 회신 뒤에도 계속 가다 마지막 승인일(7월 16일)에 멈추고, Masil 대표가 승인하면 7월 20일에 1차 집행이 되어 끝난다', async ({ page, problems }) => {
   void problems
   await startScene(page, '장면 1\\. 정상')
   await expect(page.getByLabel('보는 사람')).toHaveValue('Masil 대표')
   await expect(demoBar(page)).toContainText('7월 1일')
 
   await playUntilNeed(page, 'Masil 대표의 승인이 필요해요')
-  await expect(demoBar(page)).toContainText('7월 3일')
+  await expect(demoBar(page)).toContainText('7월 16일')
+  // 일정 띠에 승인 기간(7/3~7/16)이 내 차례로 보인다
+  await expect(page.getByTestId('period').first()).toHaveAttribute('data-mine', 'true')
+  await expect(page.getByTestId('period').first()).toHaveAccessibleName(/승인 기간 7\/3~7\/16/)
   // 결정할 할 일 줄이 강조된다
   await expect(page.locator('.todo li[data-waiting="true"]')).toHaveCount(1)
   await openTodo(page, 'PLAN-014')
@@ -133,10 +136,9 @@ test('scenario_2: 재고 부족으로 막힌 이유를 보고 분할 승인한�
   await page.getByRole('dialog').getByRole('button', { name: '분할 승인 확정' }).click()
   await expect(page.getByRole('dialog')).toHaveCount(0)
 
-  // 메인에서 다시 진행하면 7월 4일 SCM 회신이 도착한다
+  // SCM 회신(7/4)은 마지막 승인일(7/13) 전에 이미 들어와 분할안에 반영됐다. 두 결재 뒤 다음은 캠페인 담당자의 공지
   await goHome(page)
-  await demoBar(page).getByRole('button', { name: '▶ 진행' }).click()
-  await expect(page.getByRole('status', { name: '이번에 일어난 일' })).toContainText('SCM')
+  await expect(demoBar(page)).toContainText('캠페인 담당자의 공지가 필요해요')
 })
 
 test('scenario_3: 승인 없이 기본 거부 날이 되면 기본 거부와 통보 초안이 보인다', async ({ page, problems }) => {
