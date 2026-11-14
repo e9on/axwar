@@ -400,4 +400,12 @@ describe('메인 화면', () => {
     const list = await screen.findByRole('list', { name: '날짜 목록' })
     expect(within(list).getByRole('button', { name: /P-1 승인 기간 7\/3~7\/16/ })).toBeInTheDocument() // 시작일(7/3)은 지났지만 끝(7/16)이 남았다
   })
+
+  it('회신_사람_확인_작업은_회신_화면으로_간다', async () => {
+    const todo = { ...EMPTY_TODO, 작업: [item(5, 'P-5', { kind: '작업', task_id: 9, title: '회신 사람 확인', detail: '콘텐츠 수정 회신을 사람이 확인해 주세요' })] }
+    fakeServer(routes(todo))
+    mount()
+    await userEvent.click(await screen.findByRole('button', { name: /P-5 회신하기/ }))
+    await waitFor(() => expect(screen.getByTestId('url').textContent).toMatch(/^\/replies/))
+  })
 })
