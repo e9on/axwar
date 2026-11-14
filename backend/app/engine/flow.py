@@ -119,6 +119,7 @@ ALLOC_HOLD, ALLOC_FULL, ALLOC_PARTIAL = "보류", "전량", "조건부"
 TASK_VOLUME = "물량 입력"  # 원본 표본이 없는 기안의 물량을 담당자가 넣는 작업(제목)
 EV_REVIEW_FAILED = "리뷰해석실패"
 EV_WARN, EV_REPORT, EV_REAPPROVE, EV_DRIFT = "조기경고", "그룹보고", "재승인알림", "등록부변경경고"
+EV_P2_PREVIEW = "2차예고"  # 2차 관찰에 들어갈 때 2차 승인권자에게 미리 알림(2차 승인 대기 전까지만 보임)
 EV_SPLIT, EV_STOCK, EV_ANNOUNCE, EV_BLOCK = "분할안변경", "재고부족", "공지", "1차차단"
 EV_UNBLOCK = "차단해제"  # 등록부 집행일을 고쳐 1차 차단이 풀림(사용자 결정 2026-11-11)
 EV_SELL = "판매율조절"  # 1차 판매 실적(판매율)으로 2차 수량을 조절·보류·품절 기록(추가 결정 8)
@@ -1997,9 +1998,24 @@ class Engine:
         self.store.set_status(case_id, S_PHASE1, "시스템", "1차 집행 시작")
         if f["phase2"]:
             self.store.set_status(case_id, S_PHASE2_LOCK, "시스템", OBSERVE_NOTE)
+            self._phase2_preview(case_id)
             self._phase2_refresh(case_id)  # 갱신 미확정이고 2차가 계약 만료 뒤면 바로 차단
             return self.store.get_case(case_id)["status"]
         return S_PHASE1
+
+    def _phase2_preview(self, case_id: int) -> None:
+        """2차 예고(사용자 결정: 2차 집행일은 미루지 않고 승인 기간은 최소로, 대신 미리 알림). 2차 승인권자마다 한 번,
+        2차 집행일과 그 날짜 기준 마지막 승인일(예정)을 알린다. 할 일에는 2차 승인 대기가 시작되기 전까지만 보인다."""
+        case = self.store.get_case(case_id)
+        f = case["facts"]
+        p2 = f.get("phase2") or {}
+        if not p2.get("date") or not f.get(STAGES["2차"][0]):
+            return
+        day = _d(p2["date"])
+        text = (f"{case['ref_id']} 2차 집행 예정 {_md(day)} — 1차 판매·반품 결과가 나오면 2차 승인을 요청해요. "
+                f"마지막 승인일은 {_md(approval_deadline(day))} 예정이에요")
+        for role in _required_roles(f, "2차"):
+            self.store.add_event(case_id, EV_P2_PREVIEW, "시스템", {"target": role, "date": p2["date"], "text": text})
 
     def _report(self, case: dict) -> None:
         for label in case["facts"]["approvers"]:
@@ -2940,6 +2956,10 @@ class Engine:
                 c = cases.get(e["case_id"])
                 if c and e["detail"]["target"] == role and (kind != EV_STALE or self._stale_open(c, e["detail"]["key"])):
                     out["알림"].append({**self._item(c), "kind": kind, "text": e["detail"]["text"]})
+        for e in self.store.events(kind=EV_P2_PREVIEW):  # 2차 예고: 아직 2차 관찰 중인 동안만
+            c = cases.get(e["case_id"])
+            if c and e["detail"]["target"] == role and c["status"] == S_PHASE2_LOCK:
+                out["알림"].append({**self._item(c), "kind": EV_P2_PREVIEW, "stage": "2차", "text": e["detail"]["text"]})
         for r in self.store.all_requests(dept=role):
             if r["status"] != R_DONE and r["case_id"] in cases:
                 out["회신 대기"].append({**self._item(cases[r["case_id"]]), "request_id": r["id"], "text": r["text"],
