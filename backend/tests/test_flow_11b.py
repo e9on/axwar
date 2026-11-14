@@ -1004,3 +1004,14 @@ def test_기본거부_조치에도_화면에_보일_문장이_있다(store):
     for a in acts:
         ref = store.get_case(a["case_id"])["ref_id"]
         assert a["text"].startswith(ref) and "기본 거부" in a["text"] and a["status"] in a["text"]
+
+
+def test_승인되면_캠페인_담당에게_1차_공지_작업이_생기고_공지하면_완료(store):
+    eng, _, cid, st = scene2(store, ACCEPT, SCM_PART)
+    to_scm_reply(eng, store, cid, st, "3,000개까지 허용합니다.")
+    eng.play(st[4]); eng.play(st[5])
+    tasks = [t for t in store.list_tasks(cid) if t["title"] == "1차 공지"]
+    assert len(tasks) == 1 and tasks[0]["dept"] == "캠페인 담당" and tasks[0]["status"] == "대기"
+    assert "3,000개" in tasks[0]["detail"]
+    eng.announce(cid, "캠페인 담당자")
+    assert [t["status"] for t in store.list_tasks(cid) if t["title"] == "1차 공지"] == ["완료"]

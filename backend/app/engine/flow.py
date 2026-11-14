@@ -162,6 +162,7 @@ LABELS = {"amount_krw": "요청액", "settlement_date": "집행일", "phase1_dat
 # 1차 날짜는 등록부 집행일이 아니라 phase1_date다: SCM 거절로 연기한 날짜(shift)는 등록부를 고치지 않고 별도 키에 둔다.
 STAGES = {"1차": ("approvers", "approver_hits", "approved_roles", "phase1_date"),
           "2차": ("phase2_approvers", "phase2_approver_hits", "phase2_approved_roles", "phase2_date")}
+ANNOUNCE_TASK = "1차 공지"  # 승인 뒤 캠페인 담당 작업, 공지하면 완료
 RAW_KEEP = 500  # AI 원문은 이 글자 수까지만 판정 기록에 남긴다
 OBSERVE_NOTE = "2차는 반품 관찰 뒤 열림"
 
@@ -1723,6 +1724,9 @@ class Engine:
                          "overflow_demand": max(0, s["want"] - fixed) if s else None}
         self.store.update_facts(case_id, f, actor, f"1차 {fixed:,}개 공지·예약")
         self.store.add_event(case_id, EV_ANNOUNCE, actor, f["announce"])
+        for t in self.store.list_tasks(case_id):
+            if t["title"] == ANNOUNCE_TASK and t["status"] == "대기":
+                self.store.set_task_status(t["id"], "완료", actor)
         if f.get("channel") == LIVE:
             self._task_once(case_id, MARKETING, MEASURE, d1,
                             f"{case['ref_id']} 1차 {fixed:,}개 한정 공지({_md(d1)}): 라이브 전용 코드로 판매를 구분하고 "
@@ -1951,6 +1955,8 @@ class Engine:
         qty_text = f"{qty:,}개" if qty is not None else f"수량 미정({NO_VOLUME})"
         self._task_once(case_id, self.logistics, "물류 출고", d1, f"{case['ref_id']} {_md(d1)}부터 1차 {qty_text} 출고")
         self._task_once(case_id, self.cs, "CS 대비", d1, f"{case['ref_id']} {_md(d1)}부터 1차 {qty_text} — 반품·문의 대비")
+        self._task_once(case_id, self.campaign, ANNOUNCE_TASK, d1,
+                        f"{case['ref_id']} 1차 {qty_text} 공지 — 공지하면 그 수량만큼 재고·물류를 먼저 잡아 둠")
         self.store.set_status(case_id, S_PHASE1, "시스템", "1차 집행 시작")
         if f["phase2"]:
             self.store.set_status(case_id, S_PHASE2_LOCK, "시스템", OBSERVE_NOTE)
