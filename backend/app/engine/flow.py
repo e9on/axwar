@@ -677,11 +677,13 @@ class Engine:
 
     def _decision_already_made(self, s: dict) -> bool:
         """대본의 사람 단계를 시연자가 화면에서 이미 끝냈는지. 결정은 그 역할이 승인했거나 사건이 끝났는지,
-        공지·발송·상신·예외 승인은 그 일이 건에 기록됐는지로 본다(같은 단계를 두 번 기다리지 않게)."""
+        공지·발송·상신·예외 승인은 그 일이 건에 기록됐는지로 본다(같은 단계를 두 번 기다리지 않게). 건이 이미 끝났으면 어떤 단계든 끝난 것으로 본다."""
         found = self._find_case(*((KIND_PLAN, s["plan"]) if "plan" in s else (KIND_CONTRACT, s["contract"])))
         if found is None:
             return False
         f, action = found["facts"], s["action"]
+        if found["status"] in TERMINAL[found["kind"]]:
+            return True  # 끝난 건(기본 거부·거절·완료 등): 남은 사람 단계는 할 수 없으니 기다리지 않는다
         if action == "공지":
             return bool(f.get("announce"))
         if action == "발송":

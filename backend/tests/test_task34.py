@@ -309,3 +309,13 @@ def test_이미_대표가_결재하는_건은_참고_신호가_있어도_승인�
     reset(c, "scenario_1")  # PLAN-014: Masil 대표 결재(전결 아님)
     adv(c, "2026-07-03")
     assert _brief(c, "PLAN-014", "Masil 대표").splitlines()[0] == "권고: 승인하길 권해요."
+
+
+def test_기본_거부로_끝난_건의_남은_대본_단계는_기다리지_않는다(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_2")
+    out = adv(c, "2026-07-13")  # 마지막 승인일: CEO만 승인하고 이사회는 하지 않음
+    ok(c.post("/api/demo/play", json={"step": out["waiting"]["step"]}))
+    out = adv(c, "2026-07-14")  # 기본 거부 → 확정 보류
+    assert case(c, "PLAN-001")["status"] == "확정 보류"
+    assert out["waiting"] is None  # 승인되지 않은 건이라 공지할 수 없다 — 공지를 기다리지 않는다
