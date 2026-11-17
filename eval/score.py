@@ -1,28 +1,16 @@
-"""성능평가 채점. run.py(실행 요약)와 rescore.py(재채점)가 함께 쓴다. 표준 라이브러리만 쓴다."""
+"""성능평가 채점. run.py(실행 요약)와 rescore.py(재채점)가 함께 쓴다. 허용값·정규화는 backend/app/ai/judge.py에서 가져온다."""
 from __future__ import annotations
 
-ALLOWED = {
-    "reason": {"색상불일치", "변심후회", "배송물류", "품질불량", "만족", "기타"},
-    "sentiment": {"긍정", "중립", "부정"},
-    "stance": {"수용", "조건부수용", "거절", "정보부족"},
-}
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
+from app.ai.judge import ALLOWED, norm  # noqa: E402,F401  앱과 같은 허용값·정규화 규칙
+
 FIELDS = {
     "reviews": ["reason", "sentiment", "content_gap"],
     "replies": ["stance", "qty_limit", "next_date", "needs_human"],
 }
-
-
-def norm(field: str, v):
-    if v is None or v in ("null", ""):
-        return None
-    if field == "qty_limit":
-        try:
-            return int(float(str(v).replace(",", "")))
-        except ValueError:
-            return str(v)
-    if field in ("content_gap", "needs_human"):
-        return v is True or v == "true"
-    return str(v).strip()
 
 
 def _match(field: str, got, want) -> bool:

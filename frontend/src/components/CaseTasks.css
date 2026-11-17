@@ -1,0 +1,22 @@
+/* 결정 패널과 같은 줄: 남색 바탕 띠에 할 일 한 줄 + 단추 */
+.case-task {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2) var(--s-3);
+  margin: var(--s-3) 0;
+  padding: var(--s-3) var(--s-4);
+  background: var(--c-navy-soft);
+  border: 1px solid var(--c-navy);
+  border-left-width: var(--s-1);
+  font-size: var(--t-2);
+  line-height: var(--lh-body);
+}
+.case-task > p { margin: 0; flex: 1 1 280px; }
+/* 기본 거부 이유: 도장색 띠(기본 거부에만 쓰는 색) */
+.deny-reason { display: block; background: var(--c-seal-soft); border-color: var(--c-seal); color: var(--c-ink); }
+/* 통보 초안은 읽을 글이라 서류처럼: 흰 바탕, 한 줄 72자 */
+.case-task.notice-draft { display: block; background: var(--c-sheet); border-color: var(--c-rule); border-left-color: var(--c-navy); }
+.case-task.notice-draft h3 { margin: 0 0 var(--s-2); font-size: var(--t-3); font-weight: var(--w-bold); }
+.notice-text { max-width: 72ch; margin-bottom: var(--s-3); }
+.notice-text p { margin: 0 0 var(--s-1); }

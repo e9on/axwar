@@ -1,0 +1,15 @@
+/* 기본 스타일 — 값은 tokens.css 변수만 쓴다 */
+*, *::before, *::after { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--c-paper);
+  color: var(--c-ink);
+  font-family: var(--f-ui);
+  font-size: var(--t-2);
+  line-height: var(--lh-body);
+  font-variant-numeric: tabular-nums;
+}
+h1, h2, h3 { font-family: var(--f-doc); line-height: var(--lh-title); margin: 0; }
+button, select, input, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--c-navy); outline-offset: 2px; }

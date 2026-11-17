@@ -67,3 +67,19 @@ def test_PLAN018_동률_최대일_후보는_모두_최대_비중():
     peak = v.plan_units * v.peak_share
     for dd in (89, 166, 215):
         assert round(load[date(2026, 9, 1) + timedelta(days=dd)], 6) == round(peak, 6)
+
+
+def test_표본_비중_기준은_정책에서_온다(monkeypatch, tmp_path):
+    from app import policy
+    from app.calc.volume import all_plan_volumes
+    text = policy.DEFAULT_PATH.read_text(encoding="utf-8")
+    assert policy.get("volume.low_confidence_share") == 0.9
+    f = tmp_path / "p.toml"
+    f.write_text(text.replace("value = 0.9", "value = 0.0001"), encoding="utf-8")
+    monkeypatch.setenv("AXWAR_POLICY_FILE", str(f))
+    policy.reload()
+    try:
+        assert all(v.low_confidence for v in all_plan_volumes())
+    finally:
+        monkeypatch.undo()
+        policy.reload()

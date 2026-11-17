@@ -1,0 +1,51 @@
+/* 2차 집행 관찰 (시안 A 결재판): 절마다 제목과 가는 선, 표는 줄로 */
+.p2page { max-width: 1080px; margin: 0 auto; }
+.p2page .back { display: inline-block; margin-bottom: var(--s-3); color: var(--c-navy); }
+.p2page .muted { color: var(--c-ink-3); }
+.p2page .doc { background: var(--c-sheet); border: 1px solid var(--c-rule); padding: var(--s-6) var(--s-6) var(--s-5); }
+.phead { border-bottom: 2px solid var(--c-rule-strong); padding-bottom: var(--s-3); }
+.phead .no { color: var(--c-ink-3); font-size: var(--t-1); }
+.phead h1 { font-size: var(--t-5); font-weight: var(--w-heavy); margin: var(--s-1) 0 var(--s-2); }
+.phead .facts { display: flex; flex-wrap: wrap; gap: var(--s-1) var(--s-5); color: var(--c-ink-2); }
+.phead .facts b { color: var(--c-ink); font-weight: var(--w-bold); }
+
+.obs { border-bottom: 1px solid var(--c-rule); padding: var(--s-3) 0 var(--s-4); }
+.obs h3 { font-size: var(--t-4); margin: var(--s-2) 0; }
+.obs p { margin: 0 0 var(--s-2); overflow-wrap: anywhere; }
+.obs .sub { color: var(--c-ink-2); font-size: var(--t-1); }
+.lockline { display: flex; align-items: baseline; gap: var(--s-3); }
+.lock { font-family: var(--f-doc); font-size: var(--t-5); font-weight: var(--w-heavy); }
+.lock[data-state="보류"] { color: var(--c-seal); }
+.lock[data-state="열림"] { color: var(--c-ok); }
+.reasons { margin: 0; padding-left: var(--s-4); }
+.lines { list-style: none; margin: 0; padding: 0; }
+.lines li { border-top: 1px solid var(--c-rule); padding: var(--s-2) 0; }
+.tag { display: inline-block; padding: 0 var(--s-2); border: 1px solid var(--c-rule); border-radius: var(--r-1); color: var(--c-ink); margin-right: var(--s-1); }
+
+.tbl { width: 100%; border-collapse: collapse; margin-bottom: var(--s-2); }
+.tbl th, .tbl td { text-align: left; padding: var(--s-2) var(--s-3) var(--s-2) 0; border-bottom: 1px solid var(--c-rule); font-weight: var(--w-regular); vertical-align: top; }
+.tbl thead th { font-size: var(--t-1); color: var(--c-ink-3); border-bottom: 2px solid var(--c-rule-strong); }
+.tbl tbody th { font-weight: var(--w-bold); }
+.tbl .over, .obs .over { color: var(--c-seal); font-weight: var(--w-medium); }
+.stop { margin-top: var(--s-2); }
+.decided { background: var(--c-warn-soft); border: 1px solid var(--c-warn); padding: var(--s-2) var(--s-3); }
+
+.btns { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.jform, .iform { display: grid; gap: var(--s-2); margin-top: var(--s-3); }
+.jform label, .iform label { display: grid; gap: var(--s-1); color: var(--c-ink-2); font-size: var(--t-1); }
+.jform input, .jform textarea, .iform input, .iform textarea {
+  width: 100%; max-width: 480px; padding: var(--s-2); border: 1px solid var(--c-rule); border-radius: var(--r-2); background: var(--c-sheet); font-size: var(--t-2);
+}
+.jbox .err, .iform .err { margin: 0; color: var(--c-seal); font-weight: var(--w-medium); }
+.iforms { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--s-5); }
+.iform h4 { margin: 0; font-family: var(--f-ui); font-size: var(--t-3); }
+.iform .btn { justify-self: start; }
+.notice-ok { margin: var(--s-3) 0 0; color: var(--c-ok); font-weight: var(--w-medium); }
+
+@media (max-width: 900px) {
+  .p2page .doc { padding: var(--s-4); }
+}
+@media (max-width: 760px) {
+  .tbl th, .tbl td { padding-right: var(--s-2); font-size: var(--t-1); }
+  .lockline { flex-wrap: wrap; }
+}

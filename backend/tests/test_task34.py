@@ -1,0 +1,495 @@
+"""Task 34: 시연을 날짜로 진행 — 바깥 사건(회신·리뷰·반품·판매)은 도착일에 저절로, 결정은 시연자 몫. 장면 1은 PLAN-014."""
+import json
+from datetime import date
+
+import pytest
+
+from app import config, policy
+from app.api.main import create_app
+from app.engine import scenarios
+from app.engine.flow import Engine
+from app.store.db import open_db
+from fastapi.testclient import TestClient
+
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent))
+from test_api import detail_of, ok  # noqa: E402
+
+OUTSIDE = ("회신", "리뷰", "반품", "판매")
+
+
+@pytest.fixture
+def store(tmp_path):
+    s = open_db(tmp_path / "t.db")
+    yield s
+    s.close()
+
+
+@pytest.fixture(autouse=True)
+def _clean_policy():
+    policy.set_overrides({})
+    yield
+    policy.set_overrides({})
+
+
+def fake_client(store):
+    """가짜 AI 모드(키 없는 시연): 대본의 ai 필드가 회신 해석이 된다."""
+    eng = Engine(store)
+    return TestClient(create_app(store, eng)), eng
+
+
+def reset(c, name):
+    ok(c.post("/api/demo/reset", json={"scenario": name}))
+
+
+def adv(c, d):
+    return ok(c.post("/api/demo/advance", json={"date": d}))
+
+
+def case(c, ref):
+    return next(x for x in ok(c.get("/api/cases")) if x["ref_id"] == ref)
+
+
+ALL = sorted(p.stem for p in config.demo_dir().glob("scenario_*.json"))
+
+
+# ---- 대본 형식 ----
+
+def test_모든_장면은_바깥_사건에_도착일이_있고_날짜가_순서대로이며_한_줄_요약이_있다():
+    for n in ALL:
+        sc = scenarios.load(n)
+        assert sc.summary and len(sc.summary) < 80, n
+        last = None
+        for s in sc.script:
+            if s["action"] in OUTSIDE:
+                assert "date" in s, (n, s["action"])
+            if "date" in s:
+                assert last is None or s["date"] >= last, (n, s)
+                last = s["date"]
+
+
+def test_장면_1은_PLAN_014이고_결정에는_날짜가_없다():
+    sc = scenarios.load("scenario_1")
+    assert sc.plans == ("PLAN-014",) and not sc.demo_plans
+    assert [s["action"] for s in sc.script if "date" not in s] == ["결정"]
+    assert sc.script[0]["date"] < "2026-07-20"
+    assert sc.script[-1] == {"action": "기준일", "date": "2026-07-20"}
+
+
+def test_바깥_사건의_date와_summary_형식을_검증한다(tmp_path):
+    d = tmp_path / "demo"
+    d.mkdir()
+    base = {"title": "t", "description": "d", "plans": ["PLAN-014"], "contracts": [], "requests": []}
+    step = {"action": "회신", "plan": "PLAN-014", "dept": "물류", "text": "t"}
+
+    def w(name, **kw):
+        (d / f"{name}.json").write_text(json.dumps({**base, "script": [step], **kw}, ensure_ascii=False), encoding="utf-8")
+
+    w("s1", summary=3)
+    with pytest.raises(ValueError, match="summary"):
+        scenarios.load("s1", d)
+    w("s2", script=[{**step, "date": "7월 3일"}])
+    with pytest.raises(ValueError, match="date"):
+        scenarios.load("s2", d)
+    w("s3", summary="짧은 요약", script=[{**step, "date": "2026-07-03"}])
+    sc = scenarios.load("s3", d)
+    assert sc.summary == "짧은 요약"
+    w("s4")
+    assert scenarios.load("s4", d).summary == ""  # 요약은 선택
+
+
+# ---- 날짜로 진행 ----
+
+def test_날짜를_넘기면_회신이_저절로_오고_결정은_마지막_승인일에_멈춰_시연자가_눌러_7월_20일_1차_집행까지(store):
+    c, eng = fake_client(store)
+    reset(c, "scenario_1")
+    st = ok(c.get("/api/demo/state"))
+    assert st["waiting"]["action"] == "결정" and st["waiting"]["ready"] is False and st["next_date"] == "2026-07-03"
+    out = adv(c, "2026-07-02")
+    assert out["applied"] == [] and out["next_date"] == "2026-07-03"
+    out = adv(c, "2026-07-03")
+    assert len(out["applied"]) == 1 and "물류 회신" in out["applied"][0] and "7/3" in out["applied"][0]
+    # 승인할 수 있게 됐지만 시연은 마지막 승인일(7/16)까지 멈추지 않는다 — 할 일에는 이미 있다
+    assert out["waiting"]["actor"] == "Masil 대표" and out["waiting"]["ready"] is False and out["waiting"]["due"] == "2026-07-16"
+    assert "Masil 대표" in out["waiting"]["text"] and "PLAN-014" in out["waiting"]["text"] and "승인" in out["waiting"]["text"]
+    assert out["next_date"] == "2026-07-16"
+    assert case(c, "PLAN-014")["status"] == "승인 대기"  # 결정은 적용하지 않았다
+    assert [x["ref_id"] for x in ok(c.get("/api/todo/Masil 대표"))["승인 대기"]] == ["PLAN-014"]
+    out = adv(c, "2026-07-10")
+    assert out["waiting"]["ready"] is False and case(c, "PLAN-014")["status"] == "승인 대기"
+    out = adv(c, "2026-07-16")  # 마지막 승인일: 여기서 멈춘다
+    assert out["applied"] == [] and out["waiting"]["actor"] == "Masil 대표" and out["waiting"]["ready"] is True
+    assert out["next_date"] == "2026-07-20"
+    ok(c.post("/api/demo/play", json={"step": out["waiting"]["step"]}))  # 시연자가 결정
+    assert case(c, "PLAN-014")["status"] == "1차 집행"
+    st = ok(c.get("/api/demo/state"))
+    assert st["waiting"] is None and st["next_date"] == "2026-07-20" and st["finished"] is False
+    out = adv(c, "2026-07-20")
+    assert out["date"] == "2026-07-20" and out["waiting"] is None and out["next_date"] is None
+    st = ok(c.get("/api/demo/state"))
+    assert st["finished"] is True and st["done"] == st["total"] and len(st["arrived"]) == 1
+    f = store.get_case(case(c, "PLAN-014")["id"])["facts"]
+    assert f["phase1"]["date"] == "2026-07-20" and f["phase1"]["qty"] > 0
+
+
+def test_날짜를_한꺼번에_넘기면_도착일_순서로_적용하고_결정은_건드리지_않는다(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_2")
+    out = adv(c, "2026-07-03")
+    assert len(out["applied"]) == 1 and "물류 회신" in out["applied"][0]
+    assert out["waiting"]["actor"] == "그룹 CEO" and out["next_date"] == "2026-07-04"
+    out = adv(c, "2026-07-04")  # SCM이 일부만 허용: 분할안이 정해진다(그 전에는 승인할 수 없음)
+    assert [a.split()[0] for a in out["applied"]] == ["7/4"]
+    assert out["waiting"]["action"] == "결정" and out["waiting"]["actor"] == "그룹 CEO"
+    assert out["waiting"]["ready"] is False and out["waiting"]["due"] == "2026-07-13"  # 마지막 승인일까지는 멈추지 않는다
+    assert case(c, "PLAN-001")["status"] == "승인 대기"
+    out = adv(c, "2026-08-24")  # 승인 없이 날짜가 넘어가도 리뷰(8/10)·반품(8/24)은 도착일 순서로 들어오고, 기한 규칙은 그대로 돈다
+    assert [a.split()[0] for a in out["applied"]] == ["8/10", "8/20", "8/21", "8/24"]  # 8/20·8/21은 2차 물류·SCM 회신
+    assert case(c, "PLAN-001")["status"] != "1차 집행"
+    assert adv(c, "2026-08-24")["applied"] == []  # 같은 날을 다시 눌러도 같은 사건을 두 번 넣지 않는다
+
+
+def test_아직_받을_수_없는_사건은_건너뛰고_다음에_다시_시도한다(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_3")
+    out = adv(c, "2026-07-20")  # 발송(시연자 몫) 전이라 인플루언서 측 회신을 받을 요청이 아직 없음
+    assert out["skipped"] and "인플루언서 측" in out["skipped"][0]
+    assert out["waiting"]["action"] == "발송"
+
+
+def test_뒤로는_못_가고_운영_모드와_진행_없음은_거부(store):
+    c, eng = fake_client(store)
+    assert "시연 장면" in detail_of(c.post("/api/demo/advance", json={"date": "2026-07-05"}))
+    reset(c, "scenario_1")
+    adv(c, "2026-07-05")
+    assert "뒤로" in detail_of(c.post("/api/demo/advance", json={"date": "2026-07-04"}))
+    assert c.post("/api/demo/advance", json={"date": "내일"}).status_code == 422
+    eng.set_mode("Masil 대표", "운영")
+    assert detail_of(c.post("/api/demo/advance", json={"date": "2026-07-06"}))
+
+
+def test_run은_결정까지_끝까지_자동으로_돈다_시험용(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_1")
+    out = ok(c.post("/api/demo/run", json={"scenario": "scenario_1"}))
+    assert len(out) == 3 and case(c, "PLAN-014")["status"] == "1차 집행"
+    st = ok(c.get("/api/demo/state"))
+    assert st["finished"] and st["waiting"] is None
+
+
+def test_직접_누른_결정도_다음_결정으로_넘어간다(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_2")
+    adv(c, "2026-07-04")  # SCM 회신 뒤라야 분할 승인할 수 있다
+    cid = case(c, "PLAN-001")["id"]
+    ok(c.post(f"/api/cases/{cid}/decision", json={"actor": "그룹 CEO", "action": "분할승인", "comment": "직접"}))
+    assert ok(c.get("/api/demo/state"))["waiting"]["actor"] == "이사회"
+
+
+def test_결정_날짜가_있는_상신_변형도_PLAN_014_기반_7월로_끝까지_돈다(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_1_escalate")
+    ok(c.post("/api/demo/run", json={"scenario": "scenario_1_escalate"}))
+    assert case(c, "DEMO-PLAN-001")["status"] == "1차 집행"
+    assert store.get_clock() < date(2026, 8, 1)
+
+
+def test_장면_1_PLAN_014의_엔진_판정(store):
+    """승인권자는 Masil 대표 한 명(그룹은 보고만), 재고 여유가 충분해 SCM에 묻지 않고 분할도 없다. 집행일 7/20, 확정 기한 8/14."""
+    c, eng = fake_client(store)
+    reset(c, "scenario_1")
+    cid = case(c, "PLAN-014")["id"]
+    f = store.get_case(cid)["facts"]
+    assert f["approvers"] == ["Masil 대표", "그룹 보고"] and f["settlement_date"] == "2026-07-20" and f["deadline"] == "2026-08-14"
+    adv(c, "2026-07-03")
+    f = store.get_case(cid)["facts"]
+    assert f["split"] is None and f["stock"]["shortage"] is False
+    assert [r["dept"] for r in store.list_requests(cid)] == ["물류"]  # SCM 요청 없음
+    cal = ok(c.get("/api/calendar"))
+    kinds = {(e["kind"], e["date"]) for e in cal if e.get("case_id") in (cid, None)}
+    assert ("집행일", "2026-07-20") in kinds and ("확정 기한", "2026-08-14") in kinds
+
+
+def test_승인을_미루면_1차_집행일_기준으로_경고하고_기본_거부한다(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_1")
+    adv(c, "2026-07-03")
+    out = adv(c, "2026-07-16")  # 마지막 승인일(집행일 7/20의 기본 거부 실행일 7/17 전날): 아직 승인 대기, 알림만
+    assert case(c, "PLAN-014")["status"] == "승인 대기" and any(a.get("action") == "마감알림" for a in out["actions"])
+    out = adv(c, "2026-07-17")
+    assert case(c, "PLAN-014")["status"] == "확정 보류"
+    assert any(a.get("action") == "기본거부" for a in out["actions"])
+
+
+def test_진행_상태는_장면_건들의_지금_상태를_결과로_준다(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_1")
+    assert ok(c.get("/api/demo/state"))["outcome"] == ["PLAN-014 회신 대기"]
+    ok(c.post("/api/demo/run", json={"scenario": "scenario_1"}))
+    assert ok(c.get("/api/demo/state"))["outcome"] == ["PLAN-014 1차 집행"]
+
+
+def test_화면에서_통보를_발송하면_시연이_발송을_더_기다리지_않는다(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_3")
+    out = adv(c, "2026-07-14")
+    assert out["waiting"]["action"] == "발송" and out["waiting"]["ready"]
+    ok(c.post(f"/api/cases/{case(c, 'INF-001')['id']}/send-notice", json={"actor": "계약 담당자"}))
+    assert ok(c.get("/api/demo/state"))["waiting"] is None
+
+
+def test_화면에서_상신하면_시연이_다음_결정을_기다린다(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_1_escalate")
+    out = adv(c, "2026-07-08")
+    assert out["waiting"]["action"] == "상신" and out["waiting"]["ready"]
+    ok(c.post(f"/api/cases/{case(c, 'DEMO-PLAN-001')['id']}/escalate",
+              json={"actor": "마케팅팀장", "stage": "1차", "opinion": "승인 권고", "reason": "대표 확인"}))
+    w = ok(c.get("/api/demo/state"))["waiting"]
+    assert w["action"] == "결정" and w["actor"] == "Masil 대표"
+
+
+# ---- 1차 결재 기한: 확정 기한과 1차 집행일 중 이른 날 기준(사용자 결정 2026-11-14)
+
+def test_집행일이_확정_기한보다_앞이면_결재_기한은_집행일_기준(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_1")  # PLAN-014: 집행 7/20, 확정 기한 8/14
+    cid = case(c, "PLAN-014")["id"]
+    d = ok(c.get(f"/api/cases/{cid}?viewer=Masil 대표"))
+    assert d["deadline"] == "2026-08-14"  # 확정 기한 표시는 그대로
+    assert (d["deny_date"], d["approval_deadline"]) == ("2026-07-17", "2026-07-16")
+    adv(c, "2026-07-17")
+    assert case(c, "PLAN-014")["status"] == "확정 보류"
+
+
+def test_확정_기한이_집행일보다_앞이면_결재_기한은_그대로(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_2")  # PLAN-001: 집행 7/27, 확정 기한 7/17
+    cid = case(c, "PLAN-001")["id"]
+    d = ok(c.get(f"/api/cases/{cid}?viewer=그룹 CEO"))
+    assert (d["deadline"], d["deny_date"], d["approval_deadline"]) == ("2026-07-17", "2026-07-14", "2026-07-13")
+
+
+def test_일정에는_승인할_수_있게_된_날부터_마지막_승인일까지_승인_기간이_보인다(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_1")
+    periods = lambda: [e for e in ok(c.get("/api/calendar")) if e["kind"] == "승인 기간"]
+    assert periods() == []  # 회신 대기: 아직 승인할 수 없다
+    adv(c, "2026-07-05")
+    [p] = periods()
+    assert (p["date"], p["end"], p["roles"]) == ("2026-07-03", "2026-07-16", ["Masil 대표"])
+    assert "PLAN-014" in p["label"] and "7/3~7/16" in p["label"]
+    ok(c.post("/api/demo/play", json={"step": ok(c.get("/api/demo/state"))["waiting"]["step"]}))
+    assert periods() == []  # 승인하면 사라진다
+
+
+# ---- AI 의견: 전결 건인데 결정에 안 쓰는 참고 위험 신호가 나쁘면 위로 올리기를 권한다(사용자 제안)
+
+def _brief(c, ref, actor):
+    cid = case(c, ref)["id"]
+    ok(c.post(f"/api/cases/{cid}/briefing", json={"actor": actor}))
+    return ok(c.get(f"/api/cases/{cid}?viewer={actor}"))["briefing"]["text"]
+
+
+def test_전결_건에_참고_위험_신호가_나쁘면_AI가_위로_올리기를_권한다(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_1_escalate")  # DEMO-PLAN-001: 마케팅팀 전결, 실질 ROAS 1위, 예상 ROAS 괴리(참고용) 나쁨
+    adv(c, "2026-07-03")
+    text = _brief(c, "DEMO-PLAN-001", "마케팅팀장")
+    first = text.splitlines()[0]
+    assert first.startswith("권고:") and "위로 올려" in first
+    assert "예상 매출" in text
+
+
+def test_이미_대표가_결재하는_건은_참고_신호가_있어도_승인을_권한다(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_1")  # PLAN-014: Masil 대표 결재(전결 아님)
+    adv(c, "2026-07-03")
+    assert _brief(c, "PLAN-014", "Masil 대표").splitlines()[0] == "권고: 승인하길 권해요."
+
+
+def test_기본_거부로_끝난_건의_남은_대본_단계는_기다리지_않는다(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_2")
+    out = adv(c, "2026-07-13")  # 마지막 승인일: CEO만 승인하고 이사회는 하지 않음
+    ok(c.post("/api/demo/play", json={"step": out["waiting"]["step"]}))
+    out = adv(c, "2026-07-14")  # 기본 거부 → 확정 보류
+    assert case(c, "PLAN-001")["status"] == "확정 보류"
+    assert out["waiting"] is None  # 승인되지 않은 건이라 공지할 수 없다 — 공지를 기다리지 않는다
+
+
+def test_SCM이_거절하면_1차가_막히고_이유_문장의_조사가_맞다(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_2_reject")
+    adv(c, "2026-07-05")
+    f = store.get_case(case(c, "PLAN-001")["id"])["facts"]
+    assert case(c, "PLAN-001")["status"] == "1차 차단"
+    assert f["phase1_blocked"]["reason"].startswith("SCM 거절 — SCM이 안전재고 사용을 거절했고")
+
+
+def test_반품으로_2차가_보류되면_예외_승인할_사람의_할_일에도_보이고_예외_승인하면_닫힌다(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_2_exception")
+    adv(c, "2026-07-13")
+    for _ in range(6):  # 결재·공지(시연자 몫)를 차례로 처리
+        w = ok(c.get("/api/demo/state"))["waiting"]
+        if not w or w["action"] == "예외 승인":
+            break
+        ok(c.post("/api/demo/play", json={"step": w["step"]}))
+    out = adv(c, "2026-08-24")
+    assert case(c, "PLAN-001")["status"] == "2차 보류" and out["waiting"]["action"] == "예외 승인"
+    jobs = [t for t in ok(c.get("/api/todo/Masil 대표"))["작업"] if t["ref_id"] == "PLAN-001"]
+    assert len(jobs) == 1 and "예외 승인" in jobs[0]["title"]
+    ok(c.post("/api/demo/play", json={"step": out["waiting"]["step"]}))  # Masil 대표가 예외 승인
+    assert [t for t in ok(c.get("/api/todo/Masil 대표"))["작업"] if t["ref_id"] == "PLAN-001" and "예외 승인" in t["title"]] == []
+
+
+# ---- 2차 예고: 2차 집행일은 미루지 않고, 1차 집행이 시작되면 2차 승인권자에게 미리 알린다(사용자 결정)
+
+def test_1차_집행이_시작되면_2차_승인권자에게_예고가_가고_2차_승인_대기가_시작되면_사라진다(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_2_sales")
+    adv(c, "2026-07-13")
+    for _ in range(6):
+        w = ok(c.get("/api/demo/state"))["waiting"]
+        if not w or w["step"].get("stage") == "2차":
+            break
+        ok(c.post("/api/demo/play", json={"step": w["step"]}))
+    adv(c, "2026-07-28")  # 1차 집행(7/27) 뒤: 2차 관찰
+    notes = [a for a in ok(c.get("/api/todo/Masil 대표"))["알림"] if a["ref_id"] == "PLAN-001" and a["kind"] == "2차예고"]
+    assert len(notes) == 1 and "2차 집행 예정 8/28" in notes[0]["text"] and "밀릴 수 있어요" in notes[0]["text"]
+    assert "마지막 승인일" not in notes[0]["text"]  # 결과가 나오기 전이라 지킬 수 없는 날짜는 알리지 않는다
+    assert [a for a in ok(c.get("/api/todo/그룹 재무"))["알림"] if a["kind"] == "2차예고"]
+    adv(c, "2026-08-24")  # 판매·반품 결과 → 2차 승인 대기
+    assert case(c, "PLAN-001")["status"] == "2차 승인 대기"
+    assert [a for a in ok(c.get("/api/todo/Masil 대표"))["알림"] if a["kind"] == "2차예고"] == []
+
+
+def test_공지를_못_한_채_1차_집행일이_지나면_시연이_공지를_더_기다리지_않는다(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_2")
+    adv(c, "2026-07-13")
+    for _ in range(4):  # 결재만 하고 공지는 하지 않는다
+        w = ok(c.get("/api/demo/state"))["waiting"]
+        if w["action"] != "결정":
+            break
+        ok(c.post("/api/demo/play", json={"step": w["step"]}))
+    assert ok(c.get("/api/demo/state"))["waiting"]["action"] == "공지"
+    out = adv(c, "2026-07-28")  # 1차 집행일(7/27)이 지났다: 공지는 더 할 수 없다
+    assert out["waiting"] is None or out["waiting"]["action"] != "공지"
+
+
+# ---- 2차 부서 회신: 2차 관찰에 들어가면 물류·SCM에 2차 수량을 다시 묻고, 회신 전에는 2차를 열지 않는다(사용자 결정)
+
+def _to_phase1(c, scn):
+    reset(c, scn)
+    adv(c, "2026-07-13")
+    for _ in range(6):
+        w = ok(c.get("/api/demo/state"))["waiting"]
+        if not w or w["action"] not in ("결정", "공지") or w["step"].get("stage") == "2차":
+            break
+        ok(c.post("/api/demo/play", json={"step": w["step"]}))
+    adv(c, "2026-07-28")
+    return case(c, "PLAN-001")["id"]
+
+
+def test_2차_관찰에_들어가면_물류와_SCM에_2차_회신을_요청하고_회신_전에는_2차를_열지_않는다(store):
+    c, eng = fake_client(store)
+    cid = _to_phase1(c, "scenario_2_sales")
+    reqs = {r["purpose"]: r for r in store.list_requests(cid)}
+    assert reqs["2차 물류 처리"]["dept"] == "물류" and reqs["2차 물류 처리"]["status"] == "대기"
+    assert reqs["2차 재고 확보"]["dept"] == "SCM" and reqs["2차 재고 확보"]["status"] == "대기"
+    assert "2차" in reqs["2차 물류 처리"]["text"] and "개" in reqs["2차 재고 확보"]["text"]
+    assert any("2차 부서 회신 대기" in r for r in eng.phase2_status(cid).reasons)
+
+
+def test_2차_회신이_일부만_가능하면_2차_수량을_줄이고_거절하면_2차를_열지_않는다(store):
+    c, eng = fake_client(store)
+    cid = _to_phase1(c, "scenario_2_sales")
+    before = store.get_case(cid)["facts"]["phase2"]["qty"]
+    step = {"action": "회신", "plan": "PLAN-001", "dept": "SCM", "text": "입고분으로 8,000개까지 확보할 수 있습니다.",
+            "attachments": 0, "ai": {"stance": "조건부수용", "qty_limit": 8000, "next_date": None, "needs_human": False}}
+    ok(c.post("/api/demo/play", json={"step": step}))
+    p2 = store.get_case(cid)["facts"]["phase2"]
+    assert before > 8000 and p2["qty"] == 8000
+    step = {"action": "회신", "plan": "PLAN-001", "dept": "물류", "text": "2차는 처리할 수 없습니다.",
+            "attachments": 0, "ai": {"stance": "거절", "qty_limit": 0, "next_date": None, "needs_human": False}}
+    ok(c.post("/api/demo/play", json={"step": step}))
+    assert any("2차 부서 거절" in r for r in eng.phase2_status(cid).reasons)
+
+
+def test_SCM_안전재고_회신_전에는_승인과_분할_승인을_막고_거절은_된다(store):
+    from app import policy
+    assert policy.base_entry("approval.wait_for_scm")[0] == "예"  # 파일 기본값은 막기
+    policy.set_overrides({"approval.wait_for_scm": ("예", "시험", "")})
+    c, eng = fake_client(store)
+    reset(c, "scenario_2")
+    adv(c, "2026-07-03")  # 물류 회신(7/2) 뒤, SCM 회신(7/4) 전
+    cid = case(c, "PLAN-001")["id"]
+    v = ok(c.get(f"/api/cases/{cid}?viewer=그룹 CEO"))["viewer"]
+    blocked = {b["action"]: b["reason"] for b in v["blocked"]}
+    assert "분할승인" in blocked and "SCM" in blocked["분할승인"] and "거절" in v["actions"]
+    with pytest.raises(ValueError, match="SCM"):
+        eng.decide(cid, "그룹 CEO", "분할승인")
+    adv(c, "2026-07-04")  # SCM 회신 뒤에는 분할 승인할 수 있다
+    assert "분할승인" in ok(c.get(f"/api/cases/{cid}?viewer=그룹 CEO"))["viewer"]["actions"]
+
+
+def test_SCM_회신_전_승인을_막아도_끝까지_돌리기는_끝난다(store):
+    from app import policy
+    policy.set_overrides({"approval.wait_for_scm": ("예", "시험", "")})
+    c, _ = fake_client(store)
+    for scn, end in [("scenario_2_exception", "완료"), ("scenario_2_sales", "완료"), ("scenario_2", "2차 보류")]:
+        reset(c, scn)
+        ok(c.post("/api/demo/run", json={"scenario": scn}))
+        assert case(c, "PLAN-001")["status"] == end, scn
+
+
+def _scene2_to(c, day):
+    reset(c, "scenario_2")
+    adv(c, "2026-07-13")
+    for _ in range(6):
+        w = ok(c.get("/api/demo/state"))["waiting"]
+        if not w or w["action"] not in ("결정", "공지"):
+            break
+        ok(c.post("/api/demo/play", json={"step": w["step"]}))
+    adv(c, day)
+    return case(c, "PLAN-001")["id"]
+
+
+def test_1차_결재가_끝난_뒤_온_요청에는_1차_기한을_붙이지_않는다(store):
+    c, _ = fake_client(store)
+    _scene2_to(c, "2026-08-20")  # 2차 재고 확보(SCM) 회신 대기
+    [row] = [r for r in ok(c.get("/api/todo/SCM 담당자"))["회신 대기"] if "2차" in r["text"]]
+    assert row["deadline"] is None and row["approval_deadline"] is None and row["deny_date"] is None
+
+
+def test_사람_확인을_다시_넣어도_사람_확인_작업은_하나만_남는다(store):
+    c, _ = fake_client(store)
+    cid = _scene2_to(c, "2026-08-11")  # 8/10 리뷰로 콘텐츠 수정 요청이 생김
+    req = [r for r in store.list_requests(cid) if r["purpose"] == "콘텐츠 수정"][0]
+    if req["status"] == "대기":
+        ok(c.post(f"/api/requests/{req['id']}/reply", json={"actor": "캠페인 담당자", "text": "요청하신 대로 가능합니다.", "attachments": 0}))
+    ok(c.post(f"/api/requests/{req['id']}/resolve", json={"actor": "캠페인 담당자", "text": "확인했습니다. 진행 가능합니다.", "attachments": 0}))
+    open_tasks = [t for t in store.list_tasks(cid) if t["title"] == "회신 사람 확인" and t["status"] == "대기"]
+    assert len(open_tasks) == 1
+
+
+def test_사람_확인_중인_요청은_회신_대기가_아니라_사람_확인_작업_한_줄로만_보인다(store):
+    c, _ = fake_client(store)
+    cid = _scene2_to(c, "2026-08-11")
+    req = [r for r in store.list_requests(cid) if r["purpose"] == "콘텐츠 수정"][0]
+    if req["status"] == "대기":
+        ok(c.post(f"/api/requests/{req['id']}/reply", json={"actor": "캠페인 담당자", "text": "요청하신 대로 가능합니다.", "attachments": 0}))
+    todo = ok(c.get("/api/todo/캠페인 담당자"))
+    assert [r for r in todo["회신 대기"] if r["request_id"] == req["id"]] == []
+    assert len([t for t in todo["작업"] if t["title"] == "회신 사람 확인"]) == 1
+
+
+def test_반품_보류_기록_문장에_해야_함_말투가_없다(store):
+    c, _ = fake_client(store)
+    reset(c, "scenario_2_exception")
+    ok(c.post("/api/demo/run", json={"scenario": "scenario_2_exception", "from_step": 0}))
+    texts = [e["detail"].get("text", "") for e in store.events(case(c, "PLAN-001")["id"], kind="2차보류")]
+    assert texts and not [t for t in texts if "해야 함" in t or "해야 해요" in t]

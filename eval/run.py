@@ -1,50 +1,31 @@
 """AI 판정 모델 성능평가.
 
 사용법: py -3.11 eval/run.py [--models a,b] [--limit N] [--reps N] [--task reviews|replies] [--budget USD]
-키는 프로젝트 밖 C:/Users/e9on9/.axwar/keys.env 에서 읽는다(환경변수 AXWAR_KEYS로 바꿀 수 있음).
-표준 라이브러리만 쓴다.
+지시문·모델 호출·단가표는 backend/app/ai(앱과 같은 코드)에서 가져온다.
+키는 환경변수(ANTHROPIC_API_KEY 등)를 먼저 보고, 없으면 키 파일(환경변수 AXWAR_KEYS, 기본 ~/.axwar/keys.env)에서 읽는다.
 """
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
 import threading
 import time
-import urllib.error
-import urllib.request
 from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from collections import Counter
+from datetime import date, datetime, timezone
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
-from prompts import REPLY_SYSTEM, REVIEW_SYSTEM, reply_user, review_user  # noqa: E402
-from score import norm, score_row, summarize  # noqa: E402,F401
-
 DIR = Path(__file__).parent
-
-
-def load_keys(path: str) -> dict[str, str]:
-    keys = {}
-    for line in Path(path).read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            k, v = line.split("=", 1)
-            keys[k.strip()] = v.strip()
-    return keys
-
-
-_KEYS: dict[str, str] = {}
-
-
-def key(name: str) -> str:
-    """키는 처음 쓸 때 읽는다. 키 파일이 없어도 모듈은 불러올 수 있어야 테스트가 돈다."""
-    if not _KEYS:
-        _KEYS.update(load_keys(os.environ.get("AXWAR_KEYS", "C:/Users/e9on9/.axwar/keys.env")))
-    return _KEYS[name]
+sys.path.insert(0, str(DIR))
+sys.path.insert(0, str(DIR.parent / "backend"))
+from app import policy  # noqa: E402
+from app.ai import providers  # noqa: E402
+from app.ai.judge import norm, parse  # noqa: E402,F401  앱과 같은 파싱 규칙
+from app.ai.prompts import REVIEW_SYSTEM, reply_system, reply_user, review_user  # noqa: E402
+from score import score_row, summarize  # noqa: E402
 
 
 def job_key(row: dict) -> tuple:
@@ -82,79 +63,48 @@ def load_done(path: Path) -> set[tuple]:
 def filter_jobs(jobs: list, done: set, key) -> list:
     return [j for j in jobs if key(j) not in done]
 
-# 100만 토큰당 USD (입력, 출력). Gemini는 무료 등급으로 돌리지만 유료 전환 시 비용 비교용으로 적는다.
-MODELS = {
-    "claude-haiku-5-5": ("anthropic", 0.10, 0.50),
-    "claude-sonnet-5-5": ("anthropic", 2, 10),
-    "claude-opus-5-5": ("anthropic", 4, 20),
-    "gemini-3.1-flash-lite": ("gemini", 0.25, 1.50),
-    "gemini-3.5-flash-lite": ("gemini", 0.30, 2.50),
-    "gemini-3.8-flash": ("gemini", 0.75, 3.75),
-    "solar-mini4": ("upstage", 0.10, 0.40),
-    "solar-pro4": ("upstage", 0.30, 1.20),
-}
+# 모델 -> (제공자, 입력 단가, 출력 단가). 100만 토큰당 USD. 앱과 같은 정책 단가표(backend/policy.toml)에서 만든다.
+MODELS = {name: policy.model_price(name) for name in policy.model_names()}
 CONCURRENCY = {"anthropic": 4, "upstage": 4, "gemini": 1}
 
+
+DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def request_date(item: dict) -> date | None:
+    """문제의 요청문에 적힌 첫 날짜(요청일). 없으면 None."""
+    m = DATE_RE.search(item.get("request", ""))
+    return date.fromisoformat(m.group(0)) if m else None
+
+
+def default_base_date(items: list[dict]) -> date | None:
+    """요청문에 날짜가 없는 문제에 쓸 기준일: 같은 데이터에서 가장 많이 나온 요청일."""
+    c = Counter(d for d in map(request_date, items) if d)
+    return c.most_common(1)[0][0] if c else None
+
+
+def base_date(item: dict, default: date | None) -> date | None:
+    return request_date(item) or default
+
+
+def reply_system_for(item: dict) -> str:
+    """회신 지시문. 기준일은 문제 데이터에서 정한다(item["_today"], run이 채움)."""
+    return reply_system(item["_today"])
+
+
 TASKS = {
-    "reviews": ("reviews.jsonl", REVIEW_SYSTEM, review_user, ["reason", "sentiment", "content_gap"]),
-    "replies": ("replies.jsonl", REPLY_SYSTEM, reply_user, ["stance", "qty_limit", "next_date", "needs_human"]),
+    "reviews": ("reviews.jsonl", lambda it: REVIEW_SYSTEM, review_user, ["reason", "sentiment", "content_gap"]),
+    "replies": ("replies.jsonl", reply_system_for, reply_user, ["stance", "qty_limit", "next_date", "needs_human"]),
 }
-
-
-def post(url: str, headers: dict, body: dict) -> dict:
-    data = json.dumps(body).encode()
-    for attempt in range(6):
-        req = urllib.request.Request(url, data=data, headers={"content-type": "application/json", **headers})
-        try:
-            with urllib.request.urlopen(req, timeout=120) as r:
-                return json.loads(r.read())
-        except urllib.error.HTTPError as e:
-            if e.code == 429 or e.code >= 500:
-                ra = float(e.headers.get("retry-after") or 0)
-                time.sleep(max(ra, 2 * 2**attempt))
-            last = f"{e.code} {e.read().decode('utf-8', 'replace')[:300]}"
-            if e.code == 429 or e.code >= 500:
-                continue
-            raise RuntimeError(last) from None
-    raise RuntimeError(f"재시도 한도 초과 (마지막: {last})")
 
 
 CallResult = namedtuple("CallResult", "text in_tok out_tok stop_reason thinking_tokens")
 
 
 def call_model(model: str, system: str, user: str) -> CallResult:
-    provider = MODELS[model][0]
-    if provider == "anthropic":
-        # thinking·temperature는 보내지 않는다(Sonnet 5.5는 thinking disabled가 400). 생각 깊이는 effort로만 낮춘다.
-        b = post("https://api.anthropic.com/v1/messages",
-                 {"x-api-key": key("ANTHROPIC_API_KEY"), "anthropic-version": "2023-06-01"},
-                 {"model": model, "max_tokens": 2048, "output_config": {"effort": "low"}, "system": system,
-                  "messages": [{"role": "user", "content": user}]})
-        text = "".join(c.get("text", "") for c in b["content"] if c["type"] == "text")
-        details = b["usage"].get("output_tokens_details") or {}
-        return CallResult(text, b["usage"]["input_tokens"], b["usage"]["output_tokens"],
-                          b.get("stop_reason"), details.get("thinking_tokens"))
-    if provider == "gemini":
-        b = post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                 {"x-goog-api-key": key("GEMINI_API_KEY")},
-                 {"systemInstruction": {"parts": [{"text": system}]},
-                  "contents": [{"role": "user", "parts": [{"text": user}]}],
-                  "generationConfig": {"responseMimeType": "application/json"}})
-        u = b.get("usageMetadata", {})
-        parts = (b.get("candidates") or [{}])[0].get("content", {}).get("parts", [])
-        text = "".join(p.get("text", "") for p in parts)
-        fin = (b.get("candidates") or [{}])[0].get("finishReason")
-        return CallResult(text, u.get("promptTokenCount", 0),
-                          u.get("candidatesTokenCount", 0) + u.get("thoughtsTokenCount", 0),
-                          "max_tokens" if fin == "MAX_TOKENS" else fin, u.get("thoughtsTokenCount"))
-    b = post("https://api.upstage.ai/v1/chat/completions",
-             {"Authorization": "Bearer " + key("UPSTAGE_API_KEY")},
-             {"model": model, "max_tokens": 300,
-              "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]})
-    u = b.get("usage", {})
-    fin = b["choices"][0].get("finish_reason")
-    return CallResult(b["choices"][0]["message"]["content"] or "", u.get("prompt_tokens", 0),
-                      u.get("completion_tokens", 0), "max_tokens" if fin == "length" else fin, None)
+    """앱과 같은 제공자 코드로 한 번 부른다(요청 본문·재시도·키 읽기는 providers에 있다)."""
+    c = providers.RealProvider(model).complete(system, user)
+    return CallResult(c.text, c.in_tok, c.out_tok, c.stop_reason, c.thinking_tokens)
 
 
 def estimate_cost(model: str, in_tok: float, out_tok: float) -> float:
@@ -194,16 +144,6 @@ def run_pool(jobs: list, work, budget: Budget, workers: int) -> int:
     return skipped
 
 
-def parse(text: str) -> dict | None:
-    m = re.search(r"\{[\s\S]*\}", text or "")
-    if not m:
-        return None
-    try:
-        return json.loads(m.group(0))
-    except json.JSONDecodeError:
-        return None
-
-
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--models", default=",".join(MODELS))
@@ -226,14 +166,18 @@ def main() -> None:
 
     jobs: dict[str, list] = {}
     for t in tasks:
-        fname, system, user_fn, fields = TASKS[t]
+        fname, system_fn, user_fn, fields = TASKS[t]
         items = [json.loads(l) for l in (DIR / "data" / fname).read_text(encoding="utf-8").splitlines() if l.strip()]
+        if t == "replies":
+            default = default_base_date(items)
+            for it in items:
+                it["_today"] = base_date(it, default)
         if a.limit:
             items = items[: a.limit]
         for model in models:
             for rep in range(a.reps):
                 for it in items:
-                    jobs.setdefault(MODELS[model][0], []).append((t, system, user_fn, fields, model, rep, it))
+                    jobs.setdefault(MODELS[model][0], []).append((t, system_fn, user_fn, fields, model, rep, it))
 
     skipped = 0
     for p in list(jobs):
@@ -249,18 +193,18 @@ def main() -> None:
     finished = 0
     total = sum(len(v) for v in jobs.values())
     # 예상 비용: 한글 약 1.5자=1토큰, 출력은 Anthropic 150·그 외 80토큰으로 어림한다(실제와 다를 수 있음).
-    est = sum(estimate_cost(j[4], len(j[1] + j[2](j[6])) / 1.5, 150 if MODELS[j[4]][0] == "anthropic" else 80)
+    est = sum(estimate_cost(j[4], len(j[1](j[6]) + j[2](j[6])) / 1.5, 150 if MODELS[j[4]][0] == "anthropic" else 80)
               for v in jobs.values() for j in v)
     budget = Budget(a.budget)
     print(f"예상 비용 약 ${est:.2f} ({total}건)" + (f", 예산 ${a.budget:.2f}" if a.budget else ""),
           file=sys.stderr, flush=True)
 
     def run(job):
-        t, system, user_fn, fields, model, rep, it = job
+        t, system_fn, user_fn, fields, model, rep, it = job
         t0 = time.time()
         text, in_tok, out_tok, err, stop, think = "", 0, 0, None, None, None
         try:
-            text, in_tok, out_tok, stop, think = call_model(model, system, user_fn(it))
+            text, in_tok, out_tok, stop, think = call_model(model, system_fn(it), user_fn(it))
         except Exception as e:  # noqa: BLE001 - 실패도 결과로 기록한다
             err = str(e)
         budget.add(estimate_cost(model, in_tok, out_tok))
